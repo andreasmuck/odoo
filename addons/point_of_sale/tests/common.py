@@ -19,8 +19,10 @@ def archive_products(env):
 class TestPointOfSaleCommon(ValuationReconciliationTestCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
+
+        cls.company_data_2 = cls.setup_other_company()
 
         cls.company_data['company'].write({
             'point_of_sale_update_stock_quantities': 'real',
@@ -146,8 +148,8 @@ class TestPoSCommon(ValuationReconciliationTestCommon):
     """
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
         cls.company_data['company'].write({
             'point_of_sale_update_stock_quantities': 'real',
@@ -158,8 +160,13 @@ class TestPoSCommon(ValuationReconciliationTestCommon):
         })
 
         # Set basic defaults
-        cls.company = cls.company_data['company']
-        cls.pos_sale_journal = cls.env['account.journal'].search([('company_id', '=', cls.company.id), ('code', '=', 'POSS')])
+        cls.pos_sale_journal = cls.env['account.journal'].create({
+            'type': 'general',
+            'name': 'Point of Sale',
+            'code': 'POSS',
+            'company_id': cls.company.id,
+            'sequence': 20
+        })
         cls.sales_account = cls.company_data['default_account_revenue']
         cls.invoice_journal = cls.company_data['default_journal_sale']
         cls.receivable_account = cls.company_data['default_account_receivable']
@@ -187,7 +194,7 @@ class TestPoSCommon(ValuationReconciliationTestCommon):
         cls.company_currency = cls.company.currency_id
         # other_currency is a currency different from the company_currency
         # sometimes company_currency is different from USD, so handle appropriately.
-        cls.other_currency = cls.currency_data['currency']
+        cls.other_currency = cls.setup_other_currency("EUR", rounding=0.001)
 
         cls.currency_pricelist = cls.env['product.pricelist'].create({
             'name': 'Public Pricelist',
@@ -575,20 +582,21 @@ class TestPoSCommon(ValuationReconciliationTestCommon):
             'sequence_number': 2,
             'payment_ids': payments,
             'uuid': uuid,
-            'user_id': self.env.user.id,
+            'user_id': self.env.uid,
             'to_invoice': is_invoiced,
         }
 
     @classmethod
     def create_product(cls, name, category, lst_price, standard_price=None, tax_ids=None, sale_account=None):
         product = cls.env['product.product'].create({
-            'type': 'product',
+            'is_storable': True,
             'available_in_pos': True,
             'taxes_id': [(5, 0, 0)] if not tax_ids else [(6, 0, tax_ids)],
             'name': name,
             'categ_id': category.id,
             'lst_price': lst_price,
             'standard_price': standard_price if standard_price else 0.0,
+            'company_id': cls.env.company.id,
         })
         if sale_account:
             product.property_account_income_id = sale_account

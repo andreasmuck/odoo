@@ -208,9 +208,10 @@ class SaleOrderLine(models.Model):
             'product_uom': self.product_id.uom_po_id.id,
             'price_unit': price_unit,
             'date_planned': purchase_order.date_order + relativedelta(days=int(supplierinfo.delay)),
-            'taxes_id': [(6, 0, taxes.ids)],
+            'tax_ids': [(6, 0, taxes.ids)],
             'order_id': purchase_order.id,
             'sale_line_id': self.id,
+            'discount': supplierinfo.discount,
         }
         if self.analytic_distribution:
             purchase_line_vals['analytic_distribution'] = self.analytic_distribution

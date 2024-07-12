@@ -37,7 +37,7 @@ class IrAttachment(models.Model):
         try:
             xml_tree = etree.fromstring(content)
         except Exception as e:
-            _logger.exception("Error when converting the xml content to etree: %s", e)
+            _logger.info('Error when reading the xml file "%s": %s', filename, e)
             return []
 
         to_process = []
@@ -61,7 +61,7 @@ class IrAttachment(models.Model):
             pdf_reader = OdooPdfFileReader(buffer, strict=False)
         except Exception as e:
             # Malformed pdf
-            _logger.warning("Error when reading the pdf: %s", e, exc_info=True)
+            _logger.info('Error when reading the pdf file "%s": %s', filename, e)
             return []
 
         # Process embedded files.
@@ -165,13 +165,3 @@ class IrAttachment(models.Model):
         to_process.sort(key=lambda x: x['sort_weight'])
 
         return to_process
-
-    # -------------------------------------------------------------------------
-    # XSD validation
-    # -------------------------------------------------------------------------
-
-    @api.model
-    def action_download_xsd_files(self):
-        # To be extended by localisations, where they can download their necessary XSD files
-        # Note: they should always return super().action_download_xsd_files()
-        return

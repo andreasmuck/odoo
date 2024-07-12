@@ -8,34 +8,20 @@ export class MailGuest extends models.ServerModel {
         return guestId ? this.search_read([["id", "=", guestId]])[0] : null;
     }
 
-    _init_messaging() {
-        return {
-            Store: {
-                initBusId: this.lastBusNotificationId,
-            },
-        };
-    }
-
     /**
      * @param {Number[]} ids
      * @returns {Record<string, ModelRecord>}
      */
-    _guest_format(ids) {
-        const guests = this._filter([["id", "in", ids]], { active_test: false });
-        return Object.fromEntries(
-            guests.map((guest) => {
-                return [
-                    guest.id,
-                    {
-                        id: guest.id,
-                        im_status: guest.im_status,
-                        name: guest.name,
-                        type: "guest",
-                        write_date: guest.write_date,
-                    },
-                ];
-            })
-        );
+    _to_store(ids, store) {
+        for (const guest of this._filter([["id", "in", ids]], { active_test: false })) {
+            store.add("Persona", {
+                id: guest.id,
+                im_status: guest.im_status,
+                name: guest.name,
+                type: "guest",
+                write_date: guest.write_date,
+            });
+        }
     }
 
     _set_auth_cookie(guestId) {

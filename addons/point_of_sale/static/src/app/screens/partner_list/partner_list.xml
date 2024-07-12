@@ -4,11 +4,10 @@
     <t t-name="point_of_sale.PartnerList">
         <Dialog bodyClass="'partner-list overflow-y-auto'" contentClass="'h-100'">
             <t t-set-slot="header">
-                <button class="btn btn-primary" role="img" aria-label="Add a customer"
-                        t-on-click="createPartner"
+                <button t-if="!ui.isSmall" class="btn btn-primary" role="img" aria-label="Add a customer"
+                        t-on-click="() => this.editPartner()"
                         title="Add a customer">
-                    <i t-if="ui.isSmall" class="fa fa-plus"/>
-                    <t t-else="">Create</t>
+                Create 
                 </button>
                 <Input tModel="[state, 'query']"
                     class="'ms-auto'"
@@ -29,20 +28,31 @@
                     </tr>
                 </thead>
                 <tbody>
-                    <PartnerLine t-foreach="partners" t-as="partner" t-key="partner.id"
+                    <t t-foreach="getPartners()" t-as="partner" t-key="partner.id">
+                        <PartnerLine
+                                close="props.close"
                                 partner="partner"
                                 isSelected="props.partner?.id === partner.id"
                                 isBalanceDisplayed="isBalanceDisplayed"
-                                onClickEdit.bind="editPartner"
+                                onClickEdit.bind="(p) => this.editPartner(p)"
                                 onClickUnselect.bind="() => this.clickPartner()"
+                                onClickOrders.bind="(p) => this.goToOrders(p)"
                                 onClickPartner.bind="clickPartner"/>
+                    </t>
                 </tbody>
             </table>
             <div t-if="state.query" class="search-more-button d-flex justify-content-center my-2">
                 <button class="btn btn-lg btn-primary" t-on-click="onEnter">Search more</button>
             </div>
             <t t-set-slot="footer">
-                <button class="btn btn-primary o-default-button" t-on-click="() => this.clickPartner(this.props.partner)">Ok</button>
+                <div class="d-flex justify-content-start flex-wrap gap-2 w-100">
+                    <button t-if="ui.isSmall" class="btn btn-primary" role="img" aria-label="Add a customer"
+                        t-on-click="() => this.editPartner()"
+                        title="Add a customer">
+                    New 
+                    </button>
+                    <button class="btn btn-secondary o-default-button" t-on-click="() => this.clickPartner(this.props.partner)">Discard</button>
+                </div>
             </t>
         </Dialog>
     </t>

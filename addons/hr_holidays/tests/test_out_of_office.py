@@ -1,16 +1,16 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from dateutil.relativedelta import relativedelta
 
 from odoo import fields
 from odoo.addons.base.tests.common import TransactionCaseWithUserDemo
 from odoo.tests.common import tagged, users, warmup
 from odoo.addons.hr_holidays.tests.common import TestHrHolidaysCommon
+from odoo.addons.mail.tools.discuss import Store
 
 
-@tagged('out_of_office')
+@tagged("post_install", "-at_install", "out_of_office")
 class TestOutOfOffice(TestHrHolidaysCommon):
 
     @classmethod
@@ -48,14 +48,17 @@ class TestOutOfOffice(TestHrHolidaysCommon):
             'channel_type': 'chat',
             'name': 'test'
         })
-        channel_info = channel._channel_info()[0]
-        # shape of channelMembers is [('ADD', data...)], [0][1] accesses the data
-        members_data = channel_info['channelMembers'][0][1]
-        self.assertEqual(len(members_data), 2, "Channel info should get info for the 2 members")
-        partner_info = next(member for member in members_data if member['persona']['email'] == partner.email)
-        partner2_info = next(member for member in members_data if member['persona']['email'] == partner2.email)
-        self.assertFalse(partner2_info['persona']['out_of_office_date_end'], "current user should not be out of office")
-        self.assertEqual(partner_info['persona']['out_of_office_date_end'], fields.Date.to_string(leave_date_end), "correspondent should be out of office")
+        data = Store(channel).get_result()
+        partner_info = next(p for p in data["Persona"] if p["id"] == partner.id)
+        partner2_info = next(p for p in data["Persona"] if p["id"] == partner2.id)
+        self.assertFalse(
+            partner2_info["out_of_office_date_end"], "current user should not be out of office"
+        )
+        self.assertEqual(
+            partner_info["out_of_office_date_end"],
+            fields.Date.to_string(leave_date_end),
+            "correspondent should be out of office",
+        )
 
 
 @tagged('out_of_office')
@@ -105,7 +108,7 @@ class TestOutOfOfficePerformance(TestHrHolidaysCommon, TransactionCaseWithUserDe
     def test_search_absent_employee(self):
         present_employees = self.env['hr.employee'].search([('is_absent', '!=', True)])
         absent_employees = self.env['hr.employee'].search([('is_absent', '=', True)])
-        today_date = datetime.utcnow().date()
+        today_date = datetime.now(timezone.utc).date()
         holidays = self.env['hr.leave'].sudo().search([
             ('employee_id', '!=', False),
             ('state', '=', 'validate'),

@@ -9,16 +9,16 @@ from odoo import Command
 class TestPoSSaleL10NBe(TestPointOfSaleHttpCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref='be_comp'):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    @TestPointOfSaleHttpCommon.setup_country('be')
+    def setUpClass(cls):
+        super().setUpClass()
 
     def test_settle_order_is_invoice(self):
-        #Change company country to Belgium
-        self.env.user.company_id.country_id = self.env.ref('base.be')
 
         self.product_a = self.env['product.product'].create({
             'name': 'Product A',
-            'type': 'product',
+            'type': 'consu',
+            'is_storable': True,
             'list_price': 10,
             'taxes_id': False,
             'available_in_pos': True,
@@ -31,7 +31,7 @@ class TestPoSSaleL10NBe(TestPointOfSaleHttpCommon):
                 'product_uom_qty': 10,
                 'product_uom': self.product_a.uom_id.id,
                 'price_unit': 10,
-                'tax_id': False,
+                'tax_ids': False,
             })],
         })
 

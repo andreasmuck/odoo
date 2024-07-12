@@ -28,19 +28,26 @@ registry.category("web_tour.tours").add("test_company_switch_access_error", {
         },
         {
             trigger: ".o_list_view .o_data_cell:contains(p2)",
+            run: "click",
         },
         {
             trigger: ".o_form_view .o_last_breadcrumb_item:contains(p2)",
-            isCheck: true,
         },
         {
             trigger: ".o_switch_company_menu button",
+            run: "click",
         },
         {
-            trigger: ".o-dropdown--menu .dropdown-item:contains(second company) .toggle_company",
+            trigger: ".o_switch_company_item:contains(second company) [role=menuitemcheckbox]",
+            run: "click",
+        },
+        {
+            trigger: ".o_switch_company_menu_buttons button:contains(Confirm)",
+            run: "click",
         },
         {
             trigger: ".o_view_controller.o_list_view",
+            run: "click",
         },
         {
             trigger: ".o_view_controller.o_list_view",
@@ -58,9 +65,7 @@ registry.category("web_tour.tours").add("test_company_switch_access_error", {
                     "model_multicompany_menu"
                 );
                 assertEqual("action" in router.current, true);
-                assertEqual("_company_switching" in router.current, false);
             },
-            isCheck: true,
         },
     ],
 });

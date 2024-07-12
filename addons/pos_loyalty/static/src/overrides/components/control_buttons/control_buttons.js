@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { AlertDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
 import { TextInputPopup } from "@point_of_sale/app/utils/input_popups/text_input_popup";
@@ -55,7 +53,7 @@ patch(ControlButtons.prototype, {
                 this.pos.addLineToCurrentOrder(
                     {
                         product_id: selectedProgram.trigger_product_ids[0],
-                        e_wallet_program_id: selectedProgram,
+                        _e_wallet_program_id: selectedProgram,
                         price_unit: -orderTotal,
                     },
                     {}
@@ -88,7 +86,7 @@ patch(ControlButtons.prototype, {
                         body: result,
                     });
                 }
-                order._updateRewards();
+                this.pos.updateRewards();
             }
         }
     },
@@ -99,26 +97,13 @@ patch(ControlButtons.prototype, {
             getPayload: async (code) => {
                 code = code.trim();
                 if (code !== "") {
-                    const res = await this.pos.get_order().activateCode(code);
+                    const res = await this.pos.activateCode(code);
                     if (res !== true) {
                         this.notification.add(res, { type: "danger" });
                     }
                 }
             },
         });
-    },
-    /**
-     * If rewards are the same, prioritize the one from freeProductRewards.
-     * Make sure that the reward is claimable first.
-     */
-    _mergeFreeProductRewards(freeProductRewards, potentialFreeProductRewards) {
-        const result = [];
-        for (const reward of potentialFreeProductRewards) {
-            if (!freeProductRewards.find((item) => item.reward.id === reward.reward.id)) {
-                result.push(reward);
-            }
-        }
-        return freeProductRewards.concat(result);
     },
 
     getPotentialRewards() {
@@ -132,13 +117,23 @@ patch(ControlButtons.prototype, {
                 ({ reward }) => reward.program_id.program_type !== "ewallet"
             );
         }
+        const result = {};
         const discountRewards = rewards.filter(({ reward }) => reward.reward_type == "discount");
         const freeProductRewards = rewards.filter(({ reward }) => reward.reward_type == "product");
         const potentialFreeProductRewards = this.pos.getPotentialFreeProductRewards();
-        return discountRewards.concat(
-            this._mergeFreeProductRewards(freeProductRewards, potentialFreeProductRewards)
-        );
+        const avaiRewards = [
+            ...potentialFreeProductRewards,
+            ...discountRewards,
+            ...freeProductRewards, // Free product rewards at the end of array to prioritize them
+        ];
+
+        for (const reward of avaiRewards) {
+            result[reward.reward.id] = reward;
+        }
+
+        return Object.values(result);
     },
+
     /**
      * Applies the reward on the current order, if multiple products can be claimed opens a popup asking for which one.
      *
@@ -182,7 +177,7 @@ patch(ControlButtons.prototype, {
                 // Returned an error
                 this.notification.add(result);
             }
-            order._updateRewards();
+            this.pos.updateRewards();
             return result;
         }
     },

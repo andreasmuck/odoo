@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { PosOrder } from "@point_of_sale/app/models/pos_order";
 import { patch } from "@web/core/utils/patch";
 
@@ -21,6 +19,12 @@ patch(PosOrder.prototype, {
             return this.table_id;
         }
     },
+    amountPerGuest(numCustomers = this.customerCount) {
+        if (numCustomers === 0) {
+            return 0;
+        }
+        return this.getTotalDue() / numCustomers;
+    },
     export_for_printing(baseUrl, headerData) {
         return {
             ...super.export_for_printing(...arguments),
@@ -30,5 +34,8 @@ patch(PosOrder.prototype, {
     },
     setBooked(booked) {
         this.uiState.booked = booked;
+    },
+    getFloatingOrderName() {
+        return this.note || this.tracking_number;
     },
 });

@@ -550,6 +550,13 @@ class WebsiteSlides(WebsiteProfile):
                     'invite_partner_id': invite_partner_id
                 }
 
+        if channel_id < 0:
+            # the string part of the channel "slugification" can be blank
+            # meaning it can be "/slides/taking-care-of-trees-2" OR just "/slides/-2" if the first part is blank
+            # as we use a IntConverter on the route definition, this will pick up a negative ID
+            # (the IntConverter is necessary as we want a custom page in case the user can't access the course)
+            channel_id = abs(channel_id)
+
         # Check access rights
         if channel_id and not channel:
             channel = request.env['slide.channel'].browse(channel_id).exists()
@@ -1117,8 +1124,8 @@ class WebsiteSlides(WebsiteProfile):
         # hence calling format_decimalized_number
         return {
             'user_vote': slide.user_vote,
-            'likes': tools.format_decimalized_number(slide.likes),
-            'dislikes': tools.format_decimalized_number(slide.dislikes),
+            'likes': tools.misc.format_decimalized_number(slide.likes),
+            'dislikes': tools.misc.format_decimalized_number(slide.dislikes),
         }
 
     @http.route('/slides/slide/archive', type='json', auth='user', website=True)

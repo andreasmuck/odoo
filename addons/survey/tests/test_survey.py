@@ -266,6 +266,20 @@ class TestSurveyInternals(common.TestSurveyCommon, MailCase):
         self.assertEqual(user_input.scoring_percentage, 100)
         self.assertTrue(user_input.scoring_success)
 
+    def test_session_code_generation(self):
+        surveys = self.env['survey.survey'].create([{
+            'title': f'Survey {i}'
+        } for i in range(30)])
+        survey_codes = surveys.mapped('session_code')
+        self.assertEqual(len(survey_codes), 30)
+        for code in survey_codes:
+            self.assertTrue(bool(code))
+            self.assertEqual(
+                len(surveys.filtered(lambda survey: survey.session_code == code)),
+                1,
+                f"Each code should be unique, found multiple occurrences of: {code}"
+            )
+
     def test_simple_choice_question_answer_result(self):
         test_survey = self.env['survey.survey'].create({
             'title': 'Test This Survey',

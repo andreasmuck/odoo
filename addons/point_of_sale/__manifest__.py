@@ -15,6 +15,7 @@
         'data/default_barcode_patterns.xml',
         'data/digest_data.xml',
         'data/pos_note_data.xml',
+        'data/mail_template_data.xml',
         'wizard/pos_details.xml',
         'wizard/pos_payment.xml',
         'wizard/pos_close_session_wizard.xml',
@@ -47,9 +48,12 @@
         'views/pos_printer_view.xml',
         'views/pos_ticket_view.xml',
         'views/res_config_settings_views.xml',
+        'views/customer_display_index.xml',
+        'views/account_move_views.xml',
+        'views/pos_session_sales_details.xml'
     ],
     'demo': [
-        'data/point_of_sale_demo.xml',
+        'data/demo_data.xml',
     ],
     'installable': True,
     'application': True,
@@ -71,6 +75,8 @@
             'point_of_sale/static/src/scss/pos_dashboard.scss',
             'point_of_sale/static/src/backend/tours/point_of_sale.js',
             'point_of_sale/static/src/backend/debug_manager.js',
+            'point_of_sale/static/src/backend/pos_kanban_view/*',
+            'point_of_sale/static/src/app/utils/hooks.js',
         ],
         'web.assets_tests': [
             'point_of_sale/static/tests/tours/**/*',
@@ -85,6 +91,8 @@
             "web/static/src/scss/pre_variables.scss",
             "web/static/lib/bootstrap/scss/_functions.scss",
             "web/static/lib/bootstrap/scss/_variables.scss",
+            'web/static/lib/bootstrap/scss/_variables-dark.scss',
+            'web/static/lib/bootstrap/scss/_maps.scss',
             ("include", "web._assets_bootstrap"),
             ("include", "web._assets_bootstrap_backend"),
             ('include', 'web._assets_core'),
@@ -145,6 +153,7 @@
             # PoS files
             'point_of_sale/static/src/**/*',
             ('remove', 'point_of_sale/static/src/backend/**/*'),
+            ('remove', 'point_of_sale/static/src/customer_display/**/*'),
             # main.js boots the pos app, it is only included in the prod bundle as tests mount the app themselves
             ('remove', 'point_of_sale/static/src/app/main.js'),
             # tour system FIXME: can this be added only in test mode? Are there any onboarding tours in PoS?
@@ -153,6 +162,17 @@
             'web/static/src/legacy/js/libs/jquery.js',
             # account
             'account/static/src/helpers/*.js',
+
+            "web/static/src/core/browser/router.js",
+            "web/static/src/core/debug/**/*",
+            'web/static/src/model/**/*',
+            'web/static/src/views/**/*',
+            'web/static/src/search/**/*',
+            'web/static/src/webclient/actions/**/*',
+            ('remove', 'web/static/src/webclient/actions/reports/layout_assets/**/*'),
+            ('remove', 'web/static/src/webclient/actions/**/*css'),
+            'web/static/src/webclient/company_service.js',
+            "web/static/lib/jquery/jquery.js",
         ],
         'point_of_sale.base_tests': [
             "web/static/lib/jquery/jquery.js",
@@ -234,6 +254,19 @@
             ## END copy of web.tests_assets
             # pos unit tests
             'point_of_sale/static/tests/unit/**/*',
+        ],
+        'point_of_sale.customer_display_assets': [
+            ('include', 'point_of_sale.base_app'),
+            "point_of_sale/static/src/app/generic_components/odoo_logo/*",
+            "point_of_sale/static/src/app/generic_components/order_widget/*",
+            "point_of_sale/static/src/app/generic_components/orderline/*",
+            "point_of_sale/static/src/app/generic_components/centered_icon/*",
+            "point_of_sale/static/src/utils.js",
+            "point_of_sale/static/src/customer_display/**/*",
+        ],
+        'point_of_sale.customer_display_assets_test': [
+            ('include', 'point_of_sale.base_tests'),
+            "point_of_sale/static/tests/tours/**/*",
         ],
     },
     'license': 'LGPL-3',

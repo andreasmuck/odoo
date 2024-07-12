@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { _t } from "@web/core/l10n/translation";
 import { PaymentInterface } from "@point_of_sale/app/payment/payment_interface";
 import { AlertDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
@@ -83,8 +81,8 @@ export class PaymentVivaWallet extends PaymentInterface {
             terminalId: line.payment_method_id.viva_wallet_terminal_id,
             cashRegisterId: this.pos.get_cashier().name,
             amount: line.amount * 100,
-            currencyCode: 978, // Viva wallet only uses EUR 978 need add a new field numeric_code in res.currency
-            merchantReference: line.sessionId + "/" + this.pos.pos_session.id,
+            currencyCode: this.pos.currency.iso_numeric, // Viva wallet only uses EUR 978
+            merchantReference: line.sessionId + "/" + this.pos.session.id,
             customerTrns: customerTrns,
             preauth: false,
             maxInstalments: 0,

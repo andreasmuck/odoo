@@ -7,7 +7,8 @@ import { NavigableList } from "@mail/core/common/navigable_list";
 import { useSuggestion } from "@mail/core/common/suggestion_hook";
 import { prettifyMessageContent } from "@mail/utils/common/format";
 import { useSelection } from "@mail/utils/common/hooks";
-import { rpcWithEnv, isDragSourceExternalFile } from "@mail/utils/common/misc";
+import { isDragSourceExternalFile } from "@mail/utils/common/misc";
+import { rpc } from "@web/core/network/rpc";
 import { isEventHandled, markEventHandled } from "@web/core/utils/misc";
 import { browser } from "@web/core/browser/browser";
 import { useDebounced } from "@web/core/utils/timing";
@@ -21,13 +22,12 @@ import {
     useRef,
     useState,
     useExternalListener,
+    toRaw,
 } from "@odoo/owl";
 
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
 import { FileUploader } from "@web/views/fields/file_handler";
-/** @type {import("@web/core/network/rpc").rpc} */
-let rpc;
 import { escape, sprintf } from "@web/core/utils/strings";
 
 const EDIT_CLICK_TYPE = {
@@ -85,7 +85,7 @@ export class Composer extends Component {
     static template = "mail.Composer";
 
     setup() {
-        rpc = rpcWithEnv(this.env);
+        super.setup();
         this.SEND_KEYBIND_TO_SEND = markup(
             _t("<samp>%(send_keybind)s</samp><i> to send</i>", { send_keybind: this.sendKeybind })
         );
@@ -94,8 +94,6 @@ export class Composer extends Component {
             this.thread ?? this.props.composer.message.thread,
             { composer: this.props.composer }
         );
-        this.messageService = useState(useService("mail.message"));
-        this.threadService = useService("mail.thread");
         this.ui = useState(useService("ui"));
         this.mainActionsRef = useRef("main-actions");
         this.ref = useRef("textarea");
@@ -164,7 +162,7 @@ export class Composer extends Component {
                 this.ref.el.style.height = this.fakeTextarea.el.scrollHeight + "px";
                 this.saveContentDebounced();
             },
-            () => [this.props.composer.textInputContent, this.ref.el]
+            () => [this.props.composer.text, this.ref.el]
         );
         useEffect(
             () => {
@@ -178,7 +176,7 @@ export class Composer extends Component {
         );
         onMounted(() => {
             this.ref.el.scrollTo({ top: 0, behavior: "instant" });
-            if (!this.props.composer.textInputContent) {
+            if (!this.props.composer.text) {
                 this.restoreContent();
             }
         });
@@ -212,10 +210,11 @@ export class Composer extends Component {
     }
 
     onClickCancelOrSaveEditText(ev) {
-        if (this.props.composer.message && ev.target.dataset?.type === EDIT_CLICK_TYPE.CANCEL) {
+        const composer = toRaw(this.props.composer);
+        if (composer.message && ev.target.dataset?.type === EDIT_CLICK_TYPE.CANCEL) {
             this.props.onDiscardCallback(ev);
         }
-        if (this.props.composer.message && ev.target.dataset?.type === EDIT_CLICK_TYPE.SAVE) {
+        if (composer.message && ev.target.dataset?.type === EDIT_CLICK_TYPE.SAVE) {
             this.editMessage(ev);
         }
     }
@@ -269,6 +268,9 @@ export class Composer extends Component {
     }
 
     get SEND_TEXT() {
+        if (this.props.composer.message) {
+            return _t("Save editing");
+        }
         return this.props.type === "note" ? _t("Log") : _t("Send");
     }
 
@@ -292,7 +294,7 @@ export class Composer extends Component {
         const attachments = this.props.composer.attachments;
         return (
             !this.state.active ||
-            (!this.props.composer.textInputContent && attachments.length === 0) ||
+            (!this.props.composer.text && attachments.length === 0) ||
             attachments.some(({ uploading }) => Boolean(uploading))
         );
     }
@@ -315,21 +317,27 @@ export class Composer extends Component {
         if (!this.hasSuggestions) {
             return props;
         }
-        const suggestions = Array(
-            ...this.suggestion.state.items.mainSuggestions,
-            ...this.suggestion.state.items.extraSuggestions
-        );
+        const suggestions = this.suggestion.state.items.suggestions;
         switch (this.suggestion.state.items.type) {
             case "Partner":
                 return {
                     ...props,
                     optionTemplate: "mail.Composer.suggestionPartner",
                     options: suggestions.map((suggestion) => {
-                        return {
-                            label: suggestion.name,
-                            partner: suggestion,
-                            classList: "o-mail-Composer-suggestion",
-                        };
+                        if (suggestion.isSpecial) {
+                            return {
+                                ...suggestion,
+                                group: 1,
+                                optionTemplate: "mail.Composer.suggestionSpecial",
+                                classList: "o-mail-Composer-suggestion",
+                            };
+                        } else {
+                            return {
+                                label: suggestion.name,
+                                partner: suggestion,
+                                classList: "o-mail-Composer-suggestion",
+                            };
+                        }
                     }),
                 };
             case "Thread":
@@ -359,6 +367,8 @@ export class Composer extends Component {
             case "CannedResponse":
                 return {
                     ...props,
+                    autoSelectFirst: false,
+                    hint: _t("Tab to select"),
                     optionTemplate: "mail.Composer.suggestionCannedResponse",
                     options: suggestions.map((suggestion) => {
                         return {
@@ -402,10 +412,11 @@ export class Composer extends Component {
     }
 
     onKeydown(ev) {
+        const composer = toRaw(this.props.composer);
         switch (ev.key) {
             case "ArrowUp":
-                if (this.props.messageEdition && this.props.composer.textInputContent === "") {
-                    const messageToEdit = this.props.composer.thread.lastEditableMessageOfSelf;
+                if (this.props.messageEdition && composer.text === "") {
+                    const messageToEdit = composer.thread.lastEditableMessageOfSelf;
                     if (messageToEdit) {
                         this.props.messageEdition.editingMessage = messageToEdit;
                     }
@@ -421,7 +432,7 @@ export class Composer extends Component {
                     return;
                 }
                 ev.preventDefault(); // to prevent useless return
-                if (this.props.composer.message) {
+                if (composer.message) {
                     this.editMessage();
                 } else {
                     this.sendMessage();
@@ -441,8 +452,9 @@ export class Composer extends Component {
     }
 
     onClickAddAttachment(ev) {
+        const composer = toRaw(this.props.composer);
         markEventHandled(ev, "composer.clickOnAddAttachment");
-        this.props.composer.autofocus++;
+        composer.autofocus++;
     }
 
     async onClickFullComposer(ev) {
@@ -474,10 +486,10 @@ export class Composer extends Component {
             }
         }
         const attachmentIds = this.props.composer.attachments.map((attachment) => attachment.id);
-        const body = this.props.composer.textInputContent;
+        const body = this.props.composer.text;
         const validMentions =
             this.store.self.type === "partner"
-                ? this.messageService.getMentionsFromText(body, {
+                ? this.store.getMentionsFromText(body, {
                       mentionedChannels: this.props.composer.mentionedChannels,
                       mentionedPartners: this.props.composer.mentionedPartners,
                   })
@@ -526,9 +538,7 @@ export class Composer extends Component {
                     this.clear();
                 }
                 this.props.messageToReplyTo?.cancel();
-                if (this.thread) {
-                    this.threadService.fetchNewMessages(this.thread);
-                }
+                this.thread?.fetchNewMessages();
             },
         };
         await this.env.services.action.doAction(action, options);
@@ -558,7 +568,7 @@ export class Composer extends Component {
         const el = this.ref.el;
         const attachments = this.props.composer.attachments;
         if (
-            this.props.composer.textInputContent.trim() ||
+            this.props.composer.text.trim() ||
             (attachments.length > 0 && attachments.every(({ uploading }) => !uploading)) ||
             (this.message && this.message.attachments.length > 0)
         ) {
@@ -566,7 +576,7 @@ export class Composer extends Component {
                 return;
             }
             this.state.active = false;
-            await cb(this.props.composer.textInputContent);
+            await cb(this.props.composer.text);
             if (this.props.onPostCallback) {
                 this.props.onPostCallback();
             }
@@ -581,17 +591,18 @@ export class Composer extends Component {
     }
 
     async sendMessage() {
-        if (this.props.composer.message) {
+        const composer = toRaw(this.props.composer);
+        if (composer.message) {
             this.editMessage();
             return;
         }
         await this.processMessage(async (value) => {
             const postData = {
-                attachments: this.props.composer.attachments,
+                attachments: composer.attachments,
                 isNote: this.props.type === "note",
-                mentionedChannels: this.props.composer.mentionedChannels,
-                mentionedPartners: this.props.composer.mentionedPartners,
-                cannedResponseIds: this.props.composer.cannedResponses.map((c) => c.id),
+                mentionedChannels: composer.mentionedChannels,
+                mentionedPartners: composer.mentionedPartners,
+                cannedResponseIds: composer.cannedResponses.map((c) => c.id),
                 parentId: this.props.messageToReplyTo?.message?.id,
             };
             await this._sendMessage(value, postData);
@@ -612,37 +623,37 @@ export class Composer extends Component {
      * @param {postData} postData Message meta data info
      */
     async _sendMessage(value, postData) {
-        const thread = this.props.composer.thread;
-        await this.threadService.post(this.thread, value, postData);
+        const thread = toRaw(this.props.composer.thread);
+        const postThread = toRaw(this.thread);
+        const post = postThread.post.bind(postThread, value, postData);
+        if (postThread.model === "discuss.channel") {
+            // feature of (optimistic) temp message
+            post();
+        } else {
+            await post();
+        }
         if (thread.model === "mail.box") {
             this.notifySendFromMailbox();
         }
         this.suggestion?.clearRawMentions();
-        this.suggestion?.clearCannedReponses();
+        this.suggestion?.clearCannedResponses();
         this.props.messageToReplyTo?.cancel();
     }
 
     async editMessage() {
-        if (
-            this.props.composer.textInputContent ||
-            this.props.composer.message.attachments.length > 0
-        ) {
+        const composer = toRaw(this.props.composer);
+        if (composer.text || composer.message.attachments.length > 0) {
             await this.processMessage(async (value) =>
-                this.messageService.edit(
-                    this.props.composer.message,
-                    value,
-                    this.props.composer.attachments,
-                    {
-                        mentionedChannels: this.props.composer.mentionedChannels,
-                        mentionedPartners: this.props.composer.mentionedPartners,
-                    }
-                )
+                composer.message.edit(value, composer.attachments, {
+                    mentionedChannels: composer.mentionedChannels,
+                    mentionedPartners: composer.mentionedPartners,
+                })
             );
         } else {
             this.env.services.dialog.add(MessageConfirmDialog, {
-                message: this.props.composer.message,
+                message: composer.message,
                 messageComponent: this.props.messageComponent,
-                onConfirm: () => this.messageService.delete(this.message),
+                onConfirm: () => this.message.remove(),
                 prompt: _t("Are you sure you want to delete this message?"),
             });
         }
@@ -650,35 +661,37 @@ export class Composer extends Component {
     }
 
     addEmoji(str) {
-        const textContent = this.props.composer.textInputContent;
-        const firstPart = textContent.slice(0, this.props.composer.selection.start);
-        const secondPart = textContent.slice(this.props.composer.selection.end, textContent.length);
-        this.props.composer.textInputContent = firstPart + str + secondPart;
+        const composer = toRaw(this.props.composer);
+        const text = composer.text;
+        const firstPart = text.slice(0, composer.selection.start);
+        const secondPart = text.slice(composer.selection.end, text.length);
+        composer.text = firstPart + str + secondPart;
         this.selection.moveCursor((firstPart + str).length);
         if (!this.ui.isSmall) {
-            this.props.composer.autofocus++;
+            composer.autofocus++;
         }
     }
 
     onFocusin() {
-        this.props.composer.isFocused = true;
-        if (this.props.composer.thread) {
-            this.threadService.markAsRead(this.props.composer.thread);
-        }
+        const composer = toRaw(this.props.composer);
+        composer.isFocused = true;
+        composer.thread?.markAsRead();
     }
 
     saveContent() {
+        const composer = toRaw(this.props.composer);
         const fullComposerContent =
             document
                 .querySelector(".o_mail_composer_form_view .note-editable")
-                ?.innerText.replace(/(\t|\n)+/g, "\n") ?? this.props.composer.textInputContent;
-        browser.localStorage.setItem(this.props.composer.localId, fullComposerContent);
+                ?.innerText.replace(/(\t|\n)+/g, "\n") ?? composer.text;
+        browser.localStorage.setItem(composer.localId, fullComposerContent);
     }
 
     restoreContent() {
-        const fullComposerContent = browser.localStorage.getItem(this.props.composer.localId);
+        const composer = toRaw(this.props.composer);
+        const fullComposerContent = browser.localStorage.getItem(composer.localId);
         if (fullComposerContent) {
-            this.props.composer.textInputContent = fullComposerContent;
+            composer.text = fullComposerContent;
         }
     }
 }

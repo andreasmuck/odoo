@@ -1,6 +1,3 @@
-import { describe, expect, test, getFixture } from "@odoo/hoot";
-
-import { DELAY_FOR_SPINNER } from "@mail/chatter/web_portal/chatter";
 import {
     SIZES,
     assertSteps,
@@ -19,11 +16,18 @@ import {
     startServer,
     step,
     triggerHotkey,
-} from "../../mail_test_helpers";
-import { mockService, onRpc, serverState } from "@web/../tests/web_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, expect, test } from "@odoo/hoot";
 import { Deferred, advanceTime } from "@odoo/hoot-mock";
-import { getMockEnv } from "@web/../tests/_framework/env_test_helpers";
-import { actionService } from "@web/webclient/actions/action_service";
+import {
+    defineActions,
+    getService,
+    mockService,
+    onRpc,
+    serverState,
+} from "@web/../tests/web_test_helpers";
+
+import { DELAY_FOR_SPINNER } from "@mail/chatter/web_portal/chatter";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -64,14 +68,15 @@ test("can post a message on a record thread", async () => {
             post_data: {
                 body: "hey",
                 attachment_ids: [],
-                attachment_tokens: [],
-                canned_response_ids: [],
                 message_type: "comment",
-                partner_additional_values: {},
-                partner_emails: [],
                 partner_ids: [],
                 subtype_xmlid: "mail.mt_comment",
             },
+            canned_response_ids: [],
+            attachment_tokens: [],
+            partner_additional_values: {},
+            partner_emails: [],
+            special_mentions: [],
             thread_id: partnerId,
             thread_model: "res.partner",
         };
@@ -85,7 +90,7 @@ test("can post a message on a record thread", async () => {
     await contains(".o-mail-Composer");
     await insertText(".o-mail-Composer-input", "hey");
     await contains(".o-mail-Message", { count: 0 });
-    await click(".o-mail-Composer button:enabled", { text: "Send" });
+    await click(".o-mail-Composer button[aria-label='Send']:enabled");
     await contains(".o-mail-Message");
     await assertSteps(["/mail/message/post"]);
 });
@@ -99,15 +104,16 @@ test("can post a note on a record thread", async () => {
             context: args.context,
             post_data: {
                 attachment_ids: [],
-                attachment_tokens: [],
                 body: "hey",
-                canned_response_ids: [],
                 message_type: "comment",
-                partner_additional_values: {},
-                partner_emails: [],
                 partner_ids: [],
                 subtype_xmlid: "mail.mt_note",
             },
+            special_mentions: [],
+            attachment_tokens: [],
+            canned_response_ids: [],
+            partner_additional_values: {},
+            partner_emails: [],
             thread_id: partnerId,
             thread_model: "res.partner",
         };
@@ -142,7 +148,7 @@ test("No attachment loading spinner when switching from loading record to creati
     await contains("button[aria-label='Attach files']");
     await advanceTime(DELAY_FOR_SPINNER);
     await contains("button[aria-label='Attach files'] .fa-spin");
-    await click(".o_control_panel_collapsed_create .o_form_button_create");
+    await click(".o_control_panel_main_buttons .o_form_button_create");
     await contains("button[aria-label='Attach files'] .fa-spin", { count: 0 });
 });
 
@@ -227,19 +233,7 @@ test("chatter: drop attachment should refresh thread data with hasParentReloadOn
     const pyEnv = await startServer();
     const partnerId = pyEnv["res.partner"].create({});
 
-    onRpc((route) => {
-        if (route === "/mail/attachment/upload") {
-            const attachmentId = pyEnv["ir.attachment"].create([
-                { res_id: partnerId, res_model: "res.partner", mimetype: "application/pdf" }
-            ]);
-            pyEnv["res.partner"].write([partnerId], { message_main_attachment_id: attachmentId });
-            return Promise.resolve();
-        }
-    });
     await start();
-    const target = getFixture();
-    target.classList.add("o_web_client");
-
     await openFormView("res.partner", partnerId, {
         arch: `
             <form>
@@ -248,7 +242,7 @@ test("chatter: drop attachment should refresh thread data with hasParentReloadOn
                 </sheet>
                 <div class="o_attachment_preview" />
                 <chatter reload_on_post="True" reload_on_attachment="True"/>
-            </form>`
+            </form>`,
     });
     const files = [
         await createFile({
@@ -396,10 +390,10 @@ test("composer show/hide on log note/send message [REQUIRE FOCUS]", async () => 
     await contains(".o-mail-Composer", { count: 0 });
     await click("button", { text: "Send message" });
     await contains(".o-mail-Composer");
-    expect(document.activeElement).toBe($(".o-mail-Composer-input")[0]);
+    expect(".o-mail-Composer-input").toBeFocused();
     await click("button", { text: "Log note" });
     await contains(".o-mail-Composer");
-    expect(document.activeElement).toBe($(".o-mail-Composer-input")[0]);
+    expect(".o-mail-Composer-input").toBeFocused();
     await click("button", { text: "Log note" });
     await contains(".o-mail-Composer", { count: 0 });
     await click("button", { text: "Send message" });
@@ -460,19 +454,23 @@ test("scroll position is kept when navigating from one record to another", async
     await start();
     await openFormView("res.partner", partnerId_1);
     await contains(".o-mail-Message", { count: 20 });
+    const clientHeight1 = $(".o-mail-Chatter")[0].clientHeight; // client height might change (cause: breadcrumb)
     const scrollValue1 = $(".o-mail-Chatter")[0].scrollHeight / 2;
     await contains(".o-mail-Chatter", { scroll: 0 });
     await scroll(".o-mail-Chatter", scrollValue1);
     await openFormView("res.partner", partnerId_2);
     await contains(".o-mail-Message", { count: 30 });
+    const clientHeight2 = $(".o-mail-Chatter")[0].clientHeight;
     const scrollValue2 = $(".o-mail-Chatter")[0].scrollHeight / 3;
     await scroll(".o-mail-Chatter", scrollValue2);
     await openFormView("res.partner", partnerId_1);
     await contains(".o-mail-Message", { count: 20 });
-    await contains(".o-mail-Chatter", { scroll: scrollValue1 });
+    const clientHeight3 = $(".o-mail-Chatter")[0].clientHeight;
+    await contains(".o-mail-Chatter", { scroll: scrollValue1 - (clientHeight3 - clientHeight1) });
     await openFormView("res.partner", partnerId_2);
     await contains(".o-mail-Message", { count: 30 });
-    await contains(".o-mail-Chatter", { scroll: scrollValue2 });
+    const clientHeight4 = $(".o-mail-Chatter")[0].clientHeight;
+    await contains(".o-mail-Chatter", { scroll: scrollValue2 - (clientHeight4 - clientHeight2) });
 });
 
 test("basic chatter rendering", async () => {
@@ -505,7 +503,7 @@ test('chatter just contains "creating a new record" message during the creation 
     };
     await start({ serverData: { views } });
     await openFormView("res.partner", partnerId);
-    await click(".o_control_panel_collapsed_create .o_form_button_create");
+    await click(".o_control_panel_main_buttons .o_form_button_create");
     await contains(".o-mail-Message");
     await contains(".o-mail-Message-body", { text: "Creating a new record..." });
 });
@@ -599,31 +597,27 @@ test("post message on draft record", async () => {
     });
     await click("button", { text: "Send message" });
     await insertText(".o-mail-Composer-input", "Test");
-    await click(".o-mail-Composer button:enabled", { text: "Send" });
+    await click(".o-mail-Composer button[aria-label='Send']:enabled");
     await contains(".o-mail-Message");
     await contains(".o-mail-Message-content", { text: "Test" });
 });
 
 test("schedule activities on draft record should prompt with scheduling an activity (proceed with action)", async () => {
     const wizardOpened = new Deferred();
-    mockService("action", () => {
-        const ogService = actionService.start(getMockEnv());
-        return {
-            ...ogService,
-            doAction(action, options) {
-                if (action.res_model === "res.partner") {
-                    return ogService.doAction(action, options);
-                } else if (action.res_model === "mail.activity.schedule") {
-                    step("mail.activity.schedule");
-                    expect(action.context.active_model).toBe("res.partner");
-                    expect(Number(action.context.active_id)).toBeTruthy();
-                    options.onClose();
-                    wizardOpened.resolve();
-                } else {
-                    step("Unexpected action" + action.res_model);
-                }
-            },
-        };
+    mockService("action", {
+        doAction(action, options) {
+            if (action.res_model === "res.partner") {
+                return super.doAction(...arguments);
+            } else if (action.res_model === "mail.activity.schedule") {
+                step("mail.activity.schedule");
+                expect(action.context.active_model).toBe("res.partner");
+                expect(Number(action.context.active_id)).toBeGreaterThan(0);
+                options.onClose();
+                wizardOpened.resolve();
+            } else {
+                step("Unexpected action" + action.res_model);
+            }
+        },
     });
     await start();
     await openFormView("res.partner", undefined, {
@@ -683,6 +677,23 @@ test("Mentions in composer should still work when using pager", async () => {
     await click("button", { text: "Log note" });
     await click(".o_pager_next");
     await insertText(".o-mail-Composer-input", "@");
-    // all records in DB: Mitchell Admin | Hermit | OdooBot | Public user
-    await contains(".o-mail-Composer-suggestion", { count: 4 });
+    // all records in DB: Mitchell Admin | Hermit | Public user except OdooBot
+    await contains(".o-mail-Composer-suggestion", { count: 3 });
+});
+
+test("form views in dialogs do not have chatter", async () => {
+    defineActions([
+        {
+            id: 1,
+            name: "Partner",
+            res_model: "res.partner",
+            type: "ir.actions.act_window",
+            views: [[false, "form"]],
+            target: "new",
+        },
+    ]);
+    await start();
+    await getService("action").doAction(1);
+    await contains(".o_dialog .o_form_view");
+    await contains(".o-mail-Form-Chatter", { count: 0 });
 });

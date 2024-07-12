@@ -28,18 +28,6 @@ $input-border-color: $gray-400;
                 display: revert;
             }
         }
-
-        @media screen and (max-width: 768px){
-            .oe_advanced_configurator_modal {
-                table, tbody, tr, td {
-                    display: block;
-                    width: 100%;
-                }
-                thead {
-                    display: none;
-                }
-            }
-        }
     }
 }
 
@@ -400,7 +388,7 @@ div#payment_method {
     }
 }
 
-.js_change_shipping, .js_change_billing {
+.js_change_delivery, .js_change_billing {
     cursor: pointer;
 }
 
@@ -742,18 +730,19 @@ a.no-decoration {
     }
 
     .o_wsale_accordion {
-        .collapse:not(.show) {
-            display: block;
-
-            @include media-breakpoint-down(lg) {
-                display: none;
-            }
+        .accordion-button{
+            background-color: unset;
         }
 
         .o_wsale_scrollable_table {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+            &::-webkit-scrollbar {
+              display: none;
+            }
             @include media-breakpoint-up(lg) {
                 overflow-y: scroll;
-                height: 21rem;
+                height: 15rem;
             }
         }
     }
@@ -776,7 +765,7 @@ a.no-decoration {
         }
     }
 
-    .all_shipping, .all_billing {
+    .all_delivery, .all_billing {
         @include media-breakpoint-down(md) {
             overflow-x: auto;
 

@@ -51,8 +51,8 @@ class TestMrpOrder(TestMrpCommon):
     def test_basic(self):
         """ Checks a basic manufacturing order: no routing (thus no workorders), no lot and
         consume strictly what's needed. """
-        self.product_1.type = 'product'
-        self.product_2.type = 'product'
+        self.product_1.is_storable = True
+        self.product_2.is_storable = True
         self.env['stock.quant'].create({
             'location_id': self.warehouse_1.lot_stock_id.id,
             'product_id': self.product_1.id,
@@ -537,7 +537,9 @@ class TestMrpOrder(TestMrpCommon):
         self.assertEqual(mo.move_finished_ids[0].date, datetime(2023, 5, 15, 10, 0))
         mo.action_confirm()
         mo.button_plan()
+        self.assertTrue(mo.is_planned)
         mo.date_start = datetime(2024, 5, 15, 9, 0)
+        self.assertFalse(mo.is_planned)
         self.assertEqual(mo.move_finished_ids[0].date, datetime(2024, 5, 15, 10, 0))
 
     def test_rounding(self):
@@ -799,6 +801,37 @@ class TestMrpOrder(TestMrpCommon):
         mo.button_mark_done()
         self.assertTrue(all(s in ['done', 'cancel'] for s in mo.move_raw_ids.mapped('state')))
 
+    def test_product_produce_7(self):
+        """ Plan 2 finished products, reserve and produce 3. Post the current production.
+        Simulate an unlock and edit and, on the opened moves, set the consumed quantity
+        to 5, and to 4. Check the component quantity removed from inventory is correct."""
+        self.stock_location = self.env.ref('stock.stock_location_stock')
+        mo, _, _, p1, p2 = self.generate_mo(qty_final=1)
+        self.assertEqual(len(mo), 1, 'MO should have been created')
+
+        self.env['stock.quant']._update_available_quantity(p1, self.stock_location, 20)
+        self.env['stock.quant']._update_available_quantity(p2, self.stock_location, 5)
+        mo.action_assign()
+
+        mo_form = Form(mo)
+        mo_form.qty_producing = 2
+        mo = mo_form.save()
+        mo.button_mark_done()
+        self.assertEqual(sum(mo.move_finished_ids.move_line_ids.mapped('quantity')), 2)
+        self.assertTrue(mo.is_locked)
+
+        mo.action_toggle_is_locked()
+        self.assertFalse(mo.is_locked)
+        mo_form = Form(mo)
+        mo_form.qty_producing = 5
+        mo = mo_form.save()
+        self.assertAlmostEqual(sum(mo.move_finished_ids.move_line_ids.mapped('quantity')), 5)
+
+        mo_form = Form(mo)
+        mo_form.qty_producing = 4
+        mo = mo_form.save()
+        self.assertAlmostEqual(sum(mo.move_finished_ids.move_line_ids.mapped('quantity')), 4)
+
     def test_consumption_strict_1(self):
         """ Checks the constraints of a strict BOM without tracking when playing around
         quantities to consume."""
@@ -915,7 +948,7 @@ class TestMrpOrder(TestMrpCommon):
         self.env['stock.quant']._update_available_quantity(p2, self.stock_location, 5)
         add_product = self.env['product.product'].create({
             'name': 'additional',
-            'type': 'product',
+            'is_storable': True,
         })
         mo.action_assign()
 
@@ -972,7 +1005,7 @@ class TestMrpOrder(TestMrpCommon):
         dozen = self.env.ref('uom.product_uom_dozen')
         self.byproduct1 = self.env['product.product'].create({
             'name': 'Byproduct 1',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'serial'
         })
         self.serial_1 = self.env['stock.lot'].create({
@@ -986,7 +1019,7 @@ class TestMrpOrder(TestMrpCommon):
 
         self.byproduct2 = self.env['product.product'].create({
             'name': 'Byproduct 2',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'lot',
         })
         self.lot_1 = self.env['stock.lot'].create({
@@ -1000,7 +1033,7 @@ class TestMrpOrder(TestMrpCommon):
 
         self.byproduct3 = self.env['product.product'].create({
             'name': 'Byproduct 3',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'none',
         })
 
@@ -1338,7 +1371,7 @@ class TestMrpOrder(TestMrpCommon):
         subassembly_product = self.env["product.product"].create(
             {
                 "name": "Subassembly",
-                "type": "product",
+                "is_storable": True,
                 "tracking": "serial",
             }
         )
@@ -1362,7 +1395,7 @@ class TestMrpOrder(TestMrpCommon):
         finished_good_product = self.env["product.product"].create(
             {
                 "name": "Finished Good",
-                "type": "product",
+                "is_storable": True,
                 "tracking": "serial",
             }
         )
@@ -1420,7 +1453,7 @@ class TestMrpOrder(TestMrpCommon):
         product = self.env["product.product"].create(
             {
                 "name": "Product",
-                "type": "product",
+                "is_storable": True,
                 "tracking": "serial",
             }
         )
@@ -1504,7 +1537,7 @@ class TestMrpOrder(TestMrpCommon):
         """ Check that the production can be completed without any consumption."""
         product = self.env['product.product'].create({
             'name': 'Product no BoM',
-            'type': 'product',
+            'is_storable': True,
         })
         mo_form = Form(self.env['mrp.production'])
         mo_form.product_id = product
@@ -1538,7 +1571,7 @@ class TestMrpOrder(TestMrpCommon):
         """ Check two component move with the same product are not merged."""
         product = self.env['product.product'].create({
             'name': 'Product no BoM',
-            'type': 'product',
+            'is_storable': True,
         })
         mo_form = Form(self.env['mrp.production'])
         mo_form.product_id = product
@@ -1564,14 +1597,14 @@ class TestMrpOrder(TestMrpCommon):
         unit = self.env.ref('uom.product_uom_unit')
         plastic_laminate = self.env['product.product'].create({
             'name': 'Plastic Laminate',
-            'type': 'product',
+            'is_storable': True,
             'uom_id': unit.id,
             'uom_po_id': unit.id,
             'tracking': 'serial',
         })
         ply_veneer = self.env['product.product'].create({
             'name': 'Ply Veneer',
-            'type': 'product',
+            'is_storable': True,
             'uom_id': unit.id,
             'uom_po_id': unit.id,
         })
@@ -1622,7 +1655,7 @@ class TestMrpOrder(TestMrpCommon):
         # Create finished product
         finished_product = self.env['product.product'].create({
             'name': 'Geyser',
-            'type': 'product',
+            'is_storable': True,
         })
 
         # Create service type product
@@ -1799,11 +1832,11 @@ class TestMrpOrder(TestMrpCommon):
         immediate production wizard should fill the correct quantities. """
         p_final = self.env['product.product'].create({
             'name': 'final',
-            'type': 'product',
+            'is_storable': True,
         })
         component = self.env['product.product'].create({
             'name': 'component',
-            'type': 'product',
+            'is_storable': True,
         })
         bom = self.env['mrp.bom'].create({
             'product_id': p_final.id,
@@ -1856,7 +1889,7 @@ class TestMrpOrder(TestMrpCommon):
         })
         storable_component = self.env['product.product'].create({
             'name': 'Storable Component',
-            'type': 'product',
+            'is_storable': True,
             'uom_id': uom_cL.id,
             'uom_po_id': uom_cL.id,
         })
@@ -1939,7 +1972,7 @@ class TestMrpOrder(TestMrpCommon):
         # create a product component and the final product using the component
         product_comp = self.env['product.product'].create({
             'name': 'Product Component',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'lot',
             'categ_id': self.env.ref('product.product_category_all').id,
             'uom_id': uom_L.id,
@@ -1948,7 +1981,7 @@ class TestMrpOrder(TestMrpCommon):
 
         product_final = self.env['product.product'].create({
             'name': 'Product Final',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'lot',
             'categ_id': self.env.ref('product.product_category_all').id,
             'uom_id': uom_L.id,
@@ -2653,9 +2686,9 @@ class TestMrpOrder(TestMrpCommon):
         work_center_3 = self.env['mrp.workcenter'].create({"name": "WorkCenter 3", "time_start": 13})
 
         product = self.env['product.template'].create({"name": "Finished Product"})
-        component_1 = self.env['product.template'].create({"name": "Component 1", "type": "product"})
-        component_2 = self.env['product.template'].create({"name": "Component 2", "type": "product"})
-        component_3 = self.env['product.template'].create({"name": "Component 3", "type": "product"})
+        component_1 = self.env['product.template'].create({"name": "Component 1", "is_storable": True})
+        component_2 = self.env['product.template'].create({"name": "Component 2", "is_storable": True})
+        component_3 = self.env['product.template'].create({"name": "Component 3", "is_storable": True})
 
         self.env['stock.quant'].create({
             "product_id": component_1.product_variant_id.id,
@@ -2814,12 +2847,12 @@ class TestMrpOrder(TestMrpCommon):
 
         product_to_build = self.env['product.product'].create({
             'name': 'final product',
-            'type': 'product',
+            'is_storable': True,
         })
 
         product_to_use = self.env['product.product'].create({
             'name': 'component',
-            'type': 'product',
+            'is_storable': True,
         })
 
         bom = self.env['mrp.bom'].create({
@@ -2879,6 +2912,23 @@ class TestMrpOrder(TestMrpCommon):
         self.assertEqual(wo.state, 'cancel', 'Workorders should be cancelled.')
         self.assertTrue(mo.workorder_ids.time_ids.date_end, 'The timers must stop after the cancellation of the MO')
 
+    def test_manual_duration(self):
+        production_form = Form(self.env['mrp.production'])
+        production_form.product_id = self.bom_4.product_id
+        production_form.bom_id = self.bom_4
+        production_form.product_qty = 1
+        production_form.product_uom_id = self.bom_4.product_id.uom_id
+
+        production = production_form.save()
+        production.action_confirm()
+
+        production_form = Form(production)
+        production_form.qty_producing = 1
+        production = production_form.save()
+        production.button_mark_done()
+
+        self.assertEqual(production.duration, production.workorder_ids.duration_expected)
+
     def test_starting_wo_twice(self):
         """
             Check that the work order is started only once when clicking the start button several times.
@@ -2911,7 +2961,7 @@ class TestMrpOrder(TestMrpCommon):
         warehouse.manu_type_id.reservation_method = 'manual'
 
         for product in self.product_1 + self.product_2:
-            product.type = 'product'
+            product.is_storable = True
             self.env['stock.quant']._update_available_quantity(product, warehouse.lot_stock_id, 10)
 
         mo_form = Form(self.env['mrp.production'])
@@ -2945,7 +2995,7 @@ class TestMrpOrder(TestMrpCommon):
 
         grandparent, parent, child = self.env['product.product'].create([{
             'name': n,
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(6, 0, mto_route.ids + manufacture_route.ids)],
         } for n in ['grandparent', 'parent', 'child']])
         component = self.env['product.product'].create({
@@ -3353,6 +3403,34 @@ class TestMrpOrder(TestMrpCommon):
         ], ['company_id'], load=False, limit=1)
         self.assertEqual(mo_2.picking_type_id.id, picking_type_company[0]['id'])
 
+    def test_onchange_picking_type_id_and_name(self):
+        """
+        Test that when changing the operation type, the name of the MO should be changed too
+        """
+        picking_type_1 = self.env['stock.picking.type'].create({
+            'name': 'new_picking_type_1',
+            'code': 'mrp_operation',
+            'sequence_code': 'PT1',
+            'default_location_src_id': self.stock_location_components.id,
+            'default_location_dest_id': self.env.ref('stock.stock_location_stock').id,
+            'warehouse_id': self.warehouse_1.id,
+        })
+        picking_type_2 = picking_type_1.copy({
+            'name': 'new_picking_type_2',
+            'sequence_code': 'PT2'
+        })
+        mo_form = Form(self.env['mrp.production'])
+        mo_form.product_id = self.product_1
+        mo_form.picking_type_id = picking_type_1
+        mo = mo_form.save()
+        self.assertEqual(mo.name, "BWH/PT1/00001")
+        mo.picking_type_id = picking_type_2
+        self.assertEqual(mo.name, "BWH/PT2/00001")
+        mo.picking_type_id = picking_type_1
+        self.assertEqual(mo.name, "BWH/PT1/00002")
+        mo.picking_type_id = picking_type_1
+        self.assertEqual(mo.name, "BWH/PT1/00002")
+
     def test_onchange_bom_ids_and_picking_type(self):
         warehouse01 = self.env['stock.warehouse'].search([('company_id', '=', self.env.company.id)], limit=1)
         warehouse02, warehouse03 = self.env['stock.warehouse'].create([
@@ -3625,7 +3703,7 @@ class TestMrpOrder(TestMrpCommon):
 
         product01, product02, product03 = self.env['product.product'].create([{
             'name': 'Product %s' % (i + 1),
-            'type': 'product',
+            'is_storable': True,
         } for i in range(3)])
 
         product02.route_ids = [(6, 0, (mto_route | manufacture_route).ids)]
@@ -3659,7 +3737,7 @@ class TestMrpOrder(TestMrpCommon):
         """
         self.product_2.tracking = 'serial'
         bom = self.env["mrp.bom"].create({
-            'product_tmpl_id': self.product_5.product_tmpl_id.id,
+            'product_tmpl_id': self.product_6.product_tmpl_id.id,
             'product_qty': 1.0,
             'bom_line_ids': [(0, 0, {
                 'product_id': self.product_2.id,
@@ -3671,7 +3749,7 @@ class TestMrpOrder(TestMrpCommon):
         })
         # create the MO and confirm it
         mo = self.env['mrp.production'].create({
-            'product_id': self.product_5.id,
+            'product_id': self.product_6.id,
             'bom_id': bom.id,
             'product_uom_qty': 1.0,
         })
@@ -3741,7 +3819,7 @@ class TestMrpOrder(TestMrpCommon):
         """
         finished, component, kit = self.env['product.product'].create([{
             'name': 'Product %s' % (i + 1),
-            'type': 'product',
+            'is_storable': True,
         } for i in range(3)])
         self.env['mrp.bom'].create({
             'product_id': kit.id,
@@ -3775,7 +3853,7 @@ class TestMrpOrder(TestMrpCommon):
              }])
         c1, c2, c3 = self.env['product.product'].create([{
             'name': i,
-            'type': 'product',
+            'is_storable': True,
         } for i in range(3)])
 
         self.env['mrp.bom'].create({
@@ -3827,8 +3905,8 @@ class TestMrpOrder(TestMrpCommon):
         the expected duration remains as manually set and does not revert to the original value.
         """
         production_form = Form(self.env['mrp.production'])
-        production_form.product_id = self.product_5
-        production_form.bom_id = self.bom_2
+        production_form.product_id = self.product_6
+        production_form.bom_id = self.bom_4
         production_form.product_qty = 1.0
         production = production_form.save()
         production.action_confirm()
@@ -4049,13 +4127,126 @@ class TestMrpOrder(TestMrpCommon):
         mo_form.save()
         self.assertEqual(mo.product_qty, 10)
 
+    @freeze_time('2017-01-01')
+    def test_expected_duration_alternative_wc(self):
+        """
+            Check that the fastest work center is used when planning the workorder.
+            - create two work centers with similar production capacity (1)
+                but the work_center_1 with a longer prepartion time for finished product.
+            1:/ produce 1 units > work_center_2 faster because
+                it does not need much time to start and to finish the production.
+            2/ - Create a second mo to produce one unit of P1
+                - work_center_1 faster because workcenter_2 is busy despite being faster
+                in preparation but it will finish later than workcenter 1.
+        """
+        workcenter_1 = self.env['mrp.workcenter'].create({
+            'name': 'wc1',
+            'default_capacity': 1,
+            'time_start': 2,
+            'time_stop': 2,
+            'time_efficiency': 100,
+        })
+        workcenter_2 = workcenter_1.copy({'name': 'wc2'})
+
+        workcenter_1.alternative_workcenter_ids = workcenter_2
+        workcenter_1.capacity_ids = [Command.create({'product_id': self.product_1.id, 'capacity': 1, 'time_start': 10})]
+        workcenter_2.capacity_ids = [Command.create({'product_id': self.product_1.id, 'capacity': 1, 'time_start': 5})]
+
+        self.product_1.uom_id = self.uom_unit.id
+        bom = self.env['mrp.bom'].create({
+            'product_id': self.product_1.id,
+            'product_tmpl_id': self.product_1.product_tmpl_id.id,
+            'product_uom_id': self.uom_unit.id,
+            'product_qty': 1.0,
+            'type': 'normal',
+            'operation_ids': [
+                (0, 0, {'name': 'Test', 'workcenter_id': workcenter_1.id, 'time_cycle': 60, 'sequence': 1}),
+            ],
+        })
+
+        # mo_1
+        mo_form = Form(self.env['mrp.production'])
+        mo_form.product_id = self.product_1
+        mo_form.bom_id = bom
+        mo_form.product_qty = 1
+        mo = mo_form.save()
+        mo.action_confirm()
+        mo.button_plan()
+        self.assertEqual(mo.workorder_ids[0].workcenter_id.id, workcenter_2.id)
+        self.assertEqual(mo.workorder_ids[0].duration_expected, 65)
+
+        # mo_2
+        mo_form = Form(self.env['mrp.production'])
+        mo_form.product_id = self.product_1
+        mo_form.bom_id = bom
+        mo_form.product_qty = 1
+        mo_2 = mo_form.save()
+        mo_2.action_confirm()
+        mo_2.button_plan()
+        self.assertEqual(mo_2.workorder_ids[0].workcenter_id.id, workcenter_1.id)
+        self.assertEqual(mo_2.workorder_ids[0].duration_expected, 70)
+
+    def test_update_workcenter_adapt_finish_date(self):
+        """
+        Test that changing the workcenter of a workorder will adapt the end date to make
+        sure the duration expected is respected
+        """
+        self.workcenter_4 = self.env['mrp.workcenter'].create({
+            'name': 'Test workcenter',
+        })
+
+        self.workcenter_5 = self.env['mrp.workcenter'].create({
+            'name': 'Test workcenter',
+        })
+
+        operation = self.env['mrp.routing.workcenter'].create({
+            'name': 'Test order',
+            'workcenter_id': self.workcenter_4.id,
+            'bom_id': self.bom_1.id,
+            'time_cycle_manual': 30,
+        })
+
+        mo = self.env['mrp.production'].create({
+            'product_id': self.product.id,
+            'product_uom_id': self.bom_1.product_uom_id.id,
+        })
+
+        dt = datetime(2024, 1, 17, 8)
+        wo = self.env['mrp.workorder'].create([
+            {
+                'name': 'Test order',
+                'workcenter_id': self.workcenter_4.id,
+                'product_uom_id': self.bom_1.product_uom_id.id,
+                'production_id': mo.id,
+                'duration_expected': 30.0,
+                'date_start': dt,
+                'operation_id': operation.id,
+            }
+        ])
+        self.assertEqual(wo.date_start, dt)
+        self.assertEqual(wo.date_finished, dt + timedelta(hours=0, minutes=30))
+
+        # We change the date finished and make sure the duration expected is adapted
+        wo.write({
+            'date_finished': dt + timedelta(hours=1),
+        })
+        self.assertEqual(wo.duration_expected, 60.0)
+
+        # We change the workcenter and make sure the duration expected and the date finish
+        # is adapted accordingly
+        wo.write({
+            'workcenter_id': self.workcenter_5.id,
+        })
+        self.assertEqual(wo.duration_expected, 30.0)
+        self.assertEqual(wo.date_start, dt)
+        self.assertEqual(wo.date_finished, dt + timedelta(hours=0, minutes=30))
 
 @tagged('-at_install', 'post_install')
 class TestTourMrpOrder(HttpCase):
     def test_mrp_order_product_catalog(self):
         product = self.env['product.product'].create({
             'name': 'test1',
-            'type': 'product',
+            'is_storable': True,
         })
         mo = self.env['mrp.production'].create({
             'product_id': product.id,

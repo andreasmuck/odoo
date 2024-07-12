@@ -9,6 +9,11 @@ import { OdooSpreadsheetModel } from "@spreadsheet/model";
 import { OdooDataProvider } from "@spreadsheet/data_sources/odoo_data_provider";
 
 const { formatValue, isDefined, toCartesian } = helpers;
+import {
+    isMarkdownViewUrl,
+    isMarkdownIrMenuIdUrl,
+    isIrMenuXmlUrl,
+} from "@spreadsheet/ir_ui_menu/odoo_menu_link_cell";
 
 /**
  * @typedef {import("@spreadsheet").OdooSpreadsheetModel} OdooSpreadsheetModel
@@ -41,7 +46,7 @@ export async function waitForOdooSources(model) {
     promises.push(
         ...model.getters
             .getPivotIds()
-            .filter((pivotId) => model.getters.getPivotDefinition(pivotId).type === "ODOO")
+            .filter((pivotId) => model.getters.getPivotCoreDefinition(pivotId).type === "ODOO")
             .map((pivotId) => model.getters.getPivot(pivotId))
             .map((pivot) => pivot.load())
     );
@@ -78,6 +83,16 @@ export async function waitForDataLoaded(model) {
     });
 }
 
+function containsLinkToOdoo(link) {
+    if (link && link.url) {
+        return (
+            isMarkdownViewUrl(link.url) ||
+            isIrMenuXmlUrl(link.url) ||
+            isMarkdownIrMenuIdUrl(link.url)
+        );
+    }
+}
+
 /**
  * @param {OdooSpreadsheetModel} model
  * @returns {Promise<object>}
@@ -87,19 +102,22 @@ export async function freezeOdooData(model) {
     const data = model.exportData();
     for (const sheet of Object.values(data.sheets)) {
         for (const [xc, cell] of Object.entries(sheet.cells)) {
+            const { col, row } = toCartesian(xc);
+            const sheetId = sheet.id;
+            const position = { sheetId, col, row };
+            const evaluatedCell = model.getters.getEvaluatedCell(position);
             if (containsOdooFunction(cell.content)) {
-                const { col, row } = toCartesian(xc);
-                const sheetId = sheet.id;
-                const position = { sheetId, col, row };
                 const pivotId = model.getters.getPivotIdFromPosition(position);
-                if (pivotId && model.getters.getPivotDefinition(pivotId).type !== "ODOO") {
+                if (pivotId && model.getters.getPivotCoreDefinition(pivotId).type !== "ODOO") {
                     continue;
                 }
-                const evaluatedCell = model.getters.getEvaluatedCell(position);
                 cell.content = evaluatedCell.value.toString();
                 if (evaluatedCell.format) {
                     cell.format = getItemId(evaluatedCell.format, data.formats);
                 }
+            }
+            if (containsLinkToOdoo(evaluatedCell.link)) {
+                cell.content = evaluatedCell.link.label;
             }
         }
         for (const figure of sheet.figures) {
@@ -131,6 +149,7 @@ function exportGlobalFiltersToSheet(model, data) {
             .flat()
             .filter(isDefined)
             .map(({ value, format }) => formatValue(value, { format, locale }))
+            .filter((formattedValue) =>  formattedValue !== "")
             .join(", ");
     }
 }

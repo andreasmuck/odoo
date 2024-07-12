@@ -14,19 +14,21 @@ registry.category("web_tour.tours").add('shop_zoom', {
     {
         content: "select " + imageName,
         trigger: `.oe_product_cart a:contains(/^${imageName}$/)`,
+        run: "click",
     },
     {
         content: "click on the image",
         trigger: imageSelector,
+        run: "click",
     },
     {
         content: "check that the image viewer opened",
         trigger: '.o_wsale_image_viewer',
-        run: () => {},
     },
     {
         content: "close the image viewer",
         trigger: '.o_wsale_image_viewer_header span.fa-times',
+        run: "click",
     },
     {
         content: "change variant",
@@ -35,15 +37,16 @@ registry.category("web_tour.tours").add('shop_zoom', {
     },
     {
         content: "wait for variant to be loaded",
-        trigger: '.oe_currency_value:contains("21.00")'
+        trigger: '.oe_currency_value:contains("21.00")',
+        run: "click",
     },
     {
         content: "click on the image",
         trigger: imageSelector,
+        run: "click",
     },
     {
         content: "check there is a zoom on that big image",
         trigger: '.o_wsale_image_viewer',
-        run: () => {},
     },
 ]});

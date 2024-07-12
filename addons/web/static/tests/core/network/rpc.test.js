@@ -1,4 +1,5 @@
 import { after, describe, expect, test } from "@odoo/hoot";
+import { on } from "@odoo/hoot-dom";
 import { mockFetch } from "@odoo/hoot-mock";
 
 import {
@@ -9,31 +10,25 @@ import {
     rpcBus,
 } from "@web/core/network/rpc";
 
-function addRpcListener(eventName, listener) {
-    rpcBus.addEventListener(eventName, listener);
-    after(() => rpcBus.removeEventListener(eventName, listener));
-}
-
-const onRpcRequest = (listener) => addRpcListener("RPC:REQUEST", listener);
-const onRpcResponse = (listener) => addRpcListener("RPC:RESPONSE", listener);
+const onRpcRequest = (listener) => after(on(rpcBus, "RPC:REQUEST", listener));
+const onRpcResponse = (listener) => after(on(rpcBus, "RPC:RESPONSE", listener));
 
 describe.current.tags("headless");
 
 test("can perform a simple rpc", async () => {
-    const restoreFetch = mockFetch((_, { body }) => {
+    mockFetch((_, { body }) => {
         const bodyObject = JSON.parse(body);
         expect(bodyObject.jsonrpc).toBe("2.0");
         expect(bodyObject.method).toBe("call");
         expect(bodyObject.id).toBeOfType("integer");
         return { result: { action_id: 123 } };
     });
-    after(restoreFetch);
 
     expect(await rpc("/test/")).toEqual({ action_id: 123 });
 });
 
 test("trigger an error when response has 'error' key", async () => {
-    const restoreFetch = mockFetch(() => ({
+    mockFetch(() => ({
         error: {
             message: "message",
             code: 12,
@@ -43,17 +38,15 @@ test("trigger an error when response has 'error' key", async () => {
             },
         },
     }));
-    after(restoreFetch);
 
     const error = new RPCError("message");
     await expect(rpc("/test/")).rejects.toThrow(error);
 });
 
 test("rpc with simple routes", async () => {
-    const restoreFetch = mockFetch((route, { body }) => ({
+    mockFetch((route, { body }) => ({
         result: { route, params: JSON.parse(body).params },
     }));
-    after(restoreFetch);
 
     expect(await rpc("/my/route")).toEqual({ route: "/my/route", params: {} });
     expect(await rpc("/my/route", { hey: "there", model: "test" })).toEqual({
@@ -63,8 +56,7 @@ test("rpc with simple routes", async () => {
 });
 
 test("check trigger RPC:REQUEST and RPC:RESPONSE for a simple rpc", async () => {
-    const restoreFetch = mockFetch(() => ({ result: {} }));
-    after(restoreFetch);
+    mockFetch(() => ({ result: {} }));
 
     const rpcIdsRequest = [];
     const rpcIdsResponse = [];
@@ -84,15 +76,15 @@ test("check trigger RPC:REQUEST and RPC:RESPONSE for a simple rpc", async () => 
 
     await rpc("/test/");
     expect(rpcIdsRequest.toString()).toBe(rpcIdsResponse.toString());
-    expect(["RPC:REQUEST", "RPC:RESPONSE(ok)"]).toVerifySteps();
+    expect.verifySteps(["RPC:REQUEST", "RPC:RESPONSE(ok)"]);
 
     await rpc("/test/", {}, { silent: true });
     expect(rpcIdsRequest.toString()).toBe(rpcIdsResponse.toString());
-    expect(["RPC:REQUEST(silent)", "RPC:RESPONSE(silent)(ok)"]).toVerifySteps();
+    expect.verifySteps(["RPC:REQUEST(silent)", "RPC:RESPONSE(silent)(ok)"]);
 });
 
 test("check trigger RPC:REQUEST and RPC:RESPONSE for a rpc with an error", async () => {
-    const restoreFetch = mockFetch(() => ({
+    mockFetch(() => ({
         error: {
             message: "message",
             code: 12,
@@ -102,7 +94,6 @@ test("check trigger RPC:REQUEST and RPC:RESPONSE for a rpc with an error", async
             },
         },
     }));
-    after(restoreFetch);
 
     const rpcIdsRequest = [];
     const rpcIdsResponse = [];
@@ -122,11 +113,11 @@ test("check trigger RPC:REQUEST and RPC:RESPONSE for a rpc with an error", async
 
     const error = new RPCError("message");
     await expect(rpc("/test/")).rejects.toThrow(error);
-    expect(["RPC:REQUEST", "RPC:RESPONSE(ko)"]).toVerifySteps();
+    expect.verifySteps(["RPC:REQUEST", "RPC:RESPONSE(ko)"]);
 });
 
 test("check connection aborted", async () => {
-    after(mockFetch(() => new Promise(() => {})));
+    mockFetch(() => new Promise(() => {}));
     onRpcRequest(() => expect.step("RPC:REQUEST"));
     onRpcResponse(() => expect.step("RPC:RESPONSE"));
 
@@ -134,12 +125,11 @@ test("check connection aborted", async () => {
     connection.abort();
     const error = new ConnectionAbortedError();
     await expect(connection).rejects.toThrow(error);
-    expect(["RPC:REQUEST", "RPC:RESPONSE"]).toVerifySteps();
+    expect.verifySteps(["RPC:REQUEST", "RPC:RESPONSE"]);
 });
 
 test("trigger a ConnectionLostError when response isn't json parsable", async () => {
-    const restoreFetch = mockFetch(() => new Response("<h...", { status: 500 }));
-    after(restoreFetch);
+    mockFetch(() => new Response("<h...", { status: 500 }));
 
     const error = new ConnectionLostError("/test/");
     await expect(rpc("/test/")).rejects.toThrow(error);

@@ -289,9 +289,13 @@ describe("conversions", () => {
 });
 
 describe("callables", () => {
-    test("should call function from context", () => {
-        expect(evaluateExpr("foo()", { foo: () => 3 })).toBe(3);
-        expect(evaluateExpr("1 + foo()", { foo: () => 3 })).toBe(4);
+    test("should not call function from context", () => {
+        expect(() => evaluateExpr("foo()", { foo: () => 3 })).toThrow();
+        expect(() => evaluateExpr("1 + foo()", { foo: () => 3 })).toThrow();
+    });
+    test("min/max", () => {
+        expect(evaluateExpr("max(3, 5)")).toBe(5);
+        expect(evaluateExpr("min(3, 5, 2, 7)")).toBe(2);
     });
 });
 
@@ -336,8 +340,8 @@ describe("objects", () => {
         expect(evaluateExpr("obj.a.b.c", { obj: { a: { b: { c: 321 } } } })).toBe(321);
     });
 
-    test("can call function in object", () => {
-        expect(evaluateExpr("obj.f(3)", { obj: { f: (n) => n + 1 } })).toBe(4);
+    test("cannot call function in object", () => {
+        expect(() => evaluateExpr("obj.f(3)", { obj: { f: (n) => n + 1 } })).toThrow();
     });
 });
 
@@ -426,7 +430,7 @@ describe("sets", () => {
         expect(() => evaluateExpr("set(expr)", { expr: null })).toThrow();
 
         expect(() => evaluateExpr("set([], [])")).toThrow(); // valid but not supported by py_js
-        expect(() => evaluateExpr("set({ 'a' })").toThrow()); // valid but not supported by py_js
+        expect(() => evaluateExpr("set({ 'a' })")).toThrow(); // valid but not supported by py_js
     });
 
     test("set intersection", () => {

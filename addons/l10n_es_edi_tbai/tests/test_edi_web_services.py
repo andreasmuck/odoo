@@ -9,12 +9,12 @@ from odoo.tests import tagged
 from .common import TestEsEdiTbaiCommon
 
 
-@tagged('external_l10n', '-standard', 'external')
+@tagged('external_l10n', 'post_install', '-at_install', '-standard', 'external')
 class TestEdiTbaiWebServices(TestEsEdiTbaiCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref='es_full', edi_format_ref='l10n_es_edi_tbai.edi_es_tbai'):
-        super().setUpClass(chart_template_ref=chart_template_ref, edi_format_ref=edi_format_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
         # Invoice name are tracked by the web-services so this constant tries to get a new unique invoice name at each
         # execution.

@@ -1,4 +1,3 @@
-/** @odoo-module */
 import { formatCurrency as webFormatCurrency } from "@web/core/currency";
 import {
     formatFloat,
@@ -69,5 +68,4 @@ export const contextualUtilsService = {
         };
     },
 };
-
 registry.category("services").add("contextual_utils_service", contextualUtilsService);

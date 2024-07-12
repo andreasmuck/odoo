@@ -11,11 +11,11 @@ import {
     getService,
     models,
     mountWithCleanup,
+    mountWithSearch,
     onRpc,
     toggleMenuItem,
     toggleSearchBarMenu,
 } from "@web/../tests/web_test_helpers";
-import { mountWithSearch } from "./helpers";
 
 import { SearchBarMenu } from "@web/search/search_bar_menu/search_bar_menu";
 import { SearchPanel } from "@web/search/search_panel/search_panel";
@@ -131,7 +131,7 @@ class Partner extends models.Model {
         kanban: /* xml */ `
             <kanban>
                 <templates>
-                    <div t-name="kanban-box" class="oe_kanban_global_click">
+                    <div t-name="kanban-box">
                         <field name="foo"/>
                     </div>
                 </templates>
@@ -209,10 +209,8 @@ defineActions([
 describe.current.tags("desktop");
 
 test("basic rendering of a component without search panel", async () => {
-    onRpc("*", (route) => {
-        if (/search_panel_/.test(route)) {
-            throw new Error("No search panel section should be loaded");
-        }
+    onRpc(/search_panel_/, () => {
+        throw new Error("No search panel section should be loaded");
     });
     const component = await mountWithSearch(TestComponent, {
         resModel: "partner",
@@ -228,10 +226,8 @@ test("basic rendering of a component with empty search panel", async () => {
         search: `<search><searchpanel/></search>`,
     };
 
-    onRpc("*", (route, { model }) => {
-        if (/search_panel_/.test(route)) {
-            expect.step(`${route} on ${model}`);
-        }
+    onRpc(/search_panel_/, () => {
+        throw new Error("should not step here");
     });
     const component = await mountWithSearch(TestComponent, {
         resModel: "partner",
@@ -239,15 +235,11 @@ test("basic rendering of a component with empty search panel", async () => {
     });
     expect(`.o_search_panel`).toHaveCount(0);
     expect(component.domain).toEqual([]); // initial domain
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 });
 
 test("basic rendering of a component with search panel", async () => {
-    onRpc("*", (route, { method, model }) => {
-        if (/search_panel_/.test(route)) {
-            expect.step(`${method} on ${model}`);
-        }
-    });
+    onRpc("partner", /search_panel_/, ({ method }) => expect.step(method));
     const component = await mountWithSearch(TestComponent, {
         resModel: "partner",
         searchViewId: false,
@@ -275,10 +267,7 @@ test("basic rendering of a component with search panel", async () => {
         "silver\n3",
     ]);
 
-    expect([
-        "search_panel_select_range on partner",
-        "search_panel_select_multi_range on partner",
-    ]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range", "search_panel_select_multi_range"]);
     expect(component.domain).toEqual([]); // initial domain (does not need the sections to be loaded)
 });
 
@@ -319,17 +308,13 @@ test(`sections with attr invisible="1" are ignored`, async () => {
         `,
     };
 
-    onRpc("*", (route, { method }) => {
-        if (/search_panel_/.test(route)) {
-            expect.step(`${method}`);
-        }
-    });
+    onRpc(/search_panel_/, ({ method }) => expect.step(method));
     await mountWithSearch(TestComponent, {
         resModel: "partner",
         searchViewId: false,
     });
     expect(`.o_search_panel_section`).toHaveCount(1);
-    expect(["search_panel_select_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range"]);
 });
 
 test("categories and filters order is kept", async () => {
@@ -823,9 +808,9 @@ test("concurrency: single category", async () => {
     };
 
     let promise = new Deferred();
-    onRpc("*", async (route, { method }) => {
+    onRpc(async ({ method }) => {
         await promise;
-        expect.step(method || route);
+        expect.step(method);
     });
     const compPromise = mountWithSearch(TestComponent, {
         resModel: "partner",
@@ -837,31 +822,31 @@ test("concurrency: single category", async () => {
 
     // Case 1: search panel is awaited to build the query with search defaults
     await animationFrame();
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     promise.resolve();
     await compPromise;
-    expect(["get_views", "search_panel_select_range"]).toVerifySteps();
+    expect.verifySteps(["get_views", "search_panel_select_range"]);
 
     // Case 2: search domain changed so we wait for the search panel once again
     promise = new Deferred();
     await toggleSearchBarMenu();
     await toggleMenuItem("Filter");
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     promise.resolve();
     await animationFrame();
-    expect(["search_panel_select_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range"]);
 
     // Case 3: search domain is the same and default values do not matter anymore
     promise = new Deferred();
     await contains(`.o_search_panel_category_value header:eq(1)`).click();
 
     // The search read is executed right away in this case
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
     promise.resolve();
     await animationFrame();
-    expect(["search_panel_select_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range"]);
 });
 
 test("concurrency: category and filter", async () => {
@@ -877,9 +862,9 @@ test("concurrency: category and filter", async () => {
     };
 
     const promise = new Deferred();
-    onRpc("*", async (route, { method }) => {
+    onRpc(async ({ method }) => {
         await promise;
-        expect.step(method || route);
+        expect.step(method);
     });
     const compPromise = mountWithSearch(TestComponent, {
         resModel: "partner",
@@ -890,15 +875,15 @@ test("concurrency: category and filter", async () => {
     });
 
     await animationFrame();
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     promise.resolve();
     await compPromise;
-    expect([
+    expect.verifySteps([
         "get_views",
         "search_panel_select_range",
         "search_panel_select_multi_range",
-    ]).toVerifySteps();
+    ]);
 });
 
 test("concurrency: category and filter with a domain", async () => {
@@ -914,9 +899,9 @@ test("concurrency: category and filter with a domain", async () => {
     };
 
     const promise = new Deferred();
-    onRpc("*", async (route, { method }) => {
+    onRpc(async ({ method }) => {
         await promise;
-        expect.step(method || route);
+        expect.step(method);
     });
     const compPromise = mountWithSearch(TestComponent, {
         resModel: "partner",
@@ -924,15 +909,15 @@ test("concurrency: category and filter with a domain", async () => {
     });
 
     await animationFrame();
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     promise.resolve();
     await compPromise;
-    expect([
+    expect.verifySteps([
         "get_views",
         "search_panel_select_range",
         "search_panel_select_multi_range",
-    ]).toVerifySteps();
+    ]);
 });
 
 test("concurrency: misordered get_filters", async () => {
@@ -1131,26 +1116,22 @@ test("only reload categories and filters when domains change (counters disabled,
             `,
     };
 
-    onRpc("*", (route, { method }) => {
-        if (/search_panel_/.test(route)) {
-            expect.step(method);
-        }
-    });
+    onRpc(/search_panel_/, ({ method }) => expect.step(method));
     await mountWithSearch(TestComponent, {
         resModel: "partner",
         searchViewId: false,
     });
 
-    expect(["search_panel_select_range", "search_panel_select_multi_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range", "search_panel_select_multi_range"]);
 
     // reload with another domain, so the filters should be reloaded
     await toggleSearchBarMenu();
     await toggleMenuItem("Filter");
-    expect(["search_panel_select_multi_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_multi_range"]);
 
     // change category value, so the filters should be reloaded
     await contains(`.o_search_panel_category_value header:eq(1)`).click();
-    expect(["search_panel_select_multi_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_multi_range"]);
 });
 
 test("only reload categories and filters when domains change (counters disabled, many2one)", async () => {
@@ -1166,25 +1147,21 @@ test("only reload categories and filters when domains change (counters disabled,
             `,
     };
 
-    onRpc("*", (route, { method }) => {
-        if (/search_panel_/.test(route)) {
-            expect.step(method);
-        }
-    });
+    onRpc(/search_panel_/, ({ method }) => expect.step(method));
     await mountWithSearch(TestComponent, {
         resModel: "partner",
         searchViewId: false,
     });
-    expect(["search_panel_select_range", "search_panel_select_multi_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range", "search_panel_select_multi_range"]);
 
     // reload with another domain, so the filters should be reloaded
     await toggleSearchBarMenu();
     await toggleMenuItem("domain");
-    expect(["search_panel_select_multi_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_multi_range"]);
 
     // change category value, so the filters should be reloaded
     await contains(`.o_search_panel_category_value header:eq(1)`).click();
-    expect(["search_panel_select_multi_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_multi_range"]);
 });
 
 test("category counters", async () => {
@@ -1200,10 +1177,8 @@ test("category counters", async () => {
         `,
     };
 
-    onRpc("*", (route, { args, method }) => {
-        if (/search_panel_/.test(route)) {
-            expect.step(method);
-        }
+    onRpc(/search_panel_/, ({ args, method }) => {
+        expect.step(method);
         if (method === "search_panel_select_range") {
             expect.step(args[0]);
         }
@@ -1212,12 +1187,12 @@ test("category counters", async () => {
         resModel: "partner",
         searchViewId: false,
     });
-    expect([
+    expect.verifySteps([
         "search_panel_select_range",
         "state",
         "search_panel_select_range",
         "company_id",
-    ]).toVerifySteps();
+    ]);
     expect(getCategoriesContent()).toEqual([
         "All",
         "ABC: 1",
@@ -1231,7 +1206,7 @@ test("category counters", async () => {
     // reload with another domain, so the categories 'state' and 'company_id' should be reloaded
     await toggleSearchBarMenu();
     await toggleMenuItem("Filter");
-    expect(["search_panel_select_range", "state"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range", "state"]);
     expect(getCategoriesContent()).toEqual([
         "All",
         "ABC: 1",
@@ -1244,7 +1219,7 @@ test("category counters", async () => {
 
     // change category value, so the category 'state' should be reloaded
     await contains(`.o_search_panel_category_value header:eq(1)`).click();
-    expect(["search_panel_select_range", "state"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range", "state"]);
     expect(getCategoriesContent()).toEqual([
         "All",
         "ABC: 1",
@@ -1268,10 +1243,8 @@ test("category selection without counters", async () => {
         `,
     };
 
-    onRpc("*", (route, { args, method }) => {
-        if (/search_panel_/.test(route)) {
-            expect.step(method);
-        }
+    onRpc(/search_panel_/, ({ args, method }) => {
+        expect.step(method);
         if (method === "search_panel_select_range") {
             expect.step(args[0]);
         }
@@ -1280,18 +1253,18 @@ test("category selection without counters", async () => {
         resModel: "partner",
         searchViewId: false,
     });
-    expect(["search_panel_select_range", "state"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range", "state"]);
     expect(getCategoriesContent()).toEqual(["All", "ABC", "DEF", "GHI"]);
 
     // reload with another domain, so the category 'state' should be reloaded
     await toggleSearchBarMenu();
     await toggleMenuItem("Filter");
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
     expect(getCategoriesContent()).toEqual(["All", "ABC", "DEF", "GHI"]);
 
     // change category value, so the category 'state' should be reloaded
     await contains(`.o_search_panel_category_value header:eq(1)`).click();
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
     expect(getCategoriesContent()).toEqual(["All", "ABC", "DEF", "GHI"]);
 });
 
@@ -1389,7 +1362,7 @@ test("filter with domain", async () => {
         `,
     };
 
-    onRpc("search_panel_select_multi_range", (_, { kwargs }) => {
+    onRpc("search_panel_select_multi_range", ({ kwargs }) => {
         expect.step("search_panel_select_multi_range");
         expect({ ...kwargs, context: {} }).toEqual({
             group_by: false,
@@ -1410,7 +1383,7 @@ test("filter with domain", async () => {
     });
     expect(`.o_search_panel_filter_value`).toHaveCount(2);
     expect(getFiltersContent()).toEqual(["asustek: 2", "agrolait: 2"]);
-    expect(["search_panel_select_multi_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_multi_range"]);
 });
 
 test("filter with domain depending on category", async () => {
@@ -1425,7 +1398,7 @@ test("filter with domain depending on category", async () => {
         `,
     };
 
-    onRpc("search_panel_select_multi_range", (_, { kwargs }) => {
+    onRpc("search_panel_select_multi_range", ({ kwargs }) => {
         // the following keys should have same value for all calls to this route
         const { group_by, search_domain, filter_domain } = kwargs;
         expect({ group_by, search_domain, filter_domain }).toEqual({
@@ -1433,8 +1406,8 @@ test("filter with domain depending on category", async () => {
             filter_domain: [],
             search_domain: [],
         });
-        expect.step(JSON.stringify(kwargs.category_domain));
-        expect.step(JSON.stringify(kwargs.comodel_domain));
+        expect.step(kwargs.category_domain);
+        expect.step(kwargs.comodel_domain);
     });
     await mountWithSearch(TestComponent, {
         resModel: "partner",
@@ -1458,16 +1431,16 @@ test("filter with domain depending on category", async () => {
     await contains(`.o_search_panel_category_value:eq(0) header`).click();
     expect(`.o_search_panel_category_value:first .active`).toHaveCount(1);
     expect(`.o_search_panel_filter_value`).toHaveCount(0);
-    expect([
-        "[]", // category_domain (All)
-        '[["category_id","=",false]]', // comodel_domain (All)
-        '[["category_id","=",6]]', // category_domain ('gold')
-        '[["category_id","=",6]]', // comodel_domain ('gold')
-        '[["category_id","=",7]]', // category_domain ('silver')
-        '[["category_id","=",7]]', // comodel_domain ('silver')
-        "[]", // category_domain (All)
-        '[["category_id","=",false]]', // comodel_domain (All)
-    ]).toVerifySteps();
+    expect.verifySteps([
+        [], // category_domain (All)
+        [["category_id", "=", false]], // comodel_domain (All)
+        [["category_id", "=", 6]], // category_domain ('gold')
+        [["category_id", "=", 6]], // comodel_domain ('gold')
+        [["category_id", "=", 7]], // category_domain ('silver')
+        [["category_id", "=", 7]], // comodel_domain ('silver')
+        [], // category_domain (All)
+        [["category_id", "=", false]], // comodel_domain (All)
+    ]);
 });
 
 test("specify active filter values in context", async () => {
@@ -1628,7 +1601,7 @@ test("search panel is available on list and kanban by default", async () => {
         `,
     };
 
-    onRpc("/web/dataset/call_kw/res.users/has_group", () => true);
+    onRpc("has_group", () => true);
     await mountWithCleanup(WebClient);
     await getService("action").doAction(1);
     expect(`.o_kanban_view .o_content.o_component_with_search_panel`).toHaveCount(1);
@@ -1664,7 +1637,7 @@ test("search panel with view_types attribute", async () => {
         `,
     };
 
-    onRpc("/web/dataset/call_kw/res.users/has_group", () => true);
+    onRpc("has_group", () => true);
     await mountWithCleanup(WebClient);
     await getService("action").doAction(1);
     expect(`.o_kanban_view .o_content.o_component_with_search_panel`).toHaveCount(1);
@@ -1680,10 +1653,10 @@ test("search panel with view_types attribute", async () => {
 });
 
 test("search panel state is shared between views", async () => {
-    onRpc("web_search_read", (_, { kwargs }) => {
-        expect.step(JSON.stringify(kwargs.domain));
+    onRpc("web_search_read", ({ kwargs }) => {
+        expect.step(kwargs.domain);
     });
-    onRpc("/web/dataset/call_kw/res.users/has_group", () => true);
+    onRpc("has_group", () => true);
     await mountWithCleanup(WebClient);
     await getService("action").doAction(1);
     expect(`.o_search_panel_category_value header:eq(0)`).toHaveClass("active");
@@ -1706,20 +1679,20 @@ test("search panel state is shared between views", async () => {
     await getService("action").switchView("kanban");
     expect(`.o_search_panel_category_value header:eq(2)`).toHaveClass("active");
     expect(`.o_kanban_record:not(.o_kanban_ghost)`).toHaveCount(2);
-    expect([
-        "[]", // initial search_read
-        '[["company_id","child_of",3]]', // kanban, after selecting the first company
-        '[["company_id","child_of",3]]', // list
-        '[["company_id","child_of",5]]', // list, after selecting the other company
-        '[["company_id","child_of",5]]', // kanban
-    ]).toVerifySteps();
+    expect.verifySteps([
+        [], // initial search_read
+        [["company_id", "child_of", 3]], // kanban, after selecting the first company
+        [["company_id", "child_of", 3]], // list
+        [["company_id", "child_of", 5]], // list, after selecting the other company
+        [["company_id", "child_of", 5]], // kanban
+    ]);
 });
 
 test("search panel filters are kept between switch views", async () => {
-    onRpc("web_search_read", (_, { kwargs }) => {
-        expect.step(JSON.stringify(kwargs.domain));
+    onRpc("web_search_read", ({ kwargs }) => {
+        expect.step(kwargs.domain);
     });
-    onRpc("/web/dataset/call_kw/res.users/has_group", () => true);
+    onRpc("has_group", () => true);
     await mountWithCleanup(WebClient);
     await getService("action").doAction(1);
     expect(`.o_search_panel_filter_value input:checked`).toHaveCount(0);
@@ -1745,18 +1718,18 @@ test("search panel filters are kept between switch views", async () => {
 
     await contains(`.o_kanban_record`).click();
     await contains(`.breadcrumb-item`).click();
-    expect([
-        "[]", // initial search_read
-        '[["category_id","in",[6]]]', // kanban, after selecting the gold filter
-        '[["category_id","in",[6]]]', // list
-        '[["category_id","in",[6,7]]]', // list, after selecting the silver filter
-        '[["category_id","in",[6,7]]]', // kanban
-        '[["category_id","in",[6,7]]]', // kanban, after switching back from form view
-    ]).toVerifySteps();
+    expect.verifySteps([
+        [], // initial search_read
+        [["category_id", "in", [6]]], // kanban, after selecting the gold filter
+        [["category_id", "in", [6]]], // list
+        [["category_id", "in", [6, 7]]], // list, after selecting the silver filter
+        [["category_id", "in", [6, 7]]], // kanban
+        [["category_id", "in", [6, 7]]], // kanban, after switching back from form view
+    ]);
 });
 
 test("search panel filters are kept when switching to a view with no search panel", async () => {
-    onRpc("/web/dataset/call_kw/res.users/has_group", () => true);
+    onRpc("has_group", () => true);
     await mountWithCleanup(WebClient);
     await getService("action").doAction(1);
     expect(`.o_kanban_view .o_content.o_component_with_search_panel`).toHaveCount(1);
@@ -1793,20 +1766,16 @@ test('after onExecuteAction, selects "All" as default category value', async () 
 });
 
 test("categories and filters are not reloaded when switching between views", async () => {
-    onRpc("*", (route, { method }) => {
-        if (/search_panel_/.test(route)) {
-            expect.step(method);
-        }
-    });
-    onRpc("/web/dataset/call_kw/res.users/has_group", () => true);
+    onRpc(/search_panel_/, ({ method }) => expect.step(method));
+    onRpc("has_group", () => true);
     await mountWithCleanup(WebClient);
     await getService("action").doAction(1);
     await getService("action").switchView("list");
     await getService("action").switchView("kanban");
-    expect([
+    expect.verifySteps([
         "search_panel_select_range", // kanban: categories
         "search_panel_select_multi_range", // kanban: filters
-    ]).toVerifySteps();
+    ]);
 });
 
 test("categories and filters are loaded when switching from a view without the search panel", async () => {
@@ -1830,21 +1799,17 @@ test("categories and filters are loaded when switching from a view without the s
         "replace"
     );
 
-    onRpc("*", (route, { method }) => {
-        if (/search_panel_/.test(route)) {
-            expect.step(method);
-        }
-    });
-    onRpc("/web/dataset/call_kw/res.users/has_group", () => true);
+    onRpc(/search_panel_/, ({ method }) => expect.step(method));
+    onRpc("has_group", () => true);
     await mountWithCleanup(WebClient);
     await getService("action").doAction(1);
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     await getService("action").switchView("list");
-    expect(["search_panel_select_range", "search_panel_select_multi_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range", "search_panel_select_multi_range"]);
 
     await getService("action").switchView("kanban");
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 });
 
 test("scroll kanban view with searchpanel and kept scroll position", async () => {
@@ -1893,7 +1858,7 @@ test("scroll position is kept when switching between controllers", async () => {
             <div class="o_web_client" style="max-height: 300px"><WebClient/></div>
         `;
     }
-    onRpc("/web/dataset/call_kw/res.users/has_group", () => true);
+    onRpc("has_group", () => true);
     await mountWithCleanup(WebClientContainer);
     await getService("action").doAction(1);
     expect(`.o_kanban_view .o_content`).toHaveCount(1);
@@ -1930,7 +1895,7 @@ test("search panel is not instantiated in dialogs", async () => {
         `,
     };
 
-    onRpc("/web/dataset/call_kw/res.users/has_group", () => true);
+    onRpc("has_group", () => true);
     await mountWithCleanup(WebClient);
     await getService("action").doAction(1, { viewType: "form" });
     await contains(`.o_field_widget[name="company_id"] .dropdown input`).click();
@@ -1951,23 +1916,19 @@ test("Reload categories with counters when filter values are selected", async ()
         `,
     };
 
-    onRpc("*", (route, { method }) => {
-        if (/search_panel_/.test(route)) {
-            expect.step(method);
-        }
-    });
+    onRpc(/search_panel_/, ({ method }) => expect.step(method));
     await mountWithSearch(TestComponent, {
         resModel: "partner",
         searchViewId: false,
     });
-    expect(["search_panel_select_range", "search_panel_select_multi_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range", "search_panel_select_multi_range"]);
     expect(getCategoriesCounter()).toEqual([1, 3]);
     expect(getFiltersCounter()).toEqual([1, 1, 2]);
 
     await contains(queryAll`.o_search_panel_filter_value:eq(0) input`).click();
     expect(getCategoriesCounter()).toEqual([1]);
     expect(getFiltersCounter()).toEqual([1, 1, 2]);
-    expect(["search_panel_select_range", "search_panel_select_multi_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range", "search_panel_select_multi_range"]);
 });
 
 test("many2one: select one, expand, hierarchize, counters", async () => {
@@ -2782,25 +2743,21 @@ test("a selected value becomming invalid should no more impact the view", async 
         `,
     };
 
-    onRpc("*", (route, { method }) => {
-        if (/search_panel_/.test(route)) {
-            expect.step(method);
-        }
-    });
+    onRpc(/search_panel_/, ({ method }) => expect.step(method));
     await mountWithSearch(TestComponent, {
         resModel: "partner",
         searchViewId: false,
     });
-    expect(["search_panel_select_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range"]);
 
     // select 'ABC' in search panel
     await contains(`.o_search_panel_category_value header:eq(1)`).click();
-    expect(["search_panel_select_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range"]);
 
     // select DEF in filter menu
     await toggleSearchBarMenu();
     await toggleMenuItem("DEF");
-    expect(["search_panel_select_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range"]);
     expect(`.o_search_panel_category_value header:eq(0)`).toHaveText("All");
     expect(`.o_search_panel_category_value header:eq(0)`).toHaveClass("active");
 });
@@ -2817,27 +2774,23 @@ test("Categories with default attributes should be udpated when external domain 
             `,
     };
 
-    onRpc("*", (route, { method }) => {
-        if (/search_panel_/.test(route)) {
-            expect.step(method);
-        }
-    });
+    onRpc(/search_panel_/, ({ method }) => expect.step(method));
     await mountWithSearch(TestComponent, {
         resModel: "partner",
         searchViewId: false,
     });
-    expect(["search_panel_select_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range"]);
     expect(getCategoriesContent()).toEqual(["All", "ABC", "DEF", "GHI"]);
 
     // select 'ABC' in search panel --> no need to update the category value
     await contains(`.o_search_panel_category_value header:eq(1)`).click();
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
     expect(getCategoriesContent()).toEqual(["All", "ABC", "DEF", "GHI"]);
 
     // select DEF in filter menu --> the external domain changes --> the values should be updated
     await toggleSearchBarMenu();
     await toggleMenuItem("DEF");
-    expect(["search_panel_select_range"]).toVerifySteps();
+    expect.verifySteps(["search_panel_select_range"]);
     expect(getCategoriesContent()).toEqual(["All", "DEF"]);
 });
 
@@ -2872,8 +2825,8 @@ test("Category with counters and filter with domain and context", async () => {
         `,
     };
 
-    onRpc("search_panel_select_range", (_, { kwargs }) => expect.step(kwargs.context.special_key));
-    onRpc("search_panel_select_multi_range", (_, { kwargs }) =>
+    onRpc("search_panel_select_range", ({ kwargs }) => expect.step(kwargs.context.special_key));
+    onRpc("search_panel_select_multi_range", ({ kwargs }) =>
         expect.step(kwargs.context.special_key)
     );
     await mountWithSearch(TestComponent, {
@@ -2883,7 +2836,7 @@ test("Category with counters and filter with domain and context", async () => {
             special_key: "special_key",
         },
     });
-    expect(["special_key", "special_key"]).toVerifySteps();
+    expect.verifySteps(["special_key", "special_key"]);
 });
 
 test("Display message when no filter availible", async () => {
@@ -2931,6 +2884,25 @@ test("search panel can be collapsed/expanded", async () => {
     expect(`.o_search_panel_sidebar`).toHaveText("asusteksilver");
 });
 
+test("search panel can be collapsed by default", async () => {
+    Partner._views = {
+        search: /* xml */ `
+            <search>
+                <searchpanel fold="true">
+                    <field name="company_id" enable_counters="1"/>
+                </searchpanel>
+            </search>
+        `,
+    };
+    await mountWithSearch(TestComponent, {
+        resModel: "partner",
+        searchViewId: false,
+    });
+    expect(`.o_search_panel`).toHaveCount(0);
+    expect(`.o_search_panel_sidebar`).toHaveCount(1);
+    expect(`.o_search_panel_sidebar`).toHaveText("All");
+});
+
 test("search panel collapse with multiple filter categories selected", async () => {
     Partner._views = {
         search: /* xml */ `
@@ -2960,6 +2932,24 @@ test("search panel collapse with multiple filter categories selected", async () 
     expect(`.o_search_panel_sidebar`).toHaveText("asusteksilverABC");
 });
 
+test("expand/collapse state is kept when switching between controllers", async () => {
+    onRpc("has_group", () => true);
+    await mountWithCleanup(WebClient);
+    await getService("action").doAction(1);
+    await contains(`.o_search_panel button`).click();
+    expect(`.o_search_panel`).toHaveCount(0);
+    expect(`.o_search_panel_sidebar`).toHaveCount(1);
+    await getService("action").switchView("list");
+    expect(`.o_search_panel`).toHaveCount(0);
+    expect(`.o_search_panel_sidebar`).toHaveCount(1);
+    await contains(`.o_search_panel_sidebar button`).click();
+    expect(`.o_search_panel`).toHaveCount(1);
+    expect(`.o_search_panel_sidebar`).toHaveCount(0);
+    await getService("action").switchView("kanban");
+    expect(`.o_search_panel`).toHaveCount(1);
+    expect(`.o_search_panel_sidebar`).toHaveCount(0);
+});
+
 test("search panel should be resizable", async () => {
     await mountWithSearch(TestComponent, {
         resModel: "partner",
@@ -2972,5 +2962,23 @@ test("search panel should be resizable", async () => {
 
     const { drop } = drag(resizeHandle);
     drop(resizeHandle, { position: { x: 500 } });
-    expect(searchPanel.offsetWidth - originalWidth).toBeGreaterThan(0);
+    expect(searchPanel.offsetWidth).toBeGreaterThan(originalWidth);
+});
+
+test("search panel width is kept when switching between controllers", async () => {
+    onRpc("has_group", () => true);
+    await mountWithCleanup(WebClient);
+    await getService("action").doAction(1);
+    const searchPanel = queryFirst(".o_search_panel");
+    const resizeHandle = queryFirst(".o_search_panel_resize");
+    const originalWidth = searchPanel.offsetWidth;
+
+    const { drop } = drag(resizeHandle);
+    drop(resizeHandle, { position: { x: 500 } });
+    const newWidth = searchPanel.offsetWidth;
+    expect(newWidth).toBeGreaterThan(originalWidth);
+    await getService("action").switchView("list");
+    expect(queryFirst(".o_search_panel").offsetWidth).toBe(newWidth);
+    await getService("action").switchView("kanban");
+    expect(queryFirst(".o_search_panel").offsetWidth).toBe(newWidth);
 });

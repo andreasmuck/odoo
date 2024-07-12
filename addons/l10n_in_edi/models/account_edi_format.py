@@ -31,25 +31,28 @@ class AccountEdiFormat(models.Model):
             return False
         return super()._is_enabled_by_default_on_journal(journal)
 
-    def _get_l10n_in_base_tags(self):
+    def _get_l10n_in_gst_tags(self):
         return (
-           self.env.ref('l10n_in.tax_tag_base_sgst').ids
-           + self.env.ref('l10n_in.tax_tag_base_cgst').ids
-           + self.env.ref('l10n_in.tax_tag_base_igst').ids
-           + self.env.ref('l10n_in.tax_tag_base_cess').ids
-           + self.env.ref('l10n_in.tax_tag_zero_rated').ids
-           + self.env.ref("l10n_in.tax_tag_exempt").ids
-           + self.env.ref("l10n_in.tax_tag_nil_rated").ids
-           + self.env.ref("l10n_in.tax_tag_non_gst_supplies").ids
-        )
+           self.env.ref('l10n_in.tax_tag_base_sgst')
+           + self.env.ref('l10n_in.tax_tag_base_cgst')
+           + self.env.ref('l10n_in.tax_tag_base_igst')
+           + self.env.ref('l10n_in.tax_tag_base_cess')
+           + self.env.ref('l10n_in.tax_tag_zero_rated')
+        ).ids
+
+    def _get_l10n_in_non_taxable_tags(self):
+        return (
+           self.env.ref("l10n_in.tax_tag_exempt")
+           + self.env.ref("l10n_in.tax_tag_nil_rated")
+           + self.env.ref("l10n_in.tax_tag_non_gst_supplies")
+        ).ids
 
     def _get_move_applicability(self, move):
         # EXTENDS account_edi
         self.ensure_one()
         if self.code != 'in_einvoice_1_03':
             return super()._get_move_applicability(move)
-        all_base_tags = self._get_l10n_in_base_tags()
-        is_under_gst = any(move_line_tag.id in all_base_tags for move_line_tag in move.line_ids.tax_tag_ids)
+        is_under_gst = any(move_line_tag.id in self._get_l10n_in_gst_tags() for move_line_tag in move.line_ids.tax_tag_ids)
         if move.is_sale_document(include_receipts=True) and move.country_code == 'IN' and is_under_gst and move.l10n_in_gst_treatment in (
             "regular",
             "composition",
@@ -88,23 +91,23 @@ class AccountEdiFormat(models.Model):
         error_message += self._l10n_in_validate_partner(move.company_id.partner_id, is_company=True)
         if not re.match("^.{1,16}$", move.name):
             error_message.append(_("Invoice number should not be more than 16 characters"))
-        all_base_tags = self._get_l10n_in_base_tags()
+        all_base_tags = self._get_l10n_in_gst_tags() + self._get_l10n_in_non_taxable_tags()
         for line in move.invoice_line_ids.filtered(lambda line: line.display_type not in ('line_note', 'line_section', 'rounding') and not self._l10n_in_is_global_discount(line)):
-            if line.display_type == 'product' and line.discount < 0:
-                error_message.append(_("Negative discount is not allowed, set in line %s", line.name))
+            if line.display_type == 'product':
+                if line.discount < 0:
+                    error_message.append(_("Negative discount is not allowed, set in line %s", line.name))
+                hsn_code = self._l10n_in_edi_extract_digits(line.l10n_in_hsn_code)
+                if not hsn_code:
+                    error_message.append(_("HSN code is not set in product line %s", line.name))
+                elif not re.match(r'^\d{4}$|^\d{6}$|^\d{8}$', hsn_code):
+                    error_message.append(_(
+                        "Invalid HSN Code (%(hsn_code)s) in product line %(product_line)s") % {
+                        'hsn_code': hsn_code,
+                        'product_line': line.product_id.name or line.name
+                    })
             if not line.tax_tag_ids or not any(move_line_tag.id in all_base_tags for move_line_tag in line.tax_tag_ids):
                 error_message.append(_(
                     """Set an appropriate GST tax on line "%s" (if it's zero rated or nil rated then select it also)""", line.product_id.name))
-            if line.product_id:
-                hsn_code = self._l10n_in_edi_extract_digits(line.l10n_in_hsn_code)
-                if not hsn_code:
-                    error_message.append(_("HSN code is not set in product %s", line.product_id.name))
-                elif not re.match("^[0-9]+$", hsn_code):
-                    error_message.append(_(
-                        "Invalid HSN Code (%s) in product %s", hsn_code, line.product_id.name
-                    ))
-            else:
-                error_message.append(_("product is required to get HSN code"))
         return error_message
 
     def _l10n_in_edi_get_iap_buy_credits_message(self, company):
@@ -156,7 +159,7 @@ class AccountEdiFormat(models.Model):
                     "blocking_level": "error",
                 }}
             elif error:
-                error_message = "<br/>".join(["[%s] %s" % (e.get("code"), html_escape(e.get("message"))) for e in error])
+                error_message = "<br/>".join([html_escape("[%s] %s" % (e.get("code"), e.get("message"))) for e in error])
                 return {invoice: {
                     "success": False,
                     "error": error_message,
@@ -212,7 +215,7 @@ class AccountEdiFormat(models.Model):
                     "blocking_level": "error",
                 }}
             if error:
-                error_message = "<br/>".join(["[%s] %s" % (e.get("code"), html_escape(e.get("message"))) for e in error])
+                error_message = "<br/>".join([html_escape("[%s] %s" % (e.get("code"), e.get("message"))) for e in error])
                 return {invoice: {
                     "success": False,
                     "error": error_message,
@@ -349,9 +352,10 @@ class AccountEdiFormat(models.Model):
             # government does not accept negative in qty or unit price
             unit_price_in_inr = unit_price_in_inr * -1
             quantity = quantity * -1
+        PrdDesc = line.product_id.display_name or line.name
         return {
             "SlNo": str(index),
-            "PrdDesc": line.name.replace("\n", ""),
+            "PrdDesc": PrdDesc.replace("\n", ""),
             "IsServc": line.product_id.type == "service" and "Y" or "N",
             "HsnCd": self._l10n_in_edi_extract_digits(line.l10n_in_hsn_code),
             "Qty": self._l10n_in_round_value(quantity or 0.0, 3),
@@ -577,6 +581,9 @@ class AccountEdiFormat(models.Model):
                     for gst in ["cgst", "sgst", "igst"]:
                         if any(tag in tags for tag in self.env.ref("l10n_in.tax_tag_%s"%(gst))):
                             line_code = gst
+                        # need to separate rc tax value so it's not pass to other values
+                        if any(tag in tags for tag in self.env.ref("l10n_in.tax_tag_%s_rc" % (gst))):
+                            line_code = gst + '_rc'
             return {
                 "tax": tax,
                 "base_product_id": invl.product_id,

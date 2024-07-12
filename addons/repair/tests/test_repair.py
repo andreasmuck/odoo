@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
+
+from odoo import Command
 from odoo.exceptions import UserError
 from odoo.tests import tagged, common, Form
 from odoo.tools import float_compare, float_is_zero
-from odoo import Command
 
 
 @tagged('post_install', '-at_install')
@@ -32,17 +33,17 @@ class TestRepair(common.TransactionCase):
         # Storable products
         cls.product_storable_no = cls.env['product.product'].create({
             'name': 'Product Storable No Tracking',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'none',
         })
         cls.product_storable_serial = cls.env['product.product'].create({
             'name': 'Product Storable Serial',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'serial',
         })
         cls.product_storable_lot = cls.env['product.product'].create({
             'name': 'Product Storable Lot',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'lot',
         })
 
@@ -54,7 +55,7 @@ class TestRepair(common.TransactionCase):
         })
         cls.product_storable_order_repair = cls.env['product.product'].create({
             'name': 'Repair Storable',
-            'type': 'product',
+            'is_storable': True,
             'create_repair': True,
         })
         cls.product_service_order_repair = cls.env['product.product'].create({
@@ -544,7 +545,7 @@ class TestRepair(common.TransactionCase):
 
         product = self.env['product.product'].create({
             'name': 'Test Product',
-            'type': 'product',
+            'is_storable': True,
         })
         self.env['stock.quant']._update_available_quantity(product, self.stock_location_14, 1)
         picking_form = Form(self.env['stock.picking'])
@@ -566,27 +567,32 @@ class TestRepair(common.TransactionCase):
             active_model='stock.picking'))
         stock_return_picking = stock_return_picking_form.save()
         stock_return_picking.product_return_moves.quantity = 1.0
-        stock_return_picking_action = stock_return_picking.create_returns()
+        stock_return_picking_action = stock_return_picking.action_create_returns()
         return_picking = self.env['stock.picking'].browse(stock_return_picking_action['res_id'])
         return_picking.move_ids.picked = True
         return_picking.button_validate()
         self.assertEqual(return_picking.state, 'done')
 
         res_dict = return_picking.action_repair_return()
-        repair_form = Form(self.env[(res_dict.get('res_model'))].with_context(res_dict['context']))
+        repair_form = Form(self.env[(res_dict.get('res_model'))].with_context(res_dict['context']), view=res_dict['view_id'])
         repair_form.product_id = product
+        with repair_form.move_ids.new() as move:
+            move.product_id = self.product_product_5
+            move.product_uom_qty = 1.0
+            move.quantity = 1.0
+            move.repair_line_type = 'add'
         repair = repair_form.save()
         repair.action_repair_start()
         repair.action_repair_end()
         self.assertEqual(repair.state, 'done')
-        self.assertEqual(len(return_picking.move_ids), 1)
+        self.assertEqual(len(return_picking.move_ids), 1, "Parts added to the repair order shoudln't be added to the return picking")
 
     def test_repair_with_product_in_package(self):
         """
         Test That a repair order can be validated when the repaired product is tracked and in a package
         """
         self.product_product_3.tracking = 'serial'
-        self.product_product_3.type = 'product'
+        self.product_product_3.is_storable = True
         # Create two serial numbers
         sn_1 = self.env['stock.lot'].create({'name': 'sn_1', 'product_id': self.product_product_3.id})
         sn_2 = self.env['stock.lot'].create({'name': 'sn_2', 'product_id': self.product_product_3.id})
@@ -632,7 +638,7 @@ class TestRepair(common.TransactionCase):
         """
         product_a = self.env['product.product'].create({
             'name': 'productA',
-            'detailed_type': 'product',
+            'is_storable': True,
             'tracking': 'serial',
             'create_repair': True,
         })
@@ -652,3 +658,62 @@ class TestRepair(common.TransactionCase):
             {'product_id': product_a.id, 'product_qty': 1.0},
             {'product_id': product_a.id, 'product_qty': 1.0},
         ])
+
+    def test_onchange_picking_type_id_and_name(self):
+        """
+        Test that when changing the picking_type_id, the name of the repair order should be changed too
+        """
+        repair_order = self.env['repair.order'].create({
+            'product_id': self.product_product_3.id,
+            'picking_type_id': self.stock_warehouse.repair_type_id.id,
+        })
+        picking_type_1 = self.env['stock.picking.type'].create({
+            'name': 'new_picking_type_1',
+            'code': 'repair_operation',
+            'sequence_code': 'PT1/',
+        })
+        picking_type_2 = self.env['stock.picking.type'].create({
+            'name': 'new_picking_type_2',
+            'code': 'repair_operation',
+            'sequence_code': 'PT2/',
+        })
+        repair_order.picking_type_id = picking_type_1
+        self.assertEqual(repair_order.name, "PT1/00001")
+        repair_order.picking_type_id = picking_type_2
+        self.assertEqual(repair_order.name, "PT2/00001")
+        repair_order.picking_type_id = picking_type_1
+        self.assertEqual(repair_order.name, "PT1/00002")
+        repair_order.picking_type_id = picking_type_1
+        self.assertEqual(repair_order.name, "PT1/00002")
+
+    def test_repair_components_lots_show_in_invoice(self):
+        """
+        Test that the lots of the components of a repair order are shown in the invoice
+        """
+        quant = self.create_quant(self.product_storable_serial, 1)
+        quant.action_apply_inventory()
+        repair_order = self.env['repair.order'].create({
+            'product_id': self.product_product_3.id,
+            'product_uom': self.product_product_3.uom_id.id,
+            'partner_id': self.res_partner_12.id,
+            'move_ids': [
+                Command.create({
+                    'product_id': self.product_storable_serial.id,
+                    'product_uom_qty': 1.0,
+                    'state': 'draft',
+                    'repair_line_type': 'add',
+                })
+            ],
+        })
+        repair_order.action_validate()
+        repair_order.action_repair_start()
+        repair_order.action_repair_end()
+        repair_order.action_create_sale_order()
+        sale_order = repair_order.sale_order_id
+        sale_order.action_confirm()
+        invoice = sale_order._create_invoices()
+        invoice.action_post()
+        res = invoice._get_invoiced_lot_values()
+        self.assertEqual(len(res), 1, "The invoice should have one line")
+        self.assertEqual(res[0]['product_name'], self.product_storable_serial.display_name, "The product name should be the same")
+        self.assertEqual(res[0]['lot_name'], quant.lot_id.name, "The lot name should be the same")

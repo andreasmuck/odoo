@@ -2,13 +2,13 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import re
-from collections import defaultdict
 from operator import itemgetter
 
 from odoo import api, fields, models, tools, _
 from odoo.exceptions import ValidationError
 from odoo.osv import expression
-from odoo.tools import float_compare, groupby
+from odoo.tools import float_compare, format_list, groupby
+from odoo.tools.image import is_image_size_above
 from odoo.tools.misc import unique
 
 
@@ -18,6 +18,7 @@ class ProductProduct(models.Model):
     _inherits = {'product.template': 'product_tmpl_id'}
     _inherit = ['mail.thread', 'mail.activity.mixin']
     _order = 'is_favorite desc, default_code, name, id'
+    _check_company_domain = models.check_company_domain_parent_of
 
     # price_extra: catalog extra value only, sum of variant extra attributes
     price_extra = fields.Float(
@@ -74,7 +75,7 @@ class ProductProduct(models.Model):
         help="Gives the different ways to package the same product.")
 
     additional_product_tag_ids = fields.Many2many(
-        string="Additional Product Tags",
+        string="Variant Tags",
         comodel_name='product.tag',
         relation='product_tag_product_product_rel',
         domain="[('id', 'not in', product_tag_ids)]",
@@ -106,7 +107,7 @@ class ProductProduct(models.Model):
     @api.depends('image_variant_1920', 'image_variant_1024')
     def _compute_can_image_variant_1024_be_zoomed(self):
         for record in self:
-            record.can_image_variant_1024_be_zoomed = record.image_variant_1920 and tools.is_image_size_above(record.image_variant_1920, record.image_variant_1024)
+            record.can_image_variant_1024_be_zoomed = record.image_variant_1920 and is_image_size_above(record.image_variant_1920, record.image_variant_1024)
 
     def _set_template_field(self, template_field, variant_field):
         for record in self:
@@ -216,8 +217,8 @@ class ProductProduct(models.Model):
 
         duplicates_as_str = "\n".join(
             _(
-                "- Barcode \"%s\" already assigned to product(s): %s",
-                record['barcode'], ", ".join(p.display_name for p in self.search([('id', 'in', record['id'])]))
+                "- Barcode \"%(barcode)s\" already assigned to product(s): %(product_list)s",
+                barcode=record['barcode'], product_list=format_list(self.env, [p.display_name for p in self.search([('id', 'in', record['id'])])]),
             )
             for record in products_by_barcode if len(record['id']) > 1
         )
@@ -229,7 +230,7 @@ class ProductProduct(models.Model):
 
     def _check_duplicated_packaging_barcodes(self, barcodes_within_company, company_id):
         packaging_domain = self._get_barcode_search_domain(barcodes_within_company, company_id)
-        if self.env['product.packaging'].sudo().search(packaging_domain, order="id", limit=1):
+        if self.env['product.packaging'].sudo().search_count(packaging_domain, limit=1):
             raise ValidationError(_("A packaging already uses the barcode"))
 
     @api.constrains('barcode')
@@ -304,9 +305,13 @@ class ProductProduct(models.Model):
 
     def _compute_variant_item_count(self):
         for product in self:
-            domain = ['|',
-                '&', ('product_tmpl_id', '=', product.product_tmpl_id.id), ('applied_on', '=', '1_product'),
-                '&', ('product_id', '=', product.id), ('applied_on', '=', '0_product_variant')]
+            domain = [
+                ('pricelist_id.active', '=', True),
+                '|',
+                    '&', ('product_tmpl_id', '=', product.product_tmpl_id.id), ('applied_on', '=', '1_product'),
+                    '&', ('product_id', '=', product.id), ('applied_on', '=', '0_product_variant'),
+                ('compute_price', '=', 'fixed'),
+            ]
             product.pricelist_item_count = self.env['product.pricelist.item'].search_count(domain)
 
     def _compute_product_document_count(self):
@@ -347,23 +352,20 @@ class ProductProduct(models.Model):
         if self.id.origin:
             domain.append(('id', '!=', self.id.origin))
 
-        if self.env['product.product'].search(domain, limit=1):
+        if self.env['product.product'].search_count(domain, limit=1):
             return {'warning': {
                 'title': _("Note:"),
-                'message': _("The Internal Reference '%s' already exists.", self.default_code),
+                'message': _("The Reference '%s' already exists.", self.default_code),
             }}
 
     @api.model_create_multi
     def create(self, vals_list):
-        for vals in vals_list:
-            self.product_tmpl_id._sanitize_vals(vals)
         products = super(ProductProduct, self.with_context(create_product_product=False)).create(vals_list)
         # `_get_variant_id_for_combination` depends on existing variants
         self.env.registry.clear_cache()
         return products
 
     def write(self, values):
-        self.product_tmpl_id._sanitize_vals(values)
         res = super(ProductProduct, self).write(values)
         if 'product_template_attribute_value_ids' in values:
             # `_get_variant_id_for_combination` depends on `product_template_attribute_value_ids`
@@ -461,12 +463,12 @@ class ProductProduct(models.Model):
         return new_products
 
     @api.model
-    def _search(self, domain, offset=0, limit=None, order=None, access_rights_uid=None):
+    def _search(self, domain, offset=0, limit=None, order=None):
         # TDE FIXME: strange
         if self._context.get('search_default_categ_id'):
             domain = domain.copy()
             domain.append((('categ_id', 'child_of', self._context['search_default_categ_id'])))
-        return super()._search(domain, offset, limit, order, access_rights_uid)
+        return super()._search(domain, offset, limit, order)
 
     @api.depends('name', 'default_code', 'product_tmpl_id')
     @api.depends_context('display_default_code', 'seller_id', 'company_id', 'partner_id')
@@ -559,7 +561,7 @@ class ProductProduct(models.Model):
                 domain2 = expression.AND([domain, domain2])
                 product_ids = list(self._search(domain2, limit=limit, order=order))
             if not product_ids and operator in positive_operators:
-                ptrn = re.compile('(\[(.*?)\])')
+                ptrn = re.compile(r'(\[(.*?)\])')
                 res = ptrn.search(name)
                 if res:
                     product_ids = list(self._search([('default_code', '=', res.group(2))] + domain, limit=limit, order=order))
@@ -596,7 +598,9 @@ class ProductProduct(models.Model):
         self.ensure_one()
         domain = ['|',
             '&', ('product_tmpl_id', '=', self.product_tmpl_id.id), ('applied_on', '=', '1_product'),
-            '&', ('product_id', '=', self.id), ('applied_on', '=', '0_product_variant')]
+            '&', ('product_id', '=', self.id), ('applied_on', '=', '0_product_variant'),
+            ('compute_price', '=', 'fixed'),
+        ]
         return {
             'name': _('Price Rules'),
             'view_mode': 'tree,form',
@@ -635,11 +639,12 @@ class ProductProduct(models.Model):
     #=== BUSINESS METHODS ===#
 
     def _prepare_sellers(self, params=False):
-        return self.seller_ids.filtered(lambda s: s.partner_id.active).sorted(lambda s: (s.sequence, -s.min_qty, s.price, s.id))
+        sellers = self.seller_ids.filtered(lambda s: s.partner_id.active and (not s.product_id or s.product_id == self))
+        return sellers.sorted(lambda s: (s.sequence, -s.min_qty, s.price, s.id))
 
     def _get_filtered_sellers(self, partner_id=False, quantity=0.0, date=None, uom_id=False, params=False):
         self.ensure_one()
-        if date is None:
+        if not date:
             date = fields.Date.context_today(self)
         precision = self.env['decimal.precision'].precision_get('Product Unit of Measure')
 
@@ -786,6 +791,7 @@ class ProductProduct(models.Model):
         return self._get_contextual_price()
 
     def _get_contextual_price(self):
+        # FIXME VFE this won't consider ptavs extra prices, since we rely on the template price
         self.ensure_one()
         return self.product_tmpl_id._get_contextual_price(self)
 

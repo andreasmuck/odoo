@@ -260,53 +260,73 @@ class Users(models.Model):
         # sudo: res.partner - exposing OdooBot data
         odoobot = self.env.ref("base.partner_root").sudo()
         xmlid_to_res_id = self.env["ir.model.data"]._xmlid_to_res_id
-        store.add({
-            "Store": {
+        store.add(odoobot)
+        store.add(
+            {
                 "action_discuss_id": xmlid_to_res_id("mail.action_discuss"),
                 "hasLinkPreviewFeature": self.env["mail.link.preview"]._is_link_preview_enabled(),
                 "internalUserGroupId": self.env.ref("base.group_user").id,
                 "mt_comment_id": xmlid_to_res_id("mail.mt_comment"),
-                "odoobot": odoobot.mail_partner_format().get(odoobot),
-            },
-        })
+                "odoobot": {"id": odoobot.id, "type": "partner"},
+            }
+        )
         guest = self.env["mail.guest"]._get_guest_from_context()
         if not self.env.user._is_public():
             settings = self.env["res.users.settings"]._find_or_create_for_user(self.env.user)
-            store.add({
-                "Store": {
-                    "self": {
-                        "id": self.env.user.partner_id.id,
-                        "isAdmin": self.env.user._is_admin(),
-                        "isInternalUser": not self.env.user.share,
-                        "name": self.env.user.partner_id.name,
-                        "notification_preference": self.env.user.notification_type,
-                        "type": "partner",
-                        "userId": self.env.user.id,
-                        "write_date": fields.Datetime.to_string(self.env.user.write_date),
-                    },
-                    "settings": settings._res_users_settings_format(),
+            store.add(
+                "Persona",
+                {
+                    "id": self.env.user.partner_id.id,
+                    "isAdmin": self.env.user._is_admin(),
+                    "isInternalUser": not self.env.user.share,
+                    "name": self.env.user.partner_id.name,
+                    "notification_preference": self.env.user.notification_type,
+                    "type": "partner",
+                    "userId": self.env.user.id,
+                    "write_date": fields.Datetime.to_string(self.env.user.write_date),
                 },
-            })
+            )
+            store.add(
+                {
+                    "self": {"id": self.env.user.partner_id.id, "type": "partner"},
+                    "settings": settings._res_users_settings_format(),
+                }
+            )
         elif guest:
-            store.add({"Store": {"self": {
-                "id": guest.id,
-                "name": guest.name,
-                "type": "guest",
-                "write_date": fields.Datetime.to_string(guest.write_date),
-            }}})
+            store.add(
+                "Persona",
+                {
+                    "id": guest.id,
+                    "name": guest.name,
+                    "type": "guest",
+                    "write_date": fields.Datetime.to_string(guest.write_date),
+                },
+            )
+            store.add({"self": {"id": guest.id, "type": "guest"}})
 
     def _init_messaging(self, store):
         self.ensure_one()
         self = self.with_user(self)
-        store.add({
-            "Store": {
-                "discuss": {
-                    "inbox": {"counter": self.partner_id._get_needaction_count(), "id": "inbox", "model": "mail.box"},
-                    "starred": {"counter": self.env["mail.message"].search_count([("starred_partner_ids", "in", self.partner_id.ids)]), "id": "starred", "model": "mail.box"},
+        # sudo: bus.bus: reading non-sensitive last id
+        bus_last_id = self.env["bus.bus"].sudo()._bus_last_id()
+        store.add(
+            {
+                "inbox": {
+                    "counter": self.partner_id._get_needaction_count(),
+                    "counter_bus_id": bus_last_id,
+                    "id": "inbox",
+                    "model": "mail.box",
                 },
-                "initBusId": self.env["bus.bus"].sudo()._bus_last_id(),
-            },
-        })
+                "starred": {
+                    "counter": self.env["mail.message"].search_count(
+                        [("starred_partner_ids", "in", self.partner_id.ids)]
+                    ),
+                    "counter_bus_id": bus_last_id,
+                    "id": "starred",
+                    "model": "mail.box",
+                },
+            }
+        )
 
     @api.model
     def _get_activity_groups(self):
@@ -318,16 +338,25 @@ class Users(models.Model):
             record = self.env[activity.res_model].browse(activity.res_id)
             activities_by_record_by_model_name[activity.res_model][record] += activity
         activities_by_model_name = defaultdict(lambda: self.env["mail.activity"])
+        user_company_ids = self.env.user.company_ids.ids
+        is_all_user_companies_allowed = set(user_company_ids) == set(self.env.context.get('allowed_company_ids') or [])
         for model_name, activities_by_record in activities_by_record_by_model_name.items():
-            if self.env[model_name].check_access_rights('read', raise_exception=False):
-                res_ids = [r.id for r in activities_by_record]
-                allowed_records = self.env[model_name].browse(res_ids)._filter_access_rules('read')
+            res_ids = [r.id for r in activities_by_record]
+            Model = self.env[model_name].with_context(**self.env.context)
+            has_model_access_right = self.env[model_name].check_access_rights('read', raise_exception=False)
+            if has_model_access_right:
+                allowed_records = Model.browse(res_ids)._filter_access_rules('read')
             else:
                 allowed_records = self.env[model_name]
+            unallowed_records = Model.browse(res_ids) - allowed_records
+            # We remove from not allowed records, records that the user has access to through others of his companies
+            if has_model_access_right and unallowed_records and not is_all_user_companies_allowed:
+                unallowed_records -= unallowed_records.with_context(
+                    allowed_company_ids=user_company_ids)._filter_access_rules('read')
             for record, activities in activities_by_record.items():
-                if record not in allowed_records:
+                if record in unallowed_records:
                     activities_by_model_name['mail.activity'] += activities
-                else:
+                elif record in allowed_records:
                     activities_by_model_name[model_name] += activities
         model_ids = [self.env["ir.model"]._get_id(name) for name in activities_by_model_name]
         user_activities = {}

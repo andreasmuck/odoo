@@ -1,4 +1,4 @@
-import { describe, test } from "@odoo/hoot";
+import { patchWebsocketWorkerWithCleanup } from "@bus/../tests/mock_websocket";
 import {
     assertSteps,
     click,
@@ -9,22 +9,22 @@ import {
     start,
     startServer,
     step,
-} from "../../mail_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, test } from "@odoo/hoot";
 import { mockDate } from "@odoo/hoot-mock";
-import { patchWebsocketWorkerWithCleanup } from "@bus/../tests/mock_websocket";
 
 describe.current.tags("desktop");
 defineMailModels();
 
-test("Member list and settings menu are exclusive", async () => {
+test("Member list and Pinned Messages Panel menu are exclusive", async () => {
     const pyEnv = await startServer();
     const channelId = pyEnv["discuss.channel"].create({ name: "General" });
     await start();
     await openDiscuss(channelId);
     await click("[title='Show Member List']");
     await contains(".o-discuss-ChannelMemberList");
-    await click("[title='Show Call Settings']");
-    await contains(".o-discuss-CallSettings");
+    await click("[title='Pinned Messages']");
+    await contains(".o-discuss-PinnedMessagesPanel");
     await contains(".o-discuss-ChannelMemberList", { count: 0 });
 });
 
@@ -46,7 +46,7 @@ test("bus subscription is refreshed when channel is joined", async () => {
     await assertSteps(["subscribe - []"]);
     await openDiscuss();
     await assertSteps([]);
-    await click(".o-mail-DiscussSidebar i[title='Add or join a channel']");
+    await click(".o-mail-DiscussSidebar [title='Add or join a channel']");
     await insertText(".o-discuss-ChannelSelector input", "new channel");
     await click(".o-discuss-ChannelSelector-suggestion");
     await assertSteps(["subscribe - []"]);

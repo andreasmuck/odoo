@@ -520,6 +520,36 @@ class WithContext(HttpCase):
             self.assertEqual(alternate_en_url, f'{self.base_url()}/page_1')
             self.assertEqual(alternate_fr_url, f'{self.base_url()}/fr/page_1')
 
+    def test_alternate_hreflang(self):
+        website = self.env['website'].browse(1)
+        lang_en = self.env.ref('base.lang_en')
+        lang_fr = self.env['res.lang']._activate_lang('fr_FR')
+        with MockRequest(self.env, website=website):
+            # Only one region per lang, the hreflang should be the short code
+            website.language_ids = [Command.set((lang_en + lang_fr).ids)]
+            langs = self.env['res.lang']._get_frontend()
+            self.assertEqual(langs['en_US']['hreflang'], 'en')
+            self.assertEqual(langs['fr_FR']['hreflang'], 'fr')
+            # Multiple regions per lang, one lang from the same region should be
+            # the short code, others should keep the full code
+            lang_be = self.env['res.lang']._activate_lang('fr_BE')
+            lang_ca = self.env['res.lang']._activate_lang('fr_CA')
+            website.language_ids = [Command.set((lang_en + lang_fr + lang_be + lang_ca).ids)]
+            langs = self.env['res.lang']._get_frontend()
+            self.assertEqual(langs['en_US']['hreflang'], 'en')
+            self.assertEqual(langs['fr_FR']['hreflang'], 'fr-fr')
+            self.assertEqual(langs['fr_BE']['hreflang'], 'fr')
+            self.assertEqual(langs['fr_CA']['hreflang'], 'fr-ca')
+            # Special case for es_419: if there is multiple regions for spanish,
+            # including es_419, es_419 should be the one shortened
+            lang_es = self.env['res.lang']._activate_lang('es_ES')
+            lang_419 = self.env['res.lang']._activate_lang('es_419')
+            website.language_ids = [Command.set((lang_en + lang_es + lang_419).ids)]
+            langs = self.env['res.lang']._get_frontend()
+            self.assertEqual(langs['en_US']['hreflang'], 'en')
+            self.assertEqual(langs['es_ES']['hreflang'], 'es-es')
+            self.assertEqual(langs['es_419']['hreflang'], 'es')
+
     def test_07_not_authorized(self):
         # Create page that requires specific user role.
         specific_page = self.page.copy({'website_id': self.env['website'].get_current_website().id})
@@ -542,6 +572,33 @@ class WithContext(HttpCase):
         r2 = self.url_open('/Page_1', allow_redirects=False)
         self.assertEqual(r2.status_code, 303, "URL exists only in different casing, should redirect to it")
         self.assertTrue(r2.headers.get('Location').endswith('/page_1'), "Should redirect /Page_1 to /page_1")
+
+    def test_page_generic_diverged_url(self):
+        """ When a generic page is COW and the new COW has its url changed, the
+        generic should not be reachable anymore even if the COW page has a
+        different URL. Note that they will both still share the same key.
+        """
+        Page = self.env['website.page']
+        specific_arch = '<div>website 1 content</div>'
+        generic_page = self.page
+        generic_page.arch = '<div>content</div>'
+
+        specific_page = Page.search([('url', '=', self.page.url), ('website_id', '=', 1)])
+        self.assertFalse(specific_page, "For this test, the specific page should not exist yet")
+
+        # COW a generic page
+        generic_page.view_id.with_context(website_id=1).save(specific_arch, xpath='/div')
+        specific_page = Page.search([('url', '=', self.page.url), ('website_id', '=', 1)])
+        self.assertEqual(specific_page.arch.replace('\n', ''), specific_arch)
+        self.assertEqual(generic_page.arch, '<div>content</div>')
+        # Change the URL of the specific page
+        specific_page.url = '/page_1_specific'
+        # Check that the generic page is not reachable anymore
+        r = self.url_open(specific_page.url)
+        self.assertEqual(r.status_code, 200, "Specific should be reachable")
+        r = self.url_open(generic_page.url)
+        self.assertEqual(r.status_code, 404, "Generic should not be reachable")
+
 
 @tagged('-at_install', 'post_install')
 class TestNewPage(common.TransactionCase):

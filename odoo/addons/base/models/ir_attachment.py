@@ -4,21 +4,20 @@ import base64
 import binascii
 import contextlib
 import hashlib
-import io
-import itertools
 import logging
 import mimetypes
 import os
 import psycopg2
 import re
 import uuid
+import werkzeug
 
 from collections import defaultdict
-from PIL import Image
 
 from odoo import api, fields, models, SUPERUSER_ID, tools, _
 from odoo.exceptions import AccessError, ValidationError, UserError
-from odoo.tools import config, human_size, ImageProcess, str2bool, consteq
+from odoo.http import Stream, root, request
+from odoo.tools import config, human_size, image, str2bool, consteq
 from odoo.tools.mimetypes import guess_mimetype
 from odoo.osv import expression
 
@@ -314,14 +313,14 @@ class IrAttachment(models.Model):
                 raw = base64.b64decode(values['datas'])
             if raw:
                 mimetype = guess_mimetype(raw)
-        return mimetype or 'application/octet-stream'
+        return mimetype and mimetype.lower() or 'application/octet-stream'
 
     def _postprocess_contents(self, values):
         ICP = self.env['ir.config_parameter'].sudo().get_param
         supported_subtype = ICP('base.image_autoresize_extensions', 'png,jpeg,bmp,tiff').split(',')
 
         mimetype = values['mimetype'] = self._compute_mimetype(values)
-        _type, _, _subtype = mimetype.partition('/')
+        _type, _match, _subtype = mimetype.partition('/')
         is_image_resizable = _type == 'image' and _subtype in supported_subtype
         if is_image_resizable and (values.get('datas') or values.get('raw')):
             is_raw = values.get('raw')
@@ -330,11 +329,14 @@ class IrAttachment(models.Model):
             max_resolution = ICP('base.image_autoresize_max_px', '1920x1920')
             if str2bool(max_resolution, True):
                 try:
-                    img = False
                     if is_raw:
-                        img = ImageProcess(values['raw'], verify_resolution=False)
+                        img = image.ImageProcess(values['raw'], verify_resolution=False)
                     else:  # datas
-                        img = ImageProcess(base64.b64decode(values['datas']), verify_resolution=False)
+                        img = image.ImageProcess(base64.b64decode(values['datas']), verify_resolution=False)
+
+                    if not img.image:
+                        _logger.info('Post processing ignored : Empty source, SVG, or WEBP')
+                        return values
 
                     w, h = img.image.size
                     nw, nh = map(int, max_resolution.split('x'))
@@ -356,7 +358,7 @@ class IrAttachment(models.Model):
         mimetype = values['mimetype'] = self._compute_mimetype(values)
         xml_like = 'ht' in mimetype or ( # hta, html, xhtml, etc.
                 'xml' in mimetype and    # other xml (svg, text/xml, etc)
-                not 'openxmlformats' in mimetype)  # exception for Office formats
+                not mimetype.startswith('application/vnd.openxmlformats'))  # exception for Office formats
         force_text = xml_like and (
             self.env.context.get('attachments_mime_plainxml') or
             not self.env['ir.ui.view'].sudo(False).check_access_rights('write', False))
@@ -510,7 +512,7 @@ class IrAttachment(models.Model):
         return ret_attachments
 
     @api.model
-    def _search(self, domain, offset=0, limit=None, order=None, access_rights_uid=None):
+    def _search(self, domain, offset=0, limit=None, order=None):
         # add res_field=False in domain if not present; the arg[0] trick below
         # works for domain items and '&'/'|'/'!' operators too
         disable_binary_fields_attachments = False
@@ -520,14 +522,14 @@ class IrAttachment(models.Model):
 
         if self.env.is_superuser():
             # rules do not apply for the superuser
-            return super()._search(domain, offset, limit, order, access_rights_uid)
+            return super()._search(domain, offset, limit, order)
 
         # For attachments, the permissions of the document they are attached to
         # apply, so we must remove attachments for which the user cannot access
         # the linked document. For the sake of performance, fetch the fields to
         # determine those permissions within the same SQL query.
         fnames_to_read = ['id', 'res_model', 'res_id', 'res_field', 'public', 'create_uid']
-        query = super()._search(domain, offset, limit, order, access_rights_uid)
+        query = super()._search(domain, offset, limit, order)
         rows = self.env.execute_query(query.select(
             *[self._field_to_sql(self._table, fname) for fname in fnames_to_read],
         ))
@@ -571,7 +573,7 @@ class IrAttachment(models.Model):
         if len(all_ids) == limit and len(result) < self._context.get('need', limit):
             need = self._context.get('need', limit) - len(result)
             more_ids = self.with_context(need=need)._search(
-                domain, offset + len(all_ids), limit, order, access_rights_uid,
+                domain, offset + len(all_ids), limit, order,
             )
             result.extend(list(more_ids)[:limit - len(result)])
 
@@ -730,3 +732,51 @@ class IrAttachment(models.Model):
             ('create_uid', '=', SUPERUSER_ID),
         ]).unlink()
         self.env.registry.clear_cache('assets')
+
+    def _to_http_stream(self):
+        """ Create a :class:`~Stream`: from an ir.attachment record. """
+        self.ensure_one()
+
+        stream = Stream(
+            mimetype=self.mimetype,
+            download_name=self.name,
+            etag=self.checksum,
+            public=self.public,
+        )
+
+        if self.store_fname:
+            stream.type = 'path'
+            stream.path = werkzeug.security.safe_join(
+                os.path.abspath(config.filestore(request.db)),
+                self.store_fname
+            )
+            stat = os.stat(stream.path)
+            stream.last_modified = stat.st_mtime
+            stream.size = stat.st_size
+
+        elif self.db_datas:
+            stream.type = 'data'
+            stream.data = self.raw
+            stream.last_modified = self.write_date
+            stream.size = len(stream.data)
+
+        elif self.url:
+            # When the URL targets a file located in an addon, assume it
+            # is a path to the resource. It saves an indirection and
+            # stream the file right away.
+            static_path = root.get_static_file(
+                self.url,
+                host=request.httprequest.environ.get('HTTP_HOST', '')
+            )
+            if static_path:
+                stream = Stream.from_path(static_path, public=True)
+            else:
+                stream.type = 'url'
+                stream.url = self.url
+
+        else:
+            stream.type = 'data'
+            stream.data = b''
+            stream.size = 0
+
+        return stream

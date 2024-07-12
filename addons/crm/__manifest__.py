@@ -71,14 +71,24 @@
     'application': True,
     'assets': {
         'web.assets_backend': [
-            'crm/static/src/**/*',
+            'crm/static/src/**',
+            ('remove', 'crm/static/src/views/forecast_graph/**'),
+        ],
+        'web.assets_backend_lazy': [
+            'crm/static/src/views/forecast_graph/**',
         ],
         'web.assets_tests': [
             'crm/static/tests/tours/**/*',
         ],
+        'web.assets_unit_tests': [
+            'crm/static/tests/mock_server/**/*',
+            'crm/static/tests/crm_test_helpers.js'
+        ],
         'web.qunit_suite_tests': [
             'crm/static/tests/**/*',
             ('remove', 'crm/static/tests/tours/**/*'),
+            ('remove', 'crm/static/tests/mock_server/**/*'),
+            ('remove', 'crm/static/tests/crm_test_helpers.js')
         ],
     },
     'license': 'LGPL-3',

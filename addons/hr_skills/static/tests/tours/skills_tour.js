@@ -11,43 +11,47 @@ registry.category("web_tour.tours").add('hr_skills_tour', {
     {
         content: "Open Employees app",
         trigger: ".o_app[data-menu-xmlid='hr.menu_hr_root']",
+        run: "click",
     },
     {
         content: "Create a new employee",
         trigger: ".o-kanban-button-new",
+        run: "click",
     },
     {
         content: "Pick a name",
         trigger: ".o_field_widget[name='name'] input",
-        run: "text Jony McHallyFace",
+        run: "edit Jony McHallyFace",
     },
     {
         content: "Save",
         trigger: ".o_form_button_save",
+        run: "click",
     },
     {
         content: "Add a new Resume experience",
         trigger: ".o_field_resume_one2many tr.o_resume_group_header button.btn-secondary",
+        run: "click",
     },
     {
         content: "Enter some company name",
         trigger: ".modal-body .o_field_widget[name='name'] input",
-        run: "text Mamie Rock",
+        run: "edit Mamie Rock",
     },
     {
         content: "Set start date",
         trigger: ".o_field_widget[name='date_start'] input",
-        run: "text 12/05/2017",
+        run: "edit 12/05/2017",
     },
     {
         content: "Give some description",
         trigger: ".o_field_widget[name='description'] textarea",
-        run: "text Sang some songs and played some music",
+        run: "edit Sang some songs and played some music",
     },
     {
         content: "Save it",
-        trigger: ".o_form_button_save",
-        in_modal: true,
+        trigger: ".modal .o_form_button_save",
+        in_modal: false,
         run: "click",
     },
     {
@@ -58,7 +62,7 @@ registry.category("web_tour.tours").add('hr_skills_tour', {
     {
         content: "Change type",
         trigger: ".o_field_widget[name='line_type_id'] input",
-        run: "text Experience",
+        run: "edit Experience",
     },
     {
         content: "Choose experience",
@@ -67,13 +71,14 @@ registry.category("web_tour.tours").add('hr_skills_tour', {
     },
     {
         content: "Save experience change",
-        trigger: ".o_form_button_save",
-        in_modal: true,
+        trigger: ".modal .o_form_button_save",
+        in_modal: false,
         run: "click",
     },
     {
         content: "Add a new Skill",
         trigger: ".o_field_skills_one2many button:contains('Pick a skill from the list')",
+        run: "click",
     },
     {
         content: "Select Music",
@@ -83,7 +88,7 @@ registry.category("web_tour.tours").add('hr_skills_tour', {
     {
         content: "Select a song",
         trigger: ".o_field_widget[name='skill_id'] input",
-        run: "text Fortun",
+        run: "edit Fortun",
     },
     {
         content: "Choose the song",
@@ -93,7 +98,7 @@ registry.category("web_tour.tours").add('hr_skills_tour', {
     {
         content: "Select a level",
         trigger: ".o_field_widget[name='skill_level_id'] input",
-        run: "text Level",
+        run: "edit Level",
     },
     {
         content: "Choose the level",
@@ -102,23 +107,23 @@ registry.category("web_tour.tours").add('hr_skills_tour', {
     },
     {
         content: "Save new skill",
-        trigger: ".o_form_button_save",
-        in_modal: true,
+        trigger: ".modal .o_form_button_save",
+        in_modal: false,
         run: "click",
     },
     {
         content: "Check if item is added",
         trigger: ".o_data_row td.o_data_cell:contains('Fortunate Son')",
-        run: () => {},
     },
     {
         content: "Add a new Skill",
         trigger: ".o_field_skills_one2many button:contains('ADD')",
+        run: "click",
     },
     {
         content: "Select a song", // "Music" should be already selected
         trigger: ".o_field_widget[name='skill_id'] input",
-        run: "text Mary",
+        run: "edit Mary",
     },
     {
         content: "Choose the song",
@@ -128,7 +133,7 @@ registry.category("web_tour.tours").add('hr_skills_tour', {
     {
         content: "Select a level",
         trigger: ".o_field_widget[name='skill_level_id'] input",
-        run: "text Level 7",
+        run: "edit Level 7",
     },
     {
         content: "Choose the level",
@@ -137,14 +142,13 @@ registry.category("web_tour.tours").add('hr_skills_tour', {
     },
     {
         content: "Save new skill",
-        trigger: ".o_form_button_save",
-        in_modal: true,
+        trigger: ".modal .o_form_button_save",
+        in_modal: false,
         run: "click",
     },
     {
         content: "Check if item is added",
         trigger: ".o_data_row td.o_data_cell:contains('Oh Mary')",
-        run: () => {},
     },
     ...stepUtils.saveForm(),
 ]});

@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { Component, onMounted, useRef, useState } from "@odoo/owl";
 import { Dialog } from "@web/core/dialog/dialog";
 
@@ -29,6 +27,7 @@ export class TextInputPopup extends Component {
     }
     onMounted() {
         this.inputRef.el.focus();
+        this.inputRef.el.select();
     }
     confirm() {
         this.props.getPayload(this.state.inputValue);
@@ -48,6 +47,12 @@ export class TextInputPopup extends Component {
             this.state.inputValue = lines.join("\n");
             this.state.inputValue += (lines.length > 0 ? "\n" : "") + button.label;
             button.isSelected = true;
+        }
+    }
+
+    onKeydown(ev) {
+        if (this.props.rows === 1 && ev.key.toUpperCase() === "ENTER") {
+            this.confirm();
         }
     }
 }

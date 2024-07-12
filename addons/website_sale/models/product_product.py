@@ -1,5 +1,7 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+from werkzeug.urls import url_join
+
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
@@ -7,7 +9,7 @@ from odoo.exceptions import ValidationError
 class Product(models.Model):
     _inherit = 'product.product'
 
-    ribbon_id = fields.Many2one(string="Variant Ribbon", comodel_name='product.ribbon')
+    variant_ribbon_id = fields.Many2one(string="Variant Ribbon", comodel_name='product.ribbon')
     website_id = fields.Many2one(related='product_tmpl_id.website_id', readonly=False)
 
     product_variant_image_ids = fields.One2many(
@@ -67,8 +69,8 @@ class Product(models.Model):
     @api.depends('product_tmpl_id.website_url', 'product_template_attribute_value_ids')
     def _compute_product_website_url(self):
         for product in self:
-            attributes = ','.join(str(x) for x in product.product_template_attribute_value_ids.ids)
-            product.website_url = "%s#attr=%s" % (product.product_tmpl_id.website_url, attributes)
+            attributes = ','.join(str(x) for x in product.product_template_attribute_value_ids.product_attribute_value_id.ids)
+            product.website_url = "%s#attribute_values=%s" % (product.product_tmpl_id.website_url, attributes)
 
     #=== CONSTRAINT METHODS ===#
 
@@ -123,33 +125,14 @@ class Product(models.Model):
             **kwargs)
 
     def _website_show_quick_add(self):
+        self.ensure_one()
+        # TODO VFE pass website as param and avoid existence check
         website = self.env['website'].get_current_website()
         return self.sale_ok and (not website.prevent_zero_price_sale or self._get_contextual_price())
 
     def _is_add_to_cart_allowed(self):
         self.ensure_one()
-        return self.env.user.has_group('base.group_system') or (self.active and self.sale_ok and self.website_published)
-
-    def _get_contextual_price_tax_selection(self):
-        self.ensure_one()
-        price = self._get_contextual_price()
-        product_taxes = self.sudo().taxes_id.filtered(lambda x: x.company_id in self.env.company.parent_ids)
-        if product_taxes:
-            website = self.env['website'].get_current_website()
-            fiscal_position = website.sudo().fiscal_position_id
-
-            price = self._get_tax_included_unit_price(
-                website.company_id,
-                website.currency_id,
-                fields.Date.context_today(self),
-                'sale',
-                fiscal_position=fiscal_position,
-                product_price_unit=price,
-                product_currency=website.currency_id,
-            )
-            line_tax_type = website.show_line_subtotals_tax_selection
-            tax_display = "total_included" if line_tax_type == "tax_included" else "total_excluded"
-
-            taxes = fiscal_position.map_tax(product_taxes)
-            price = taxes.compute_all(price, product=self, partner=self.env['res.partner'])[tax_display]
-        return price
+        is_product_salable = self.active and self.sale_ok and self.website_published
+        website = self.env['website'].get_current_website()
+        return (is_product_salable and website.has_ecommerce_access()) \
+               or self.env.user.has_group('base.group_system')

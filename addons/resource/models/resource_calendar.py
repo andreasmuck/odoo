@@ -19,7 +19,7 @@ from odoo.osv import expression
 from odoo.tools.float_utils import float_round
 
 from odoo.tools import date_utils, float_utils
-from .utils import Intervals, float_to_time, make_aware, datetime_to_string, string_to_datetime, ROUNDING_FACTOR
+from .utils import Intervals, float_to_time, make_aware, datetime_to_string, string_to_datetime
 
 
 class ResourceCalendar(models.Model):
@@ -151,8 +151,12 @@ class ResourceCalendar(models.Model):
         week_type_str = _("second") if week_type else _("first")
         first_day = date_utils.start_of(today, 'week')
         last_day = date_utils.end_of(today, 'week')
-        self.two_weeks_explanation = _("The current week (from %s to %s) correspond to the  %s one.", first_day,
-                                       last_day, week_type_str)
+        self.two_weeks_explanation = _(
+            "The current week (from %(first_day)s to %(last_day)s) corresponds to week number %(number)s.",
+            first_day=first_day,
+            last_day=last_day,
+            number=week_type_str,
+        )
 
     def _get_global_attendances(self):
         return self.attendance_ids.filtered(lambda attendance:
@@ -176,6 +180,9 @@ class ResourceCalendar(models.Model):
             number_of_days += len(set(attendances.filtered(lambda cal: cal.week_type == '0').mapped('dayofweek')))
         else:
             number_of_days = len(set(attendances.mapped('dayofweek')))
+
+        if not number_of_days:
+            return 0
 
         return float_round(hour_count / float(number_of_days), precision_digits=2)
 
@@ -492,7 +499,7 @@ class ResourceCalendar(models.Model):
 
         return {
             # Round the number of days to the closest 16th of a day.
-            'days': sum(float_utils.round(ROUNDING_FACTOR * day_days[day]) / ROUNDING_FACTOR for day in day_days),
+            'days': float_round(sum(day_days[day] for day in day_days), precision_rounding=0.01),
             'hours': sum(day_hours.values()),
         }
 
@@ -507,10 +514,10 @@ class ResourceCalendar(models.Model):
             day_hours[start.date()] += (stop - start).total_seconds() / 3600
 
         # compute number of days as quarters
-        days = sum(
-            float_utils.round(ROUNDING_FACTOR * day_hours[day] / day_total[day]) / ROUNDING_FACTOR if day_total[day] else 0
+        days = float_round(sum(
+            day_hours[day] / day_total[day] if day_total[day] else 0
             for day in day_hours
-        )
+        ), precision_rounding=0.01)
         return {
             'days': days,
             'hours': sum(day_hours.values()),

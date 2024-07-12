@@ -1,5 +1,4 @@
 /** @odoo-module */
-/* eslint-disable no-restricted-syntax */
 
 import { isNil } from "../hoot_utils";
 
@@ -19,17 +18,21 @@ import { isNil } from "../hoot_utils";
 //-----------------------------------------------------------------------------
 
 const {
-    Date,
-    Error,
-    Math,
-    Promise,
     cancelAnimationFrame,
     clearInterval,
     clearTimeout,
+    Date,
+    Error,
+    Math: { ceil: $ceil, max: $max, min: $min },
+    performance,
+    Promise,
     requestAnimationFrame,
     setInterval,
     setTimeout,
 } = globalThis;
+const { now: $now, UTC: $UTC } = Date;
+/** @type {Performance["now"]} */
+const $performanceNow = performance.now.bind(performance);
 
 //-----------------------------------------------------------------------------
 // Internal
@@ -42,8 +45,20 @@ const animationToId = (id) => ID_PREFIX.animation + String(id);
 
 const getDateParams = () => [
     ...dateParams.slice(0, -1),
-    dateParams.at(-1) + (Date.now() - dateTimeStamp) + timeOffset,
+    dateParams.at(-1) + getTimeStampDiff() + timeOffset,
 ];
+
+const getNextTimerValues = () => {
+    /** @type {[number, () => any, string] | null} */
+    let timerValues = null;
+    for (const [internalId, [callback, init, delay]] of timers.entries()) {
+        const timeout = init + delay;
+        if (!timerValues || timeout < timerValues[0]) {
+            timerValues = [timeout, callback, internalId];
+        }
+    }
+    return timerValues;
+};
 
 /**
  * @param {string} timeZone
@@ -59,6 +74,8 @@ const getOffsetFromTimeZone = (timeZone, baseDate) => {
     const tzDate = new Date(baseDate.toLocaleString("en-US", { timeZone }));
     return (utcDate.getTime() - tzDate.getTime()) / 60_000; // in minutes
 };
+
+const getTimeStampDiff = () => (freezed ? 0 : $now() - dateTimeStamp);
 
 /**
  * @param {string} id
@@ -80,7 +97,7 @@ const idToTimeout = (id) => Number(id.slice(ID_PREFIX.timeout.length));
  */
 const intervalToId = (id) => ID_PREFIX.interval + String(id);
 
-const now = () => performance.now() + timeOffset;
+const now = () => $performanceNow() + timeOffset;
 
 /**
  * @param {string | DateSpecs} dateSpecs
@@ -105,7 +122,7 @@ const parseDateParams = (dateSpecs) => {
  */
 const setDateParams = (newDateParams) => {
     dateParams = newDateParams;
-    dateTimeStamp = Date.now();
+    dateTimeStamp = $now();
     timeOffset = 0;
 };
 
@@ -129,8 +146,10 @@ const timers = new Map();
 
 let allowTimers = true;
 let dateParams = DEFAULT_DATE;
-let dateTimeStamp = Date.now();
+let dateTimeStamp = $now();
+let freezed = false;
 let frameDelay = 1000 / 60;
+let nextDummyId = 1;
 /** @type {string | number} */
 let timeZone = DEFAULT_TIMEZONE;
 let timeOffset = 0;
@@ -138,6 +157,13 @@ let timeOffset = 0;
 //-----------------------------------------------------------------------------
 // Exports
 //-----------------------------------------------------------------------------
+
+/**
+ * @param {number} [frameCount]
+ */
+export async function advanceFrame(frameCount) {
+    return advanceTime(frameDelay * $max(1, frameCount));
+}
 
 /**
  * Advances the current time by the given amount of milliseconds. This will
@@ -149,36 +175,30 @@ let timeOffset = 0;
  * @returns {Promise<number>} time consumed by timers (in ms).
  */
 export async function advanceTime(ms) {
-    const results = [];
-    const sortedTimers = [...timers.values()]
-        .map(([handler, init, delay]) => [handler, init + delay])
-        .sort((a, b) => a[1] - b[1]);
-    const baseMs = ms;
-    const baseTs = performance.now();
-
-    for (const [handler, timeout] of sortedTimers) {
-        const currentTs = baseTs + timeOffset;
-        if (timeout <= currentTs) {
-            // Should have already been triggered
-            // => simply triggers the handler
-            results.push(handler());
-        } else if (timeout <= currentTs + ms) {
-            // Will trigger after ms diff
-            // => advances time
-            const diff = timeout - currentTs;
-            timeOffset += diff;
-            ms = Math.max(ms - diff, 0);
-            results.push(handler());
+    const targetTime = now() + ms;
+    let remaining = ms;
+    /** @type {ReturnType<typeof getNextTimerValues>} */
+    let timerValues;
+    while ((timerValues = getNextTimerValues()) && timerValues[0] <= targetTime) {
+        const [timeout, handler, id] = timerValues;
+        const diff = timeout - now();
+        if (diff > 0) {
+            timeOffset += $min(remaining, diff);
+            remaining = $max(remaining - diff, 0);
+        }
+        if (timers.has(id)) {
+            handler(timeout);
         }
     }
 
-    timeOffset += ms;
+    if (remaining > 0) {
+        timeOffset += remaining;
+    }
 
     // Waits for callbacks to execute
-    await Promise.all(results);
-    await delay(1);
+    await animationFrame();
 
-    return baseMs;
+    return ms;
 }
 
 /**
@@ -207,10 +227,11 @@ export function cancelAllTimers() {
     }
 }
 
-export async function cleanupTime() {
-    await runAllTimers(true);
+export function cleanupTime() {
+    cancelAllTimers();
 
     setDateParams(DEFAULT_DATE);
+    freezed = false;
     timeZone = DEFAULT_TIMEZONE;
 }
 
@@ -224,6 +245,13 @@ export async function cleanupTime() {
  */
 export async function delay(duration) {
     await new Promise((resolve) => setTimeout(resolve, duration));
+}
+
+/**
+ * @param {boolean} setFreeze
+ */
+export function freezeTime(setFreeze) {
+    freezed = setFreeze ?? !freezed;
 }
 
 /**
@@ -260,19 +288,25 @@ export function mockDate(date, tz) {
 
 /** @type {typeof cancelAnimationFrame} */
 export function mockedCancelAnimationFrame(handle) {
-    cancelAnimationFrame(handle);
+    if (!freezed) {
+        cancelAnimationFrame(handle);
+    }
     timers.delete(animationToId(handle));
 }
 
 /** @type {typeof clearInterval} */
 export function mockedClearInterval(intervalId) {
-    clearInterval(intervalId);
+    if (!freezed) {
+        clearInterval(intervalId);
+    }
     timers.delete(intervalToId(intervalId));
 }
 
 /** @type {typeof clearTimeout} */
 export function mockedClearTimeout(timeoutId) {
-    clearTimeout(timeoutId);
+    if (!freezed) {
+        clearTimeout(timeoutId);
+    }
     timers.delete(timeoutToId(timeoutId));
 }
 
@@ -282,14 +316,19 @@ export function mockedRequestAnimationFrame(callback) {
         return 0;
     }
 
-    const handler = () => {
+    /**
+     * @param {number} delta
+     */
+    const handler = (delta) => {
         mockedCancelAnimationFrame(handle);
-        return callback(now() - animationValues[1]);
+        return callback(delta ?? now() - animationValues[1]);
     };
 
     const animationValues = [handler, now(), frameDelay];
-    const handle = requestAnimationFrame(handler);
-    timers.set(animationToId(handle), animationValues);
+    const handle = freezed ? nextDummyId++ : requestAnimationFrame(handler);
+    const internalId = animationToId(handle);
+    timers.set(internalId, animationValues);
+
     return handle;
 }
 
@@ -305,7 +344,7 @@ export function mockedSetInterval(callback, ms, ...args) {
 
     const handler = () => {
         if (allowTimers) {
-            intervalValues[1] += ms;
+            intervalValues[1] = Math.max(now(), intervalValues[1] + ms);
         } else {
             mockedClearInterval(intervalId);
         }
@@ -313,8 +352,10 @@ export function mockedSetInterval(callback, ms, ...args) {
     };
 
     const intervalValues = [handler, now(), ms];
-    const intervalId = setInterval(handler, ms);
-    timers.set(intervalToId(intervalId), intervalValues);
+    const intervalId = freezed ? nextDummyId++ : setInterval(handler, ms);
+    const internalId = intervalToId(intervalId);
+    timers.set(internalId, intervalValues);
+
     return intervalId;
 }
 
@@ -334,8 +375,10 @@ export function mockedSetTimeout(callback, ms, ...args) {
     };
 
     const timeoutValues = [handler, now(), ms];
-    const timeoutId = setTimeout(handler, ms);
-    timers.set(timeoutToId(timeoutId), timeoutValues);
+    const timeoutId = freezed ? nextDummyId++ : setTimeout(handler, ms);
+    const internalId = timeoutToId(timeoutId);
+    timers.set(internalId, timeoutValues);
+
     return timeoutId;
 }
 
@@ -356,6 +399,8 @@ export function mockedSetTimeout(callback, ms, ...args) {
  */
 export function mockTimeZone(tz) {
     timeZone = tz ?? DEFAULT_TIMEZONE;
+
+    mockTimeZone.onCall?.(tz);
 }
 
 /**
@@ -375,8 +420,8 @@ export async function runAllTimers(preventTimers = false) {
         allowTimers = false;
     }
 
-    const endts = Math.max(...[...timers.values()].map(([, init, delay]) => init + delay));
-    const ms = await advanceTime(Math.ceil(endts - now()));
+    const endts = $max(...[...timers.values()].map(([, init, delay]) => init + delay));
+    const ms = await advanceTime($ceil(endts - now()));
 
     if (preventTimers) {
         allowTimers = true;
@@ -415,9 +460,9 @@ export async function tick() {
  */
 export class Deferred extends Promise {
     /** @type {typeof Promise.resolve<T>} */
-    #resolve;
+    _resolve;
     /** @type {typeof Promise.reject<T>} */
-    #reject;
+    _reject;
 
     /**
      * @param {(resolve: (value: T) => void, reject: (reason?: any) => void) => void} [executor]
@@ -431,22 +476,22 @@ export class Deferred extends Promise {
             return executor?.(resolve, reject);
         });
 
-        this.#resolve = _resolve;
-        this.#reject = _reject;
+        this._resolve = _resolve;
+        this._reject = _reject;
     }
 
     /**
      * @param {any} [reason]
      */
     reject(reason) {
-        return this.#reject(reason);
+        return this._reject(reason);
     }
 
     /**
      * @param {T} [value]
      */
     resolve(value) {
-        return this.#resolve(value);
+        return this._resolve(value);
     }
 }
 
@@ -459,7 +504,7 @@ export class MockDate extends Date {
             for (let i = 0; i < params.length; i++) {
                 args[i] ??= params[i];
             }
-            super(Date.UTC(...args));
+            super($UTC(...args));
         }
     }
 
@@ -474,6 +519,6 @@ export class MockDate extends Date {
     }
 
     static now() {
-        return new this().getTime() + (Date.now() - dateTimeStamp) + timeOffset;
+        return new MockDate().getTime();
     }
 }

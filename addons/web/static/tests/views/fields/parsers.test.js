@@ -1,9 +1,8 @@
-import { before, expect, test } from "@odoo/hoot";
+import { beforeEach, expect, test } from "@odoo/hoot";
 import { makeMockEnv, patchWithCleanup } from "@web/../tests/web_test_helpers";
 
 import { localization } from "@web/core/l10n/localization";
 import { nbsp } from "@web/core/utils/strings";
-import { session } from "@web/session";
 import {
     parseFloat,
     parseFloatTime,
@@ -12,9 +11,7 @@ import {
     parsePercentage,
 } from "@web/views/fields/parsers";
 
-before(async () => {
-    await makeMockEnv();
-});
+beforeEach(makeMockEnv);
 
 test("parseFloat", () => {
     expect(parseFloat("")).toBe(0);
@@ -111,21 +108,6 @@ test("parsers fallback on english localisation", () => {
 });
 
 test("parseMonetary", () => {
-    patchWithCleanup(session, {
-        currencies: {
-            1: {
-                digits: [69, 2],
-                position: "after",
-                symbol: "€",
-            },
-            3: {
-                digits: [69, 2],
-                position: "before",
-                symbol: "$",
-            },
-        },
-    });
-
     expect(parseMonetary("")).toBe(0);
     expect(parseMonetary("0")).toBe(0);
     expect(parseMonetary("100.00\u00a0€")).toBe(100);

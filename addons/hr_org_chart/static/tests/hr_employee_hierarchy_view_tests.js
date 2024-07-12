@@ -1,16 +1,13 @@
 /** @odoo-module */
 
-import { registry } from "@web/core/registry";
 import { click, getFixture } from "@web/../tests/helpers/utils";
 import { makeView, setupViewRegistries } from "@web/../tests/views/helpers";
+import { registry } from "@web/core/registry";
 
 let serverData, target;
 
-const serviceRegistry = registry.category("services");
-
 QUnit.module("Views", (hooks) => {
     hooks.beforeEach(() => {
-        serviceRegistry.add("mail.thread", { start() {} });
         serverData = {
             models: {
                 "hr.employee": {
@@ -62,6 +59,7 @@ QUnit.module("Views", (hooks) => {
         };
         setupViewRegistries();
         target = getFixture();
+        registry.category("services").add("mail.store", { start() {} })
     });
 
     QUnit.module("HrEmployeeHierarchy View");
@@ -74,7 +72,7 @@ QUnit.module("Views", (hooks) => {
         });
 
         assert.containsOnce(target, ".o_hierarchy_view");
-        assert.containsN(target, ".o_hierarchy_button_add", 2);
+        assert.containsOnce(target, ".o_hierarchy_button_add");
         assert.containsOnce(target, ".o_hierarchy_view .o_hierarchy_renderer");
         assert.containsOnce(
             target,

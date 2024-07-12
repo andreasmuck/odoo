@@ -10,13 +10,13 @@ import {
     onRpc,
 } from "../../web_test_helpers";
 
-onRpc("/web/dataset/call_kw/res.users/has_group", () => true);
-
 class Product extends models.Model {
     url = fields.Char();
 }
 
 defineModels([Product]);
+
+onRpc("has_group", () => true);
 
 test("UrlField in form view", async () => {
     Product._records = [{ id: 1, url: "https://www.example.com" }];
@@ -167,4 +167,14 @@ test("with placeholder", async () => {
         arch: `<form><field name="url" widget="url" placeholder="Placeholder"/></form>`,
     });
     expect(`.o_field_widget input`).toHaveAttribute("placeholder", "Placeholder");
+});
+
+test("with non falsy, but non url value", async () => {
+    Product._fields.url = fields.Char({ default: "odoo://hello" });
+    await mountView({
+        type: "form",
+        resModel: "product",
+        arch: `<form><field name="url" widget="url"/></form>`,
+    });
+    expect(".o_field_widget[name=url] a").toHaveAttribute("href", "http://odoo://hello");
 });

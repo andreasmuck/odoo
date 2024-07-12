@@ -75,6 +75,7 @@ class HrExpense(models.Model):
     product_has_tax = fields.Boolean(string="Whether tax is defined on a selected product", compute='_compute_from_product')
     quantity = fields.Float(required=True, digits='Product Unit of Measure', default=1)
     description = fields.Text(string="Internal Notes")
+    message_main_attachment_checksum = fields.Char(related='message_main_attachment_id.checksum')
     nb_attachment = fields.Integer(string="Number of Attachments", compute='_compute_nb_attachment')
     attachment_ids = fields.One2many(
         comodel_name='ir.attachment',
@@ -107,6 +108,7 @@ class HrExpense(models.Model):
     approved_by = fields.Many2one(comodel_name='res.users', string="Approved By", related='sheet_id.user_id', tracking=False)
     approved_on = fields.Datetime(string="Approved On", related='sheet_id.approval_date')
     duplicate_expense_ids = fields.Many2many(comodel_name='hr.expense', compute='_compute_duplicate_expense_ids')  # Used to trigger warnings
+    same_receipt_expense_ids = fields.Many2many(comodel_name='hr.expense', compute='_compute_same_receipt_expense_ids')  # Used to trigger warnings
 
     # Amount fields
     tax_amount_currency = fields.Monetary(
@@ -161,7 +163,7 @@ class HrExpense(models.Model):
         string="Is currency_id different from the company_currency_id",
         compute='_compute_is_multiple_currency',
     )
-    currency_rate = fields.Float(compute='_compute_currency_rate', digits=(12, 6), readonly=True, tracking=True)
+    currency_rate = fields.Float(compute='_compute_currency_rate', digits=(16, 9), readonly=True, tracking=True)
     label_currency_rate = fields.Char(compute='_compute_currency_rate', readonly=True)
 
     # Account fields
@@ -189,7 +191,8 @@ class HrExpense(models.Model):
         column2='tax_id',
         string="Included taxes",
         compute='_compute_tax_ids', precompute=True, store=True, readonly=False,
-        domain="[('company_id', '=', company_id), ('type_tax_use', '=', 'purchase')]",
+        domain="[('type_tax_use', '=', 'purchase')]",
+        check_company=True,
         help="Both price-included and price-excluded taxes will behave as price-included taxes for expenses.",
     )
     accounting_date = fields.Date(  # The date used for the accounting entries or the one we'd like to use if not yet posted
@@ -204,8 +207,9 @@ class HrExpense(models.Model):
 
     @api.depends('product_has_cost')
     def _compute_currency_id(self):
-        for expense in self.filtered("product_has_cost"):
-            expense.currency_id = expense.company_currency_id
+        for expense in self:
+            if expense.product_has_cost and expense.state in {'draft', 'reported'}:
+                expense.currency_id = expense.company_currency_id
 
     @api.depends('sheet_id.is_editable')
     def _compute_is_editable(self):
@@ -218,7 +222,7 @@ class HrExpense(models.Model):
     @api.onchange('product_has_cost')
     def _onchange_product_has_cost(self):
         """ Reset quantity to 1, in case of 0-cost product. To make sure switching non-0-cost to 0-cost doesn't keep the quantity."""
-        if not self.product_has_cost:
+        if not self.product_has_cost and self.state in {'draft', 'reported'}:
             self.quantity = 1
 
     @api.depends_context('lang')
@@ -391,7 +395,7 @@ class HrExpense(models.Model):
             else:  # Mono-currency case computation shortcut
                 expense.tax_amount = expense.tax_amount_currency
 
-    @api.depends('total_amount', 'total_amount_currency', 'nb_attachment')
+    @api.depends('total_amount', 'total_amount_currency')
     def _compute_price_unit(self):
         """
            The price_unit is the unit price of the product if no product is set and no attachment overrides it.
@@ -399,8 +403,10 @@ class HrExpense(models.Model):
            when edited after creation.
         """
         for expense in self:
+            if expense.state not in {'draft', 'reported'}:
+                continue
             product_id = expense.product_id
-            if product_id and expense.product_has_cost and not expense.nb_attachment:
+            if expense._needs_product_price_computation():
                 expense.price_unit = product_id._price_compute(
                     'standard_price',
                     uom=expense.product_uom_id,
@@ -408,6 +414,11 @@ class HrExpense(models.Model):
                 )[product_id.id]
             else:
                 expense.price_unit = expense.company_currency_id.round(expense.total_amount / expense.quantity) if expense.quantity else 0.
+
+    def _needs_product_price_computation(self):
+        # Hook to be overridden.
+        self.ensure_one()
+        return self.product_has_cost
 
     @api.depends('product_id', 'company_id')
     def _compute_account_id(self):
@@ -425,6 +436,29 @@ class HrExpense(models.Model):
         if not self.env.context.get('default_employee_id'):
             for expense in self:
                 expense.employee_id = self.env.user.with_company(expense.company_id).employee_id
+
+    @api.depends('attachment_ids')
+    def _compute_same_receipt_expense_ids(self):
+        self.same_receipt_expense_ids = [Command.clear()]
+
+        expenses_with_attachments = self.filtered(lambda expense: expense.attachment_ids)
+        if not expenses_with_attachments:
+            return
+
+        expenses_groupby_checksum = dict(self.env['ir.attachment']._read_group(domain=[
+            ('res_model', '=', 'hr.expense'),
+            ('checksum', 'in', expenses_with_attachments.attachment_ids.mapped('checksum'))],
+            groupby=['checksum'],
+            aggregates=['res_id:array_agg'],
+        ))
+
+        for expense in expenses_with_attachments:
+            same_receipt_ids = set()
+            for attachment in expense.attachment_ids:
+                same_receipt_ids.update(expenses_groupby_checksum[attachment.checksum])
+            same_receipt_ids.remove(expense.id)
+
+            expense.same_receipt_expense_ids = [Command.set(list(same_receipt_ids))]
 
     @api.depends('employee_id', 'product_id', 'total_amount_currency')
     def _compute_duplicate_expense_ids(self):
@@ -452,12 +486,14 @@ class HrExpense(models.Model):
                 expenses_duplicates.duplicate_expense_ids = [Command.set(duplicates_ids)]
                 expenses = expenses - expenses_duplicates
 
-    @api.depends('product_id', 'account_id')
+    @api.depends('product_id', 'account_id', 'employee_id')
     def _compute_analytic_distribution(self):
         for expense in self:
             distribution = self.env['account.analytic.distribution.model']._get_distribution({
                 'product_id': expense.product_id.id,
                 'product_categ_id': expense.product_id.categ_id.id,
+                'partner_id': expense.employee_id.work_contact_id.id,
+                'partner_category_id': expense.employee_id.work_contact_id.category_id.ids,
                 'account_prefix': expense.account_id.code,
                 'company_id': expense.company_id.id,
             })
@@ -477,7 +513,7 @@ class HrExpense(models.Model):
     def _check_payment_mode(self):
         self.sheet_id._check_payment_mode()
 
-    def _convert_to_tax_base_line_dict(self, base_line=None, currency=None, price_unit=None, quantity=None):
+    def _convert_to_tax_base_line_dict(self, base_line=None, currency=None, price_unit=None, quantity=None, account=None):
         self.ensure_one()
         return self.env['account.tax']._convert_to_tax_base_line_dict(
             base_line,
@@ -486,15 +522,16 @@ class HrExpense(models.Model):
             taxes=self.tax_ids,
             price_unit=price_unit or self.total_amount,
             quantity=quantity if quantity is not None else 1,
-            account=self.account_id,
+            account=account or self.account_id,
             analytic_distribution=self.analytic_distribution,
             extra_context={'force_price_include': True},
         )
 
     def attach_document(self, **kwargs):
         """When an attachment is uploaded as a receipt, set it as the main attachment."""
-        self.message_main_attachment_id = kwargs['attachment_ids'][-1]
+        self._message_set_main_attachment_id(self.env["ir.attachment"].browse(kwargs['attachment_ids'][-1:]), force=True)
 
+    @api.model
     def create_expense_from_attachments(self, attachment_ids=None, view_type='list'):
         """
             Create the expenses from files.
@@ -520,21 +557,21 @@ class HrExpense(models.Model):
             vals = {
                 'name': attachment_name,
                 'price_unit': 0,
-                'product_id': self.env.company.expense_product_id.id or product.id,
+                'product_id': product.id,
             }
             if product.property_account_expense_id:
                 vals['account_id'] = product.property_account_expense_id.id
             expense = self.env['hr.expense'].create(vals)
             attachment.write({'res_model': 'hr.expense', 'res_id': expense.id})
 
-            attachment.register_as_main_attachment()
+            expense._message_set_main_attachment_id(attachment, force=True)
             expenses += expense
         return {
             'name': _('Generate Expenses'),
             'res_model': 'hr.expense',
             'type': 'ir.actions.act_window',
             'views': [[False, view_type], [False, "form"]],
-            'context': {'search_default_my_expenses': 1, 'search_default_no_report': 1},
+            'domain': [('id', 'in', expenses.ids)],
         }
 
     # ----------------------------------------
@@ -633,17 +670,26 @@ class HrExpense(models.Model):
             # encode, but force %20 encoding for space instead of a + (URL / mailto difference)
             params = werkzeug.urls.url_encode({'subject': _("Lunch with customer $12.32")}).replace('+', '%20')
             return Markup(
-                """<p>%(send_string)s <a href="mailto:%(alias_email)s?%(params)s">%(alias_email)s</a></p>"""
+                """<div class="text-muted mt-4">%(send_string)s <a class="text-body" href="mailto:%(alias_email)s?%(params)s">%(alias_email)s</a></div>"""
             ) % {
                 'alias_email': expense_alias.display_name,
                 'params': params,
-                'send_string': _("Or send your receipts at"),
+                'send_string': _("Tip: try sending receipts by email"),
             }
         return ""
+
+    def get_expense_attachments(self):
+        return self.attachment_ids.mapped('image_src')
 
     # ----------------------------------------
     # Actions
     # ----------------------------------------
+
+    def action_show_same_receipt_expense_ids(self):
+        self.ensure_one()
+        return self.same_receipt_expense_ids._get_records_action(
+            name=_("Expenses with a similar receipt to %(other_expense_name)s", other_expense_name=self.name),
+        )
 
     def action_view_sheet(self):
         self.ensure_one()
@@ -661,7 +707,7 @@ class HrExpense(models.Model):
         expenses_with_amount = self.filtered(lambda expense: not (
             expense.currency_id.is_zero(expense.total_amount_currency)
             or expense.company_currency_id.is_zero(expense.total_amount)
-            or not float_round(expense.quantity, precision_rounding=expense.product_uom_id.rounding)
+            or (expense.product_id and not float_round(expense.quantity, precision_rounding=expense.product_uom_id.rounding))
         ))
 
         if any(expense.state != 'draft' or expense.sheet_id for expense in expenses_with_amount):
@@ -809,8 +855,10 @@ class HrExpense(models.Model):
         if not payment_method_line:
             raise UserError(_("You need to add a manual payment method on the journal (%s)", journal.name))
         move_lines = []
-        tax_data = self.env['account.tax']._compute_taxes(
-            [self._convert_to_tax_base_line_dict(price_unit=self.total_amount_currency, currency=self.currency_id)],
+        tax_data = self.env['account.tax'].with_context(
+            caba_no_transition_account=self.payment_mode == 'company_account',
+        )._compute_taxes(
+            [self._convert_to_tax_base_line_dict(price_unit=self.total_amount_currency, currency=self.currency_id, account=self._get_base_account())],
             self.company_id,
         )
         rate = abs(self.total_amount_currency / self.total_amount) if self.total_amount else 1.0
@@ -860,6 +908,7 @@ class HrExpense(models.Model):
         })
         return {
             **self.sheet_id._prepare_move_vals(),
+            'date': self.date,  # Overidden from self.sheet_id._prepare_move_vals() so we can use the expense date for the account move date
             'ref': self.name,
             'journal_id': journal.id,
             'move_type': 'entry',
@@ -875,16 +924,43 @@ class HrExpense(models.Model):
                 for attachment in self.message_main_attachment_id]
         }
 
+    def _get_base_account(self):
+        """
+        Returns the expense account or forces default values if none was found
+        We need to do this as the installation process may delete the original account, and it doesn't recompute properly after
+        Returned expense accounts are the first expense account encountered in the following list:
+        1. expense account of the expense itself
+        2. expense account of the product
+        3. expense account of the product category
+        4. expense account on the purchase journal for employee expense
+        """
+
+        # expense account of the expense itself
+        account = self.account_id
+
+        if account:
+            return account
+
+        # expense account of the product then the product category
+        if self.product_id:
+            account = self.product_id.product_tmpl_id._get_product_accounts()['expense']
+        else:
+            account = self.env['ir.property']._get('property_account_expense_categ_id', 'product.category')
+
+        if account:
+            return account
+
+        # expense account on the purchase journal for employee expense
+        journal = self.sheet_id.journal_id
+        if journal.type == 'purchase':
+            account = journal.default_account_id
+
+        return account
+
     def _prepare_move_lines_vals(self):
         self.ensure_one()
-        account = self.account_id
-        if not account:
-            # We need to do this as the installation process may delete the original account, and it doesn't recompute properly after.
-            # This forces the default values if none is found
-            if self.product_id:
-                account = self.product_id.product_tmpl_id._get_product_accounts()['expense']
-            else:
-                account = self.env['ir.property']._get('property_account_expense_categ_id', 'product.category')
+        account = self._get_base_account()
+
         expense_name = self.name.split('\n')[0][:64]
         return {
             'name': f'{self.employee_id.name}: {expense_name}',
@@ -947,11 +1023,7 @@ class HrExpense(models.Model):
     @api.model
     def message_new(self, msg_dict, custom_values=None):
         email_address = email_split(msg_dict.get('email_from', False))[0]
-
-        employee = self.env['hr.employee'].search(
-            ['|', ('work_email', 'ilike', email_address), ('user_id.email', 'ilike', email_address)],
-            limit=1,
-        )
+        employee = self._get_employee_from_email(email_address)
 
         if not employee:
             return super().message_new(msg_dict, custom_values=custom_values)
@@ -992,6 +1064,29 @@ class HrExpense(models.Model):
         expense = super().message_new(msg_dict, dict(custom_values or {}, **vals))
         self._send_expense_success_mail(msg_dict, expense)
         return expense
+
+    @api.model
+    def _get_employee_from_email(self, email_address):
+        employee = self.env['hr.employee'].search([
+            ('user_id', '!=', False),
+            '|',
+            ('work_email', 'ilike', email_address),
+            ('user_id.email', 'ilike', email_address),
+        ])
+
+        if len(employee) > 1:
+            # Several employees can be linked to the same user.
+            # In that case, we only keep the employee that matched the user's company.
+            return employee.filtered(lambda e: e.company_id == e.user_id.company_id)
+
+        if not employee:
+            # An employee does not always have a user.
+            return self.env['hr.employee'].search([
+                ('user_id', '=', False),
+                ('work_email', 'ilike', email_address),
+            ], limit=1)
+
+        return employee
 
     @api.model
     def _parse_product(self, expense_description):

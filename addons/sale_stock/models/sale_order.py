@@ -33,7 +33,10 @@ class SaleOrder(models.Model):
         ('pending', 'Not Delivered'),
         ('partial', 'Partially Delivered'),
         ('full', 'Fully Delivered'),
-    ], string='Delivery Status', compute='_compute_delivery_status', store=True)
+    ], string='Delivery Status', compute='_compute_delivery_status', store=True,
+       help="Red: Late\n\
+            Orange: To process today\n\
+            Green: On time")
     procurement_group_id = fields.Many2one('procurement.group', 'Procurement Group', copy=False)
     effective_date = fields.Datetime("Effective Date", compute='_compute_effective_date', store=True, help="Completion date of the first delivery order.")
     expected_date = fields.Datetime( help="Delivery date you can promise to the customer, computed from the minimum lead time of "
@@ -85,14 +88,11 @@ class SaleOrder(models.Model):
     @api.depends('picking_policy')
     def _compute_expected_date(self):
         super(SaleOrder, self)._compute_expected_date()
-        for order in self:
-            dates_list = []
-            for line in order.order_line.filtered(lambda x: x.state != 'cancel' and not x._is_delivery() and not x.display_type):
-                dt = line._expected_date()
-                dates_list.append(dt)
-            if dates_list:
-                expected_date = min(dates_list) if order.picking_policy == 'direct' else max(dates_list)
-                order.expected_date = fields.Datetime.to_string(expected_date)
+
+    def _select_expected_date(self, expected_dates):
+        if self.picking_policy == "direct":
+            return super()._select_expected_date(expected_dates)
+        return max(expected_dates)
 
     def write(self, values):
         if values.get('order_line') and self.state == 'sale':
@@ -104,9 +104,9 @@ class SaleOrder(models.Model):
             for record in self:
                 picking = record.mapped('picking_ids').filtered(lambda x: x.state not in ('done', 'cancel'))
                 message = _("""The delivery address has been changed on the Sales Order<br/>
-                        From <strong>"%s"</strong> To <strong>"%s"</strong>,
+                        From <strong>"%(old_address)s"</strong> to <strong>"%(new_address)s"</strong>,
                         You should probably update the partner on this document.""",
-                            record.partner_shipping_id.display_name, new_partner.display_name)
+                            old_address=record.partner_shipping_id.display_name, new_address=new_partner.display_name)
                 picking.activity_schedule('mail.mail_activity_data_warning', note=message, user_id=self.env.user.id)
 
         if 'commitment_date' in values:
@@ -225,11 +225,11 @@ class SaleOrder(models.Model):
             picking_id = picking_id[0]
         else:
             picking_id = pickings[0]
-        action['context'] = dict(self._context, default_partner_id=self.partner_id.id, default_picking_type_id=picking_id.picking_type_id.id, default_origin=self.name, default_group_id=picking_id.group_id.id)
+        action['context'] = dict(default_partner_id=self.partner_id.id, default_picking_type_id=picking_id.picking_type_id.id, default_origin=self.name, default_group_id=picking_id.group_id.id)
         return action
 
-    def _prepare_invoice(self):
-        invoice_vals = super(SaleOrder, self)._prepare_invoice()
+    def _prepare_account_move_values(self):
+        invoice_vals = super()._prepare_account_move_values()
         invoice_vals['invoice_incoterm_id'] = self.incoterm.id
         return invoice_vals
 

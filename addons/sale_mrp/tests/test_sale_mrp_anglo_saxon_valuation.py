@@ -10,19 +10,18 @@ from odoo.addons.stock_account.tests.test_anglo_saxon_valuation_reconciliation_c
 class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
         cls.env.user.company_id.anglo_saxon_accounting = True
         cls.uom_unit = cls.env.ref('uom.product_uom_unit')
 
-    def _create_product(self, name, product_type, price):
-        return self.env['product.product'].create({
-            'name': name,
-            'type': product_type,
-            'standard_price': price,
-            'categ_id': self.stock_account_product_categ.id if product_type == 'product' else self.env.ref('product.product_category_all').id,
-        })
+    @classmethod
+    def _create_product(cls, **kwargs):
+        return super()._create_product(
+            categ_id=cls.stock_account_product_categ.id if kwargs.get('is_storable') else cls.env.ref('product.product_category_all').id,
+            **kwargs
+        )
 
     def test_sale_mrp_kit_bom_cogs(self):
         """Check invoice COGS aml after selling and delivering a product
@@ -44,11 +43,11 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
         #     * 3 x Component BB (Cost: $5, Consumable)
         # ----------------------------------------------
 
-        self.component_a = self._create_product('Component A', 'product', 3.00)
-        self.component_b = self._create_product('Component B', 'product', 4.00)
-        self.component_bb = self._create_product('Component BB', 'consu', 5.00)
-        self.kit_a = self._create_product('Kit A', 'product', 0.00)
-        self.kit_b = self._create_product('Kit B', 'consu', 0.00)
+        self.component_a = self._create_product(name='Component A', is_storable=True, standard_price=3.00)
+        self.component_b = self._create_product(name='Component B', is_storable=True, standard_price=4.00)
+        self.component_bb = self._create_product(name='Component BB', is_storable=False, standard_price=5.00)
+        self.kit_a = self._create_product(name='Kit A', is_storable=True, standard_price=0.00)
+        self.kit_b = self._create_product(name='Kit B', is_storable=False, standard_price=0.00)
 
         self.kit_a.write({
             'property_account_expense_id': self.company_data['default_account_expense'].id,
@@ -92,7 +91,7 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
                     'product_uom_qty': 1.0,
                     'product_uom': self.kit_a.uom_id.id,
                     'price_unit': 1,
-                    'tax_id': False,
+                    'tax_ids': False,
                 })],
         })
         so.action_confirm()
@@ -126,7 +125,7 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
         # Create Product template with variants
         self.product_template = self.env['product.template'].create({
             'name': 'Product Template',
-            'type': 'product',
+            'is_storable': True,
             'uom_id': self.uom_unit.id,
             'invoice_policy': 'delivery',
             'categ_id': self.stock_account_product_categ.id,
@@ -145,7 +144,7 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
         def create_simple_bom_for_product(product, name, price):
             component = self.env['product.product'].create({
                 'name': 'Component ' + name,
-                'type': 'product',
+                'is_storable': True,
                 'uom_id': self.uom_unit.id,
                 'categ_id': self.stock_account_product_categ.id,
                 'standard_price': price
@@ -193,7 +192,7 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
             pick.button_validate()
             # Create the invoice
             so._create_invoices()
-            invoice = so.invoice_ids
+            invoice = so.account_move_ids
             invoice.action_post()
             return invoice
 
@@ -220,8 +219,8 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
         """
         self.stock_account_product_categ.property_cost_method = 'fifo'
 
-        kit = self._create_product('Simple Kit', 'product', 0)
-        component = self._create_product('Compo A', 'product', 0)
+        kit = self._create_product(name='Simple Kit', is_storable=True, standard_price=0)
+        component = self._create_product(name='Compo A', is_storable=True, standard_price=0)
         kit.property_account_expense_id = self.company_data['default_account_expense']
 
         self.env['mrp.bom'].create({
@@ -255,7 +254,7 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
                     'product_uom_qty': 3.0,
                     'product_uom': kit.uom_id.id,
                     'price_unit': 100,
-                    'tax_id': False,
+                    'tax_ids': False,
                 })],
         })
         so.action_confirm()
@@ -292,8 +291,7 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
         # Return the second picking (i.e. one component @20)
         ctx = {'active_id': pickings[1].id, 'active_model': 'stock.picking'}
         return_wizard = Form(self.env['stock.return.picking'].with_context(ctx)).save()
-        return_picking_id, dummy = return_wizard._create_returns()
-        return_picking = self.env['stock.picking'].browse(return_picking_id)
+        return_picking = return_wizard._create_return()
         return_picking.move_ids.write({'quantity': 1, 'picked': True})
         return_picking.button_validate()
 
@@ -324,8 +322,8 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
         """
         self.stock_account_product_categ.property_cost_method = 'fifo'
 
-        kit = self._create_product('Simple Kit', 'product', 0)
-        component = self._create_product('Compo A', 'product', 0)
+        kit = self._create_product(name='Simple Kit', is_storable=True, standard_price=0)
+        component = self._create_product(name='Compo A', is_storable=True, standard_price=0)
         (kit + component).invoice_policy = 'delivery'
         kit.property_account_expense_id = self.company_data['default_account_expense']
 
@@ -360,7 +358,7 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
                     'product_uom_qty': 3.0,
                     'product_uom': kit.uom_id.id,
                     'price_unit': 100,
-                    'tax_id': False,
+                    'tax_ids': False,
                 })],
         })
         so.action_confirm()
@@ -397,8 +395,7 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
         # Return the second picking (i.e. one component @20)
         ctx = {'active_id': pickings[1].id, 'active_model': 'stock.picking'}
         return_wizard = Form(self.env['stock.return.picking'].with_context(ctx)).save()
-        return_picking_id, dummy = return_wizard._create_returns()
-        return_picking = self.env['stock.picking'].browse(return_picking_id)
+        return_picking = return_wizard._create_return()
         return_picking.move_ids.write({'quantity': 1, 'picked': True})
         return_picking.button_validate()
 
@@ -407,7 +404,7 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
         create_invoice_wizard = self.env['sale.advance.payment.inv'].with_context(ctx).create(
             {'advance_payment_method': 'delivered'})
         create_invoice_wizard.create_invoices()
-        reverse_invoice = so.invoice_ids[-1]
+        reverse_invoice = so.account_move_ids[-1]
         with Form(reverse_invoice) as reverse_invoice_form:
             with reverse_invoice_form.invoice_line_ids.edit(0) as line:
                 line.quantity = 1
@@ -424,9 +421,9 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
     def test_kit_avco_fully_owned_and_delivered_invoice_post_delivery(self):
         self.stock_account_product_categ.property_cost_method = 'average'
 
-        compo01 = self._create_product('Compo 01', 'product', 10)
-        compo02 = self._create_product('Compo 02', 'product', 20)
-        kit = self._create_product('Kit', 'product', 0)
+        compo01 = self._create_product(name='Compo 01', is_storable=True, standard_price=10)
+        compo02 = self._create_product(name='Compo 02', is_storable=True, standard_price=20)
+        kit = self._create_product(name='Kit', is_storable=True, standard_price=0)
 
         (compo01 + compo02 + kit).invoice_policy = 'delivery'
 
@@ -454,7 +451,7 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
                     'product_uom_qty': 1.0,
                     'product_uom': kit.uom_id.id,
                     'price_unit': 5,
-                    'tax_id': False,
+                    'tax_ids': False,
                 })],
         })
         so.action_confirm()
@@ -475,9 +472,9 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
     def test_kit_avco_partially_owned_and_delivered_invoice_post_delivery(self):
         self.stock_account_product_categ.property_cost_method = 'average'
 
-        compo01 = self._create_product('Compo 01', 'product', 10)
-        compo02 = self._create_product('Compo 02', 'product', 20)
-        kit = self._create_product('Kit', 'product', 0)
+        compo01 = self._create_product(name='Compo 01', is_storable=True, standard_price=10)
+        compo02 = self._create_product(name='Compo 02', is_storable=True, standard_price=20)
+        kit = self._create_product(name='Kit', is_storable=True, standard_price=0)
 
         (compo01 + compo02 + kit).invoice_policy = 'delivery'
 
@@ -507,7 +504,7 @@ class TestSaleMRPAngloSaxonValuation(ValuationReconciliationTestCommon):
                     'product_uom_qty': 2.0,
                     'product_uom': kit.uom_id.id,
                     'price_unit': 5,
-                    'tax_id': False,
+                    'tax_ids': False,
                 })],
         })
         so.action_confirm()

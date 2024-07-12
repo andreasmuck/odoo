@@ -32,11 +32,11 @@ class MrpBom(models.Model):
     product_tmpl_id = fields.Many2one(
         'product.template', 'Product',
         check_company=True, index=True,
-        domain="[('type', 'in', ['product', 'consu'])]", required=True)
+        domain="[('type', '=', 'consu')]", required=True)
     product_id = fields.Many2one(
         'product.product', 'Product Variant',
         check_company=True, index=True,
-        domain="['&', ('product_tmpl_id', '=', product_tmpl_id), ('type', 'in', ['product', 'consu'])]",
+        domain="['&', ('product_tmpl_id', '=', product_tmpl_id), ('type', '=', 'consu')]",
         help="If a product variant is defined the BOM is available only for this product.")
     bom_line_ids = fields.One2many('mrp.bom.line', 'bom_id', 'BoM Lines', copy=True)
     byproduct_ids = fields.One2many('mrp.bom.byproduct', 'bom_id', 'By-products', copy=True)
@@ -143,11 +143,11 @@ class MrpBom(models.Model):
                     _check_cycle(subcomponents, finished_products | component)
 
         boms_to_check = self
-        domain = []
-        for product in self.bom_line_ids.product_id:
-            domain = OR([domain, self._bom_find_domain(product)])
-        if domain:
-            boms_to_check |= self.env['mrp.bom'].search(domain)
+        if self.bom_line_ids.product_id:
+            boms_to_check |= self.search(OR([
+                self._bom_find_domain(product)
+                for product in self.bom_line_ids.product_id
+            ]))
 
         for bom in boms_to_check:
             if not bom.active:
@@ -191,7 +191,7 @@ class MrpBom(models.Model):
 
     @api.onchange('bom_line_ids', 'product_qty')
     def onchange_bom_structure(self):
-        if self.type == 'phantom' and self._origin and self.env['stock.move'].search([('bom_line_id', 'in', self._origin.bom_line_ids.ids)], limit=1):
+        if self.type == 'phantom' and self._origin and self.env['stock.move'].search_count([('bom_line_id', 'in', self._origin.bom_line_ids.ids)], limit=1):
             return {
                 'warning': {
                     'title': _('Warning'),
@@ -229,7 +229,7 @@ class MrpBom(models.Model):
                 domain.append(('id', '!=', self.id.origin))
             number_of_bom_of_this_product = self.env['mrp.bom'].search_count(domain)
             if number_of_bom_of_this_product:  # add a reference to the bom if there is already a bom for this product
-                self.code = _("%s (new) %s", self.product_tmpl_id.name, number_of_bom_of_this_product)
+                self.code = _("%(product_name)s (new) %(number_of_boms)s", product_name=self.product_tmpl_id.name, number_of_boms=number_of_bom_of_this_product)
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -308,7 +308,7 @@ class MrpBom(models.Model):
 
     @api.ondelete(at_uninstall=False)
     def _unlink_except_running_mo(self):
-        if self.env['mrp.production'].search([('bom_id', 'in', self.ids), ('state', 'not in', ['done', 'cancel'])], limit=1):
+        if self.env['mrp.production'].search_count([('bom_id', 'in', self.ids), ('state', 'not in', ['done', 'cancel'])], limit=1):
             raise UserError(_('You can not delete a Bill of Material with running manufacturing orders.\nPlease close or cancel it first.'))
 
     @api.model
@@ -443,7 +443,10 @@ class MrpBom(models.Model):
         return {**default_data, **new_default_data}
 
     def _get_product_catalog_order_data(self, products, **kwargs):
-        return {product.id: self._get_product_price_and_data(product) for product in products}
+        product_catalog = super()._get_product_catalog_order_data(products, **kwargs)
+        for product in products:
+            product_catalog[product.id] |= self._get_product_price_and_data(product)
+        return product_catalog
 
     def _get_product_price_and_data(self, product):
         self.ensure_one()
@@ -472,6 +475,36 @@ class MrpBom(models.Model):
             self.write({child_field: [command]})
 
         return self.env['product.product'].browse(product_id).standard_price
+
+    # -------------------------------------------------------------------------
+    # DOCUMENT
+    # -------------------------------------------------------------------------
+
+    def _get_mail_thread_data_attachments(self):
+        res = super()._get_mail_thread_data_attachments()
+        return res | self._get_extra_attachments()
+
+    def _get_extra_attachments(self):
+        final_domain = []
+        bom_domain = [('attached_on_mrp', '=', 'bom')]
+        is_byproduct = self.env.user.has_group('mrp.group_mrp_byproducts')
+        for bom in self:
+            product_subdomain = ['|',
+                '&', ('res_model', '=', 'product.product'), ('res_id', '=', bom.product_id.id),
+                '&', ('res_model', '=', 'product.template'), ('res_id', '=', bom.product_tmpl_id.id)]
+            if is_byproduct:
+                product_domain = OR([product_subdomain, [
+                    '|',
+                    '&', ('res_model', '=', 'product.product'), ('res_id', 'in', bom.byproduct_ids.product_id.ids),
+                    '&', ('res_model', '=', 'product.template'), ('res_id', 'in', bom.byproduct_ids.product_id.product_tmpl_id.ids)]])
+            else:
+                product_domain = product_subdomain
+            prod_final_domain = AND([bom_domain, product_domain])
+            final_domain = OR([final_domain, prod_final_domain]) if final_domain else prod_final_domain
+
+        attachements = self.env['product.document'].search(final_domain).ir_attachment_id
+        return attachements
+
 
 class MrpBomLine(models.Model):
     _name = 'mrp.bom.line'
@@ -545,10 +578,11 @@ class MrpBomLine(models.Model):
     @api.depends('product_id')
     def _compute_attachments_count(self):
         for line in self:
-            nbr_attach = self.env['mrp.document'].search_count([
+            nbr_attach = self.env['product.document'].search_count([
+                '&', '&', ('attached_on_mrp', '=', 'bom'), ('active', '=', 't'),
                 '|',
                 '&', ('res_model', '=', 'product.product'), ('res_id', '=', line.product_id.id),
-                '&', ('res_model', '=', 'product.template'), ('res_id', '=', line.product_id.product_tmpl_id.id)])
+                '&', ('res_model', '=', 'product.template'), ('res_id', '=', line.product_tmpl_id.id)])
             line.attachments_count = nbr_attach
 
     @api.depends('child_bom_id')
@@ -590,25 +624,35 @@ class MrpBomLine(models.Model):
 
     def action_see_attachments(self):
         domain = [
+            '&', ('attached_on_mrp', '=', 'bom'),
             '|',
             '&', ('res_model', '=', 'product.product'), ('res_id', '=', self.product_id.id),
             '&', ('res_model', '=', 'product.template'), ('res_id', '=', self.product_id.product_tmpl_id.id)]
-        attachment_view = self.env.ref('mrp.view_document_file_kanban_mrp')
+        attachments = self.env['product.document'].search(domain)
+        nbr_product_attach = len(attachments.filtered(lambda a: a.res_model == 'product.product'))
+        nbr_template_attach = len(attachments.filtered(lambda a: a.res_model == 'product.template'))
+        context = {'default_res_model': 'product.product',
+            'default_res_id': self.product_id.id,
+            'default_company_id': self.company_id.id,
+            'attached_on_bom': True,
+            'search_default_context_variant': not (nbr_product_attach == 0 and nbr_template_attach > 0) if self.env.user.has_group('product.group_product_variant') else False
+        }
+
         return {
             'name': _('Attachments'),
             'domain': domain,
-            'res_model': 'mrp.document',
+            'res_model': 'product.document',
             'type': 'ir.actions.act_window',
-            'view_id': attachment_view.id,
-            'views': [(attachment_view.id, 'kanban'), (False, 'form')],
             'view_mode': 'kanban,tree,form',
+            'target': 'current',
             'help': _('''<p class="o_view_nocontent_smiling_face">
                         Upload files to your product
                     </p><p>
                         Use this feature to store any files, like drawings or specifications.
                     </p>'''),
             'limit': 80,
-            'context': "{'default_res_model': '%s','default_res_id': %d, 'default_company_id': %s}" % ('product.product', self.product_id.id, self.company_id.id)
+            'context': context,
+            'search_view_id': self.env.ref('product.product_document_search').ids
         }
 
     # -------------------------------------------------------------------------

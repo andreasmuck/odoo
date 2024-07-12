@@ -36,6 +36,7 @@ class TestEventFullCommon(EventCrmCase, TestSalesCommon, MockVisitor):
         # set country in order to format Belgian numbers
         cls.company_admin.write({
             'country_id': cls.env.ref('base.be').id,
+            'email': 'info@yourcompany.com',
         })
         cls.event_user = mail_new_test_user(
             cls.env,
@@ -67,14 +68,16 @@ class TestEventFullCommon(EventCrmCase, TestSalesCommon, MockVisitor):
 
         cls.ticket_product = cls.env['product.product'].create({
             'description_sale': 'Ticket Product Description',
-            'detailed_type': 'event',
+            'type': 'service',
+            'service_tracking': 'event',
             'list_price': 10,
             'name': 'Test Registration Product',
             'standard_price': 30.0,
         })
         cls.booth_product = cls.env['product.product'].create({
             'description_sale': 'Booth Product Description',
-            'detailed_type': 'event_booth',
+            'type': 'service',
+            'service_tracking': 'event_booth',
             'list_price': 20,
             'name': 'Test Booth Product',
             'standard_price': 60.0,
@@ -143,21 +146,18 @@ class TestEventFullCommon(EventCrmCase, TestSalesCommon, MockVisitor):
             'event_type_mail_ids': [
                 (0, 0, {'interval_unit': 'now',  # right at subscription
                         'interval_type': 'after_sub',
-                        'notification_type': 'mail',
                         'template_ref': 'mail.template,%i' % subscription_template.id,
                        }
                 ),
                 (0, 0, {'interval_nbr': 1,  # 1 days before event
                         'interval_unit': 'days',
                         'interval_type': 'before_event',
-                        'notification_type': 'mail',
                         'template_ref': 'mail.template,%i' % cls.env['ir.model.data']._xmlid_to_res_id('event.event_reminder'),
                        }
                 ),
                 (0, 0, {'interval_nbr': 1,  # 1 days after event
                         'interval_unit': 'days',
                         'interval_type': 'after_event',
-                        'notification_type': 'sms',
                         'template_ref': 'sms.template,%i' % cls.env['ir.model.data']._xmlid_to_res_id('event_sms.sms_template_data_event_reminder'),
                        }
                 ),
@@ -318,7 +318,8 @@ class TestWEventCommon(HttpCaseWithUserDemo, HttpCaseWithUserPortal, MockVisitor
             'description_sale': 'Mighty Description',
             'list_price': 10,
             'standard_price': 30.0,
-            'detailed_type': 'event',
+            'type': 'service',
+            'service_tracking': 'event',
         })
 
         self.event_tag_category_1 = self.env['event.tag.category'].create({

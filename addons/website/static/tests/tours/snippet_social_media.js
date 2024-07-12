@@ -8,10 +8,13 @@ import wTourUtils from '@website/js/tours/tour_utils';
 // would actually "ignore" the result of the click on the toggle and would just
 // consider the action of focusing out the input.
 const socialRaceConditionClass = 'social_media_race_condition';
-const preventRaceConditionStep = [{
+const preventRaceConditionStep = [
+    {
+        trigger: `body:not(.${socialRaceConditionClass})`,
+    },
+    {
     content: "Wait a few ms to avoid race condition",
     // Ensure the class is remove from previous call of those steps
-    extra_trigger: `body:not(.${socialRaceConditionClass})`,
     trigger: ':iframe .s_social_media',
     run() {
         setTimeout(() => {
@@ -35,10 +38,12 @@ const replaceIconByImage = function (url) {
     {
         content: "Go to the Images tab in the media dialog",
         trigger: ".o_select_media_dialog .o_notebook_headers .nav-item a:contains('Images')",
+        run: "click",
     },
     {
         content: "Select the image",
         trigger: ".o_select_media_dialog img[title='s_banner_default_image.jpg']",
+        run: "click",
     },
     ...preventRaceConditionStep,
     ];
@@ -49,27 +54,25 @@ const addNewSocialNetwork = function (optionIndex, linkIndex, url, replaceIcon =
     return [{
         content: "Click on Add New Social Network",
         trigger: 'we-list we-button.o_we_list_add_optional',
+        run: "click",
     },
     {
         content: "Ensure new option is found",
         trigger: `we-list table input:eq(${optionIndex})[data-list-position="${optionIndex}"][data-dom-position="${linkIndex}"][data-undeletable=false]`,
-        run: () => {}, // This is a check.
     },
     {
         content: "Ensure new link is found",
         trigger: `:iframe .s_social_media:has(a:eq(${linkIndex})[href='https://www.example.com'])`,
-        run: () => {}, // This is a check.
     },
     ...replaceIconByImageSteps,
     {
         content: "Change added Option label",
         trigger: `we-list table input:eq(${optionIndex})`,
-        run: `text_blur ${url}`,
+        run: `edit ${url} && click body`,
     },
     {
         content: "Ensure new link is changed",
         trigger: `:iframe .s_social_media:has(a:eq(${linkIndex})[href='${url}'])`,
-        run: () => {}, // This is a check.
     },
     ...preventRaceConditionStep,
     ];
@@ -80,8 +83,8 @@ wTourUtils.registerWebsitePreviewTour('snippet_social_media', {
     url: '/',
     edition: true,
 }, () => [
-    wTourUtils.dragNDrop({id: 's_social_media', name: 'Social Media'}),
-    wTourUtils.clickOnSnippet({id: 's_social_media', name: 'Social Media'}),
+    ...wTourUtils.dragNDrop({id: 's_social_media', name: 'Social Media'}),
+    ...wTourUtils.clickOnSnippet({id: 's_social_media', name: 'Social Media'}),
     ...addNewSocialNetwork(7, 7, 'https://www.youtu.be/y7TlnAv6cto'),
     {
         content: 'Click on the toggle to hide Facebook',
@@ -91,18 +94,16 @@ wTourUtils.registerWebsitePreviewTour('snippet_social_media', {
     {
         content: "Ensure twitter became first",
         trigger: ':iframe .s_social_media:has(a:eq(0)[href="/website/social/twitter"])',
-        run: () => {}, // This is a check.
     },
     {
         content: 'Drag the facebook link at the end of the list',
         trigger: 'we-list table we-button.o_we_drag_handle',
         position: 'bottom',
-        run: "drag_and_drop_native we-list table tr:last-child",
+        run: "drag_and_drop we-list table tr:last-child",
     },
     {
         content: 'Check drop completed',
         trigger: 'we-list table input:eq(7)[data-media="facebook"]',
-        run: () => {}, // This is a check.
     },
     ...preventRaceConditionStep,
     // Create a Link for which we don't have an icon to propose.
@@ -121,19 +122,17 @@ wTourUtils.registerWebsitePreviewTour('snippet_social_media', {
                  ":has(a:eq(6)[href='https://www.youtu.be/y7TlnAv6cto']:has(i.fa-youtube))" +
                  ":has(a:eq(7)[href='https://whatever.it/1EdSw9X']:has(i.fa-pencil))" +
                  ":has(a:eq(8)[href='https://instagr.am/odoo.official/']:has(i.fa-instagram))",
-        run: () => {}, // This is a check.
     },
     // Create a custom link, not officially supported, ensure icon is found.
     {
         content: 'Change custom social to unsupported link',
         trigger: 'we-list table input:eq(6)',
-        run: 'text_blur https://www.paypal.com/abc',
+        run: "edit https://www.paypal.com/abc && click body",
     },
     {
         content: "Ensure paypal icon is found",
         trigger: ":iframe .s_social_media" +
                  ":has(a:eq(6)[href='https://www.paypal.com/abc']:has(i.fa-paypal))",
-        run: () => {}, // This is a check.
     },
     ...preventRaceConditionStep,
     {
@@ -144,7 +143,6 @@ wTourUtils.registerWebsitePreviewTour('snippet_social_media', {
     {
         content: "Ensure custom link was removed",
         trigger: ':iframe .s_social_media:has(a:eq(6)[href="https://whatever.it/1EdSw9X"]:has(i.fa-pencil))',
-        run: () => {}, // This is a check.
     },
     {
         content: 'Click on the toggle to show Facebook',
@@ -163,16 +161,16 @@ wTourUtils.registerWebsitePreviewTour('snippet_social_media', {
                  ":has(a:eq(6)[href='/website/social/facebook'])" +
                  ":has(a:eq(7)[href='https://whatever.it/1EdSw9X']:has(i.fa-pencil))" +
                  ":has(a:eq(8)[href='https://instagr.am/odoo.official/']:has(i.fa-instagram))",
-        run: () => {}, // This is a check.
     },
     {
         content: 'Change url of the DB instagram link',
         trigger: 'we-list table input:eq(3)',
-        run: 'text_blur https://instagram.com/odoo.official/',
+        run: "edit https://instagram.com/odoo.official/ && click body",
     },
+    ...preventRaceConditionStep,
     ...wTourUtils.clickOnSave(),
     ...wTourUtils.clickOnEditAndWaitEditMode(),
-    wTourUtils.clickOnSnippet({
+    ...wTourUtils.clickOnSnippet({
         id: 's_social_media',
         name: 'Social Media',
     }),
@@ -184,6 +182,7 @@ wTourUtils.registerWebsitePreviewTour('snippet_social_media', {
     {
         content: "Select a new icon",
         trigger: '.o_select_media_dialog .fa-heart',
+        run: "click",
     },
     {
         content: "Check if the result is correct after setting the icon",
@@ -197,7 +196,6 @@ wTourUtils.registerWebsitePreviewTour('snippet_social_media', {
                  ":has(a:eq(6)[href='/website/social/facebook'])" +
                  ":has(a:eq(7)[href='https://whatever.it/1EdSw9X']:has(i.fa-heart))" +
                  ":has(a:eq(8)[href='https://instagr.am/odoo.official/']:has(i.fa-instagram))",
-        isCheck: true,
     },
     // Create a social network but replace its icon by an image before setting
     // the link (`replaceIcon` parameter set to `true`).
@@ -211,7 +209,6 @@ wTourUtils.registerWebsitePreviewTour('snippet_social_media', {
                  ":has(a:eq(0)[href='/website/social/twitter']:has(img))" +
                  ":has(a:eq(9)[href='https://google.com']:has(img))" +
                  ":has(a:eq(10)[href='https://facebook.com']:has(img))",
-        run: () => {}, // This is a check.
     },
     ...wTourUtils.clickOnSave(),
 ]);

@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { Reactive, effect } from "@web/core/utils/reactive";
 import { createRelatedModels } from "@point_of_sale/app/models/related_models";
 import { registry } from "@web/core/registry";
@@ -53,14 +51,16 @@ export class PosData extends Reactive {
         await this.indexedDB.reset();
     }
 
+    get databaseName() {
+        return `config-id_${odoo.pos_config_id}_${odoo.access_token}`;
+    }
+
     initIndexedDB() {
         // In web tests info is not defined
-        const db = odoo?.info?.db || "pos_db";
-        const dbName = `${db}-${odoo.pos_config_id}`;
         const models = this.opts.databaseTable.map((m) => {
             return [m.key, m.name];
         });
-        this.indexedDB = new IndexedDB(dbName, INDEXED_DB_VERSION, models);
+        this.indexedDB = new IndexedDB(this.databaseName, INDEXED_DB_VERSION, models);
     }
 
     deleteDataIndexedDB(model, uuid) {
@@ -82,11 +82,6 @@ export class PosData extends Reactive {
                         acc.put.push(dataFormatter(record));
                     }
 
-                    if (finalizedState === undefined) {
-                        // console.info(
-                        //     `Record ${record.id} of model ${record.modelName} has no orders associated with it. It will be removed from the local database.`
-                        // );
-                    }
                     return acc;
                 },
                 { put: [], remove: [] }
@@ -96,9 +91,8 @@ export class PosData extends Reactive {
         // This methods will add uiState to the serialized object
         const dataFormatter = (record) => {
             const serializedData = record.serialize();
-            const uiState =
-                typeof record.uiState === "object" ? JSON.stringify(record.uiState) : "{}";
-            return { ...serializedData, JSONuiState: uiState, id: record.id };
+            const uiState = typeof record.uiState === "object" ? record.serializeState() : "{}";
+            return { ...serializedData, JSONuiState: JSON.stringify(uiState), id: record.id };
         };
 
         for (const model of this.opts.databaseTable) {
@@ -112,6 +106,23 @@ export class PosData extends Reactive {
             this.indexedDB.create(model.name, data.put);
             this.indexedDB.delete(model.name, data.remove);
         }
+
+        this.indexedDB.readAll(this.opts.databaseTable.map((db) => db.name)).then((data) => {
+            if (!data) {
+                return;
+            }
+
+            for (const [model, records] of Object.entries(data)) {
+                const key = this.opts.databaseTable.find((db) => db.name === model).key;
+                for (const record of records) {
+                    const localRecord = this.models[model].get(record.id);
+
+                    if (!localRecord) {
+                        this.indexedDB.delete(model, [record[key]]);
+                    }
+                }
+            }
+        });
     }
 
     async loadIndexedDBData() {
@@ -130,14 +141,20 @@ export class PosData extends Reactive {
             }
         }
 
-        const { results } = this.models.loadData(data, [], true);
+        if (data["product.product"]) {
+            data["product.product"] = data["product.product"].filter(
+                (p) => !this.models["product.product"].get(p.id)
+            );
+        }
+
+        const results = this.models.loadData(data, [], true);
         for (const [model, data] of Object.entries(results)) {
             for (const record of data) {
-                if (record.JSONuiState) {
+                if (record.raw.JSONuiState) {
                     const loadedRecords = this.models[model].find((r) => r.uuid === record.uuid);
 
                     if (loadedRecords) {
-                        loadedRecords.uiState = JSON.parse(record.JSONuiState);
+                        loadedRecords.setupState(JSON.parse(record.raw.JSONuiState));
                     }
                 }
             }
@@ -166,15 +183,23 @@ export class PosData extends Reactive {
         this.setOnline();
     }
 
-    async initData() {
-        const modelClasses = {};
-        const response = await this.orm.call("pos.session", "load_data", [
+    async loadInitialData() {
+        return await this.orm.call("pos.session", "load_data", [
             odoo.pos_session_id,
             PosData.modelToLoad,
         ]);
+    }
+    async initData() {
+        const modelClasses = {};
+        const relations = {};
+        const fields = {};
+        const data = {};
+        const response = await this.loadInitialData();
 
-        for (const [model, error] of Object.entries(response.errors)) {
-            console.info(`The ${model} model encounters an error while loading "${error}"`);
+        for (const [model, values] of Object.entries(response)) {
+            relations[model] = values.relations;
+            fields[model] = values.fields;
+            data[model] = values.data;
         }
 
         for (const posModel of registry.category("pos_available_models").getAll()) {
@@ -182,36 +207,34 @@ export class PosData extends Reactive {
             const extraFields = posModel.extraFields || {};
 
             modelClasses[pythonModel] = posModel;
-            response.relations[pythonModel] = {
-                ...response.relations[pythonModel],
+            relations[pythonModel] = {
+                ...relations[pythonModel],
                 ...extraFields,
             };
         }
 
-        response.relations["pos.store"] = {};
         const { models, records, indexedRecords } = createRelatedModels(
-            response.relations,
+            relations,
             modelClasses,
             this.opts.databaseIndex
         );
 
         this.records = records;
         this.indexedRecords = indexedRecords;
-        this.fields = response.fields;
-        this.relations = response.relations;
-        this.custom = response.custom;
+        this.fields = fields;
+        this.relations = relations;
         this.models = models;
 
-        const order = response.data["pos.order"] || [];
-        const orderlines = response.data["pos.order.line"] || [];
+        const order = data["pos.order"] || [];
+        const orderlines = data["pos.order.line"] || [];
 
-        delete response.data["pos.order"];
-        delete response.data["pos.order.line"];
+        delete data["pos.order"];
+        delete data["pos.order.line"];
 
-        this.models.loadData(response.data, this.modelToLoad);
+        this.models.loadData(data, this.modelToLoad);
         this.models.loadData({ "pos.order": order, "pos.order.line": orderlines });
-        await this.loadIndexedDBData();
-
+        const dbData = await this.loadIndexedDBData();
+        this.loadedIndexedDBProducts = dbData ? dbData["product.product"] : [];
         this.network.loading = false;
     }
 
@@ -232,9 +255,16 @@ export class PosData extends Reactive {
 
         try {
             let result = true;
-
+            let limitedFields = false;
             if (fields.length === 0) {
-                fields = this.fields[model];
+                fields = this.fields[model] || [];
+            }
+
+            if (
+                this.fields[model] &&
+                fields.sort().join(",") !== this.fields[model].sort().join(",")
+            ) {
+                limitedFields = true;
             }
 
             switch (type) {
@@ -268,18 +298,67 @@ export class PosData extends Reactive {
                 result = values;
             }
 
+            if (limitedFields) {
+                const X2MANY_TYPES = new Set(["many2many", "one2many"]);
+                const nonExistentRecords = [];
+
+                for (const record of result) {
+                    const localRecord = this.models[model].get(record.id);
+
+                    if (localRecord) {
+                        const formattedForUpdate = {};
+                        for (const [field, value] of Object.entries(record)) {
+                            const fieldsParams = this.relations[model][field];
+
+                            if (!fieldsParams) {
+                                console.info("Warning, attempt to load a non-existent field.");
+                                continue;
+                            }
+
+                            if (X2MANY_TYPES.has(fieldsParams.type)) {
+                                formattedForUpdate[field] = value
+                                    .filter((id) => this.models[fieldsParams.relation].get(id))
+                                    .map((id) => [
+                                        "link",
+                                        this.models[fieldsParams.relation].get(id),
+                                    ]);
+                            } else if (fieldsParams.type === "many2one") {
+                                if (this.models[fieldsParams.relation].get(value)) {
+                                    formattedForUpdate[field] = [
+                                        "link",
+                                        this.models[fieldsParams.relation].get(value),
+                                    ];
+                                }
+                            } else {
+                                formattedForUpdate[field] = value;
+                            }
+                        }
+                        localRecord.update(formattedForUpdate);
+                    } else {
+                        nonExistentRecords.push(record);
+                    }
+                }
+
+                if (nonExistentRecords.length) {
+                    console.warn(
+                        "Warning, attempt to load a non-existent record with limited fields."
+                    );
+                    result = nonExistentRecords;
+                }
+            }
+
             if (this.models[model] && this.opts.autoLoadedOrmMethods.includes(type)) {
                 const data = await this.missingRecursive({ [model]: result });
-                const { results } = this.models.loadData(data);
+                const results = this.models.loadData(data);
                 result = results[model];
             }
 
             this.setOnline();
             return result;
         } catch (error) {
-            //FIXME sometime there is two time the same record in the queue
             const uuids = this.network.unsyncData.map((d) => d.uuid);
-            if (queue && !uuids.includes(uuid)) {
+            const skipError = error.constructor.name != "ConnectionLostError";
+            if (queue && !uuids.includes(uuid) && method !== "sync_from_ui" && !skipError) {
                 this.network.unsyncData.push({
                     args: [...arguments],
                     date: DateTime.now(),
@@ -342,7 +421,9 @@ export class PosData extends Reactive {
                 idsMap[model] = idsMap[model] = new Set([...idsMap[model], ...ids]);
             }
 
-            const data = await this.orm.read(model, Array.from(ids), [], { load: false });
+            const data = await this.orm.read(model, Array.from(ids), this.fields[model], {
+                load: false,
+            });
             newRecordMap[model] = data;
         }
 
@@ -438,7 +519,7 @@ export class PosData extends Reactive {
 
     async callRelated(model, method, args = [], kwargs = {}, queue = true) {
         const data = await this.execute({ type: "call", model, method, args, kwargs, queue });
-        const { results } = this.models.loadData(data, [], true);
+        const results = this.models.loadData(data, [], true);
         return results;
     }
 
@@ -471,13 +552,14 @@ export class PosData extends Reactive {
             .map(([idx, values]) => values)
             .flat();
 
+        this.indexedDB.delete(recordModel, [record.uuid]);
+        const result = record.delete();
         for (const item of recordsToDelete) {
             this.indexedDB.delete(item.model.modelName, [item.uuid]);
             item.delete();
         }
 
-        this.indexedDB.delete(recordModel, [record.uuid]);
-        return record.delete();
+        return result;
     }
 
     deleteUnsyncData(uuid) {

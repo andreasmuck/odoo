@@ -23,7 +23,7 @@ test("check content confirmation dialog", async () => {
     expect(".modal-body").toHaveText("Some content");
 });
 
-test("pressing escape to close the dialog", async () => {
+test("Without dismiss callback: pressing escape to close the dialog", async () => {
     const env = await makeDialogMockEnv();
     await mountWithCleanup(ConfirmationDialog, {
         env,
@@ -33,16 +33,91 @@ test("pressing escape to close the dialog", async () => {
             close: () => {
                 expect.step("Close action");
             },
-            confirm: () => {},
+            confirm: () => {
+                throw new Error("should not be called");
+            },
             cancel: () => {
                 expect.step("Cancel action");
             },
         },
     });
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
     press("escape");
     await tick();
-    expect(["Cancel action", "Close action"]).toVerifySteps();
+    expect.verifySteps(["Cancel action", "Close action"]);
+});
+
+test("With dismiss callback: pressing escape to close the dialog", async () => {
+    const env = await makeDialogMockEnv();
+    await mountWithCleanup(ConfirmationDialog, {
+        env,
+        props: {
+            body: "Some content",
+            title: "Confirmation",
+            close: () => {
+                expect.step("Close action");
+            },
+            confirm: () => {
+                throw new Error("should not be called");
+            },
+            cancel: () => {
+                throw new Error("should not be called");
+            },
+            dismiss: () => {
+                expect.step("Dismiss action");
+            },
+        },
+    });
+    press("escape");
+    await tick();
+    expect.verifySteps(["Dismiss action", "Close action"]);
+});
+
+test("Without dismiss callback: clicking on 'X' to close the dialog", async () => {
+    const env = await makeDialogMockEnv();
+    await mountWithCleanup(ConfirmationDialog, {
+        env,
+        props: {
+            body: "Some content",
+            title: "Confirmation",
+            close: () => {
+                expect.step("Close action");
+            },
+            confirm: () => {
+                throw new Error("should not be called");
+            },
+            cancel: () => {
+                expect.step("Cancel action");
+            },
+        },
+    });
+    await contains(".modal-header .btn-close").click();
+    expect.verifySteps(["Cancel action", "Close action"]);
+});
+
+test("With dismiss callback: clicking on 'X' to close the dialog", async () => {
+    const env = await makeDialogMockEnv();
+    await mountWithCleanup(ConfirmationDialog, {
+        env,
+        props: {
+            body: "Some content",
+            title: "Confirmation",
+            close: () => {
+                expect.step("Close action");
+            },
+            confirm: () => {
+                throw new Error("should not be called");
+            },
+            cancel: () => {
+                throw new Error("should not be called");
+            },
+            dismiss: () => {
+                expect.step("Dismiss action");
+            },
+        },
+    });
+    await contains(".modal-header .btn-close").click();
+    expect.verifySteps(["Dismiss action", "Close action"]);
 });
 
 test("clicking on 'Ok'", async () => {
@@ -63,9 +138,9 @@ test("clicking on 'Ok'", async () => {
             },
         },
     });
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
     await contains(".modal-footer .btn-primary").click();
-    expect(["Confirm action", "Close action"]).toVerifySteps();
+    expect.verifySteps(["Confirm action", "Close action"]);
 });
 
 test("clicking on 'Cancel'", async () => {
@@ -86,9 +161,9 @@ test("clicking on 'Cancel'", async () => {
             },
         },
     });
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
     await contains(".modal-footer .btn-secondary").click();
-    expect(["Cancel action", "Close action"]).toVerifySteps();
+    expect.verifySteps(["Cancel action", "Close action"]);
 });
 
 test("can't click twice on 'Ok'", async () => {
@@ -105,13 +180,13 @@ test("can't click twice on 'Ok'", async () => {
             cancel: () => {},
         },
     });
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
     expect(".modal-footer .btn-primary").not.toHaveAttribute("disabled");
     expect(".modal-footer .btn-secondary").not.toHaveAttribute("disabled");
     await contains(".modal-footer .btn-primary").click();
     expect(".modal-footer .btn-primary").toHaveAttribute("disabled");
     expect(".modal-footer .btn-secondary").toHaveAttribute("disabled");
-    expect(["Confirm action"]).toVerifySteps();
+    expect.verifySteps(["Confirm action"]);
 });
 
 test("can't click twice on 'Cancel'", async () => {
@@ -128,13 +203,13 @@ test("can't click twice on 'Cancel'", async () => {
             },
         },
     });
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
     expect(".modal-footer .btn-primary").not.toHaveAttribute("disabled");
     expect(".modal-footer .btn-secondary").not.toHaveAttribute("disabled");
     await contains(".modal-footer .btn-secondary").click();
     expect(".modal-footer .btn-primary").toHaveAttribute("disabled");
     expect(".modal-footer .btn-secondary").toHaveAttribute("disabled");
-    expect(["Cancel action"]).toVerifySteps();
+    expect.verifySteps(["Cancel action"]);
 });
 
 test("can't cancel (with escape) after confirm", async () => {
@@ -158,13 +233,13 @@ test("can't cancel (with escape) after confirm", async () => {
         },
     });
     await contains(".modal-footer .btn-primary").click();
-    expect(["Confirm action"]).toVerifySteps();
+    expect.verifySteps(["Confirm action"]);
     press("escape");
     await tick();
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
     def.resolve();
     await tick();
-    expect(["Close action"]).toVerifySteps();
+    expect.verifySteps(["Close action"]);
 });
 
 test("wait for confirm callback before closing", async () => {
@@ -185,10 +260,10 @@ test("wait for confirm callback before closing", async () => {
         },
     });
     await contains(".modal-footer .btn-primary").click();
-    expect(["Confirm action"]).toVerifySteps();
+    expect.verifySteps(["Confirm action"]);
     def.resolve();
     await tick();
-    expect(["Close action"]).toVerifySteps();
+    expect.verifySteps(["Close action"]);
 });
 
 test("Focus is correctly restored after confirmation", async () => {

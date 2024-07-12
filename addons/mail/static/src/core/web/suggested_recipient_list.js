@@ -13,12 +13,11 @@ import { Component, useState } from "@odoo/owl";
 export class SuggestedRecipientsList extends Component {
     static template = "mail.SuggestedRecipientsList";
     static components = { SuggestedRecipient };
-    static props = ["thread", "className", "styleString", "onSuggestedRecipientAdded"];
+    static props = ["thread", "className?", "styleString?", "onSuggestedRecipientAdded"];
 
     setup() {
-        this.state = useState({
-            showMore: false,
-        });
+        super.setup();
+        this.state = useState({ showMore: false });
     }
 
     get suggestedRecipients() {

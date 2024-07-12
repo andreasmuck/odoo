@@ -11,25 +11,28 @@ registry.category("web_tour.tours").add('tour_shop_dynamic_variants', {
     {
         content: "select Dynamic Product",
         trigger: ".oe_product_cart a:contains(/^Dynamic Product$/)",
+        run: "click",
     },
     {
         content: "click on the second variant",
         trigger: 'input[data-attribute_name="Dynamic Attribute"][data-value_name="Dynamic Value 2"]',
+        run: "click",
     },
     {
         content: "wait for variant to be loaded",
         trigger: '.oe_price .oe_currency_value:contains("0.00")',
-        run: function () {},
+    },
+    {
+        trigger: 'body:has(input[type="hidden"][name="product_id"][value="0"])',
     },
     {
         content: "click add to cart",
-        extra_trigger: 'body:has(input[type="hidden"][name="product_id"][value="0"])',
         trigger: '#add_to_cart',
+        run: "click",
     },
         tourUtils.goToCart(),
     {
         content: "check the variant is in the cart",
         trigger: 'div>a>h6:contains(Dynamic Product (Dynamic Value 2))',
-        isCheck: true,
     },
 ]});

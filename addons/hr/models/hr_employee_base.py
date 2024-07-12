@@ -4,7 +4,7 @@
 from ast import literal_eval
 
 from pytz import timezone, UTC, utc
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
@@ -40,6 +40,11 @@ class HrEmployeeBase(models.AbstractModel):
     email = fields.Char(related="user_id.email")
     work_contact_id = fields.Many2one('res.partner', 'Work Contact', copy=False)
     work_location_id = fields.Many2one('hr.work.location', 'Work Location', domain="[('address_id', '=', address_id)]")
+    work_location_name = fields.Char("Work Location Name", compute="_compute_work_location_name_type")
+    work_location_type = fields.Selection([
+        ("home", "Home"),
+        ("office", "Office"),
+        ("other", "Other")], compute="_compute_work_location_name_type")
     user_id = fields.Many2one('res.users')
     share = fields.Boolean(related='user_id.share')
     resource_id = fields.Many2one('resource.resource')
@@ -53,7 +58,7 @@ class HrEmployeeBase(models.AbstractModel):
              'The "Coach" has no specific rights or responsibilities by default.')
     tz = fields.Selection(
         string='Timezone', related='resource_id.tz', readonly=False,
-        help="This field is used in order to define in which timezone the resources will work.")
+        help="This field is used in order to define in which timezone the employee will work.")
     hr_presence_state = fields.Selection([
         ('present', 'Present'),
         ('absent', 'Absent'),
@@ -78,7 +83,12 @@ class HrEmployeeBase(models.AbstractModel):
         new_hire_field = self._get_new_hire_field()
         new_hire_date = fields.Datetime.now() - timedelta(days=90)
         for employee in self:
-            employee.newly_hired = employee[new_hire_field] > new_hire_date
+            if not employee[new_hire_field]:
+                employee.newly_hired = False
+            elif not isinstance(employee[new_hire_field], datetime):
+                employee.newly_hired = employee[new_hire_field] > new_hire_date.date()
+            else:
+                employee.newly_hired = employee[new_hire_field] > new_hire_date
 
     def _search_newly_hired(self, operator, value):
         new_hire_field = self._get_new_hire_field()
@@ -89,6 +99,11 @@ class HrEmployeeBase(models.AbstractModel):
         op = 'in' if value and operator == '=' or not value and operator != '=' else 'not in'
         return [('id', op, new_hires.ids)]
 
+    @api.depends("work_location_id.name", "work_location_id.location_type")
+    def _compute_work_location_name_type(self):
+        for employee in self:
+            employee.work_location_name = employee.work_location_id.name or None
+            employee.work_location_type = employee.work_location_id.location_type or 'other'
 
     def _get_valid_employee_for_user(self):
         user = self.env.user
@@ -141,14 +156,14 @@ class HrEmployeeBase(models.AbstractModel):
         """
         # Check on login
         check_login = literal_eval(self.env['ir.config_parameter'].sudo().get_param('hr.hr_presence_control_login', 'False'))
-        employee_to_check_working = self.filtered(lambda e: e.user_id.im_status == 'offline')
+        employee_to_check_working = self.filtered(lambda e: 'offline' in str(e.user_id.im_status))
         working_now_list = employee_to_check_working._get_employee_working_now()
         for employee in self:
             state = 'to_define'
             if check_login:
-                if employee.user_id.im_status in ['online', 'leave_online']:
+                if 'online' in str(employee.user_id.im_status):
                     state = 'present'
-                elif employee.user_id.im_status in ['offline', 'leave_offline'] and employee.id not in working_now_list:
+                elif 'offline' in str(employee.user_id.im_status) and employee.id not in working_now_list:
                     state = 'absent'
             employee.hr_presence_state = state
 
@@ -289,3 +304,16 @@ class HrEmployeeBase(models.AbstractModel):
                     # The employees should be working now according to their work schedule
                     working_now += res_employee_ids.ids
         return working_now
+
+    def _get_calendar_periods(self, start, stop):
+        """
+        :param datetime start: the start of the period
+        :param datetime stop: the stop of the period
+        This method can be overridden in other modules where it's possible to have different resource calendars for an
+        employee depending on the date.
+        """
+        calendar_periods_by_employee = {}
+        for employee in self:
+            calendar = employee.resource_calendar_id or employee.company_id.resource_calendar_id
+            calendar_periods_by_employee[employee] = [(start, stop, calendar)]
+        return calendar_periods_by_employee

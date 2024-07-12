@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
-
 from ast import literal_eval
 
 from odoo import api, Command, fields, models, _
 from odoo.exceptions import UserError, ValidationError
 from odoo.addons.base.models.res_bank import sanitize_account_number
-from odoo.tools import remove_accents, groupby
+from odoo.tools import groupby
 from collections import defaultdict
 import logging
 import re
@@ -64,6 +62,20 @@ class AccountJournal(models.Model):
                     return model
         return 'odoo'
 
+    def _get_default_account_domain(self):
+        return """[
+            ('deprecated', '=', False),
+            ('account_type', 'in', ('asset_cash', 'liability_credit_card') if type == 'bank'
+                                   else ('asset_cash',) if type == 'cash'
+                                   else ('income', 'income_other') if type == 'sale'
+                                   else ('expense', 'expense_depreciation', 'expense_direct_cost') if type == 'purchase'
+                                   else ('asset_receivable', 'asset_cash', 'asset_current', 'asset_non_current',
+                                         'asset_prepayments', 'asset_fixed', 'liability_payable',
+                                         'liability_credit_card', 'liability_current', 'liability_non_current',
+                                         'equity', 'equity_unaffected', 'income', 'income_other', 'expense',
+                                         'expense_depreciation', 'expense_direct_cost', 'off_balance'))
+        ]"""
+
     name = fields.Char(string='Journal Name', required=True, translate=True)
     code = fields.Char(
         string='Short Code',
@@ -92,9 +104,7 @@ class AccountJournal(models.Model):
     default_account_id = fields.Many2one(
         comodel_name='account.account', check_company=True, copy=False, ondelete='restrict',
         string='Default Account',
-        domain="[('deprecated', '=', False), ('account_type', '=like', default_account_type)]",
-    )
-
+        domain=_get_default_account_domain)
     suspense_account_id = fields.Many2one(
         comodel_name='account.account', check_company=True, ondelete='restrict', readonly=False, store=True,
         compute='_compute_suspense_account_id',
@@ -102,8 +112,8 @@ class AccountJournal(models.Model):
              "allowing finding the right account.", string='Suspense Account',
         domain="[('deprecated', '=', False), ('account_type', '=', 'asset_current')]",
     )
-    restrict_mode_hash_table = fields.Boolean(string="Lock Sent Entries with Hash",
-        help="If ticked, the accounting entry or invoice receives a hash as soon as it is sent and cannot be modified anymore.")
+    restrict_mode_hash_table = fields.Boolean(string="Lock Sent Invoices with Hash",
+        help="If ticked, when the invoice is sent, the hash chain will be computed from the last move hashed to the new move to be hashed. The hash can also be performed on demand.")
     sequence = fields.Integer(help='Used to order Journals in the dashboard view', default=10)
 
     invoice_reference_type = fields.Selection(string='Communication Type', required=True, selection=[('none', 'Open'), ('partner', 'Based on Customer'), ('invoice', 'Based on Invoice')], default='invoice', help='You can set here the default communication that will appear on customer invoices, once validated, to help the customer to refer to that particular invoice when making the payment.')
@@ -125,7 +135,7 @@ class AccountJournal(models.Model):
                                           "This is a regex that can include all the following capture groups: prefix1, year, prefix2, month, prefix3, seq, suffix.\n"\
                                           "The prefix* groups are the separators between the year, month and the actual increasing sequence number (seq).\n"\
 
-                                          "e.g: ^(?P<prefix1>.*?)(?P<year>\d{4})(?P<prefix2>\D*?)(?P<month>\d{2})(?P<prefix3>\D+?)(?P<seq>\d+)(?P<suffix>\D*?)$")
+                                          r"e.g: ^(?P<prefix1>.*?)(?P<year>\d{4})(?P<prefix2>\D*?)(?P<month>\d{2})(?P<prefix3>\D+?)(?P<seq>\d+)(?P<suffix>\D*?)$")
 
     inbound_payment_method_line_ids = fields.One2many(
         comodel_name='account.payment.method.line',
@@ -189,11 +199,6 @@ class AccountJournal(models.Model):
         check_company=True,
         string="Journal Groups")
 
-    secure_sequence_id = fields.Many2one('ir.sequence',
-        help='Sequence to use to ensure the securisation of data',
-        check_company=True,
-        readonly=True, copy=False)
-
     available_payment_method_ids = fields.Many2many(
         comodel_name='account.payment.method',
         compute='_compute_available_payment_method_ids'
@@ -204,10 +209,14 @@ class AccountJournal(models.Model):
         compute='_compute_selected_payment_method_codes',
     )
     accounting_date = fields.Date(compute='_compute_accounting_date')
+    display_alias_fields = fields.Boolean(compute='_compute_display_alias_fields')
 
     _sql_constraints = [
         ('code_company_uniq', 'unique (company_id, code)', 'Journal codes must be unique per company.'),
     ]
+
+    def _compute_display_alias_fields(self):
+        self.display_alias_fields = self.env['mail.alias.domain'].search_count([], limit=1)
 
     @api.depends('type', 'company_id')
     def _compute_code(self):
@@ -221,75 +230,128 @@ class AccountJournal(models.Model):
                 )
                 cache[record.company_id].append(record.code)
 
+    def _get_journals_payment_method_information(self):
+        method_information = self.env['account.payment.method']._get_payment_method_information()
+        unique_electronic_ids = set()
+        electronic_names = set()
+        pay_methods = self.env['account.payment.method'].sudo().search([('code', 'in', list(method_information.keys()))])
+        manage_providers = 'payment_provider_id' in self.env['account.payment.method.line']._fields
+
+        # Split the payment method information per id.
+        method_information_mapping = {}
+        for pay_method in pay_methods:
+            code = pay_method.code
+            values = method_information_mapping[pay_method.id] = {
+                **method_information[code],
+                'payment_method': pay_method,
+                'company_journals': {},
+            }
+            if values['mode'] == 'unique':
+                unique_electronic_ids.add(pay_method.id)
+            elif manage_providers and values['mode'] == 'electronic':
+                unique_electronic_ids.add(pay_method.id)
+                electronic_names.add(pay_method.code)
+
+        # Load the provider to manage 'electronic' payment methods.
+        providers_per_code = {}
+        if manage_providers:
+            providers = self.env['payment.provider'].sudo().search([
+                *self.env['payment.provider']._check_company_domain(self.company_id),
+                ('code', 'in', tuple(electronic_names)),
+            ])
+            for provider in providers:
+                providers_per_code.setdefault(provider.company_id.id, {}).setdefault(provider._get_code(), set()).add(provider.id)
+
+        # Collect the existing unique/electronic payment method lines.
+        if unique_electronic_ids:
+            fnames = ['payment_method_id', 'journal_id']
+            if manage_providers:
+                fnames.append('payment_provider_id')
+            self.env['account.payment.method.line'].flush_model(fnames=fnames)
+
+            self._cr.execute(
+                f'''
+                    SELECT
+                        apm.id,
+                        journal.company_id,
+                        journal.id,
+                        {'apml.payment_provider_id' if manage_providers else 'NULL'}
+                    FROM account_payment_method_line apml
+                    JOIN account_journal journal ON journal.id = apml.journal_id
+                    JOIN account_payment_method apm ON apm.id = apml.payment_method_id
+                    WHERE apm.id IN %s
+                ''',
+                [tuple(unique_electronic_ids)],
+            )
+            for pay_method_id, company_id, journal_id, provider_id in self._cr.fetchall():
+                values = method_information_mapping[pay_method_id]
+                is_electronic = manage_providers and values['mode'] == 'electronic'
+                if is_electronic:
+                    journal_ids = values['company_journals'].setdefault(company_id, {}).setdefault(provider_id, [])
+                else:
+                    journal_ids = values['company_journals'].setdefault(company_id, [])
+                journal_ids.append(journal_id)
+        return {
+            'pay_methods': pay_methods,
+            'manage_providers': manage_providers,
+            'method_information_mapping': method_information_mapping,
+            'providers_per_code': providers_per_code,
+        }
+
     @api.depends('outbound_payment_method_line_ids', 'inbound_payment_method_line_ids')
     def _compute_available_payment_method_ids(self):
         """
         Compute the available payment methods id by respecting the following rules:
-            Methods of mode 'unique' cannot be used twice on the same company
-            Methods of mode 'multi' cannot be used twice on the same journal
+            Methods of mode 'unique' cannot be used twice on the same company.
+            Methods of mode 'electronic' cannot be used twice on the same company for the same 'payment_provider_id'.
+            Methods of mode 'multi' can be duplicated on the same journal.
         """
-        method_information = self.env['account.payment.method']._get_payment_method_information()
-        pay_methods = self.env['account.payment.method'].search([('code', 'in', list(method_information.keys()))])
-        pay_method_by_code = {x.code + x.payment_type: x for x in pay_methods}
-        unique_pay_methods = [k for k, v in method_information.items() if v['mode'] == 'unique']
+        results = self._get_journals_payment_method_information()
+        pay_methods = results['pay_methods']
+        manage_providers = results['manage_providers']
+        method_information_mapping = results['method_information_mapping']
+        providers_per_code = results['providers_per_code']
 
-        pay_methods_by_company = {}
-        pay_methods_by_journal = {}
-        if unique_pay_methods:
-            self._cr.execute('''
-                SELECT
-                    journal.id,
-                    journal.company_id,
-                    ARRAY_AGG(DISTINCT apm.id)
-                FROM account_payment_method_line apml
-                JOIN account_journal journal ON journal.id = apml.journal_id
-                JOIN account_payment_method apm ON apm.id = apml.payment_method_id
-                WHERE apm.code IN %s
-                GROUP BY
-                    journal.id,
-                    journal.company_id
-            ''', [tuple(unique_pay_methods)])
-            for journal_id, company_id, payment_method_ids in self._cr.fetchall():
-                pay_methods_by_company[company_id] = set(payment_method_ids)
-                pay_methods_by_journal[journal_id] = set(payment_method_ids)
+        # Compute the candidates for each journal.
+        for journal in self:
+            commands = [Command.clear()]
+            company = journal.company_id
 
-        pay_method_ids_commands_x_journal = {j: [Command.clear()] for j in self}
-        for payment_type in ('inbound', 'outbound'):
-            for code, vals in method_information.items():
-                payment_method = pay_method_by_code.get(code + payment_type)
+            # Exclude the 'unique' / 'electronic' values that are already set on the journal.
+            protected_provider_ids = set()
+            protected_payment_method_ids = set()
+            for payment_type in ('inbound', 'outbound'):
+                lines = journal[f'{payment_type}_payment_method_line_ids']
+                for line in lines:
+                    if line.payment_method_id.id in method_information_mapping:
+                        protected_payment_method_ids.add(line.payment_method_id.id)
+                        if manage_providers and method_information_mapping.get(line.payment_method_id.id, {}).get('mode') == 'electronic':
+                            protected_provider_ids.add(line.payment_provider_id.id)
 
-                if not payment_method:
-                    continue
+            for pay_method in pay_methods:
+                values = method_information_mapping[pay_method.id]
 
                 # Get the domain of the journals on which the current method is usable.
-                method_domain = payment_method._get_payment_method_domain(payment_method.code)
+                method_domain = pay_method._get_payment_method_domain(pay_method.code)
+                if not journal.filtered_domain(method_domain):
+                    continue
 
-                for journal in self.filtered_domain(method_domain):
-                    protected_pay_method_ids = pay_methods_by_company.get(journal.company_id._origin.id, set()) \
-                                               - pay_methods_by_journal.get(journal._origin.id, set())
+                if values['mode'] == 'unique':
+                    # 'unique' are linked to a single journal per company.
+                    already_linked_journal_ids = set(values['company_journals'].get(company.id, [])) - {journal._origin.id}
+                    if not already_linked_journal_ids and pay_method.id not in protected_payment_method_ids:
+                        commands.append(Command.link(pay_method.id))
+                elif manage_providers and values['mode'] == 'electronic':
+                    # 'electronic' are linked to a single journal per company per provider.
+                    for provider_id in providers_per_code.get(company.id, {}).get(pay_method.code, set()):
+                        already_linked_journal_ids = set(values['company_journals'].get(company.id, {}).get(provider_id, [])) - {journal._origin.id}
+                        if not already_linked_journal_ids and provider_id not in protected_provider_ids:
+                            commands.append(Command.link(pay_method.id))
+                elif values['mode'] == 'multi':
+                    # 'multi' are unlimited.
+                    commands.append(Command.link(pay_method.id))
 
-                    if payment_type == 'inbound':
-                        lines = journal._origin.inbound_payment_method_line_ids
-                    else:
-                        lines = journal._origin.outbound_payment_method_line_ids
-
-                    already_used = payment_method in lines.payment_method_id
-                    is_protected = payment_method.id in protected_pay_method_ids
-                    if vals['mode'] == 'unique' and (already_used or is_protected):
-                        continue
-
-                    # Some payment methods can be used multiple times on a single journal.
-                    if payment_method.code not in self._get_reusable_payment_methods() and already_used:
-                        continue
-
-                    pay_method_ids_commands_x_journal[journal].append(Command.link(payment_method.id))
-
-        for journal, pay_method_ids_commands in pay_method_ids_commands_x_journal.items():
-            journal.available_payment_method_ids = pay_method_ids_commands
-
-    @api.model
-    def _get_reusable_payment_methods(self):
-        return {'manual'}
+            journal.available_payment_method_ids = commands
 
     @api.depends('type')
     def _compute_default_account_type(self):
@@ -397,7 +459,7 @@ class AccountJournal(models.Model):
     @api.constrains('company_id')
     def _check_company_consistency(self):
         for company, journals in groupby(self, lambda journal: journal.company_id):
-            if self.env['account.move'].search([
+            if self.env['account.move'].search_count([
                 ('journal_id', 'in', [journal.id for journal in journals]),
                 '!', ('company_id', 'child_of', company.id)
             ], limit=1):
@@ -414,35 +476,65 @@ class AccountJournal(models.Model):
         """
         Check and ensure that the payment method lines multiplicity is respected.
         """
-        method_info = self.env['account.payment.method']._get_payment_method_information()
-        unique_codes = tuple(code for code, info in method_info.items() if info.get('mode') == 'unique')
+        results = self._get_journals_payment_method_information()
+        pay_methods = results['pay_methods']
+        manage_providers = results['manage_providers']
+        method_information_mapping = results['method_information_mapping']
+        providers_per_code = results['providers_per_code']
 
-        if not unique_codes:
-            return
+        failing_unicity_payment_methods = self.env['account.payment.method']
+        for journal in self:
+            company = journal.company_id
 
-        self.flush_model(['inbound_payment_method_line_ids', 'outbound_payment_method_line_ids', 'company_id'])
-        self.env['account.payment.method.line'].flush_model(['payment_method_id', 'journal_id'])
-        self.env['account.payment.method'].flush_model(['code'])
+            # Exclude the 'unique' / 'electronic' values that are already set on the journal.
+            protected_provider_ids = set()
+            protected_payment_method_ids = set()
+            for payment_type in ('inbound', 'outbound'):
+                lines = journal[f'{payment_type}_payment_method_line_ids']
 
-        if unique_codes:
-            self._cr.execute('''
-                SELECT apm.id
-                FROM account_payment_method apm
-                JOIN account_payment_method_line apml on apm.id = apml.payment_method_id
-                JOIN account_journal journal on journal.id = apml.journal_id
-                JOIN res_company company on journal.company_id = company.id
-                WHERE apm.code in %s
-                GROUP BY
-                    company.id,
-                    apm.id
-                HAVING array_length(array_agg(journal.id), 1) > 1;
-            ''', [unique_codes])
+                # Ensure you don't have the same payment_method/name combination twice on the same journal.
+                counter = {}
+                for line in lines:
+                    if method_information_mapping.get(line.payment_method_id.id, {}).get('mode') not in ('electronic', 'unique'):
+                        continue
 
-        method_ids = [res[0] for res in self._cr.fetchall()]
-        if method_ids:
-            methods = self.env['account.payment.method'].browse(method_ids)
-            raise ValidationError(_("Some payment methods supposed to be unique already exists somewhere else.\n"
-                                    "(%s)", ', '.join([method.display_name for method in methods])))
+                    key = line.payment_method_id.id, line.name
+                    counter.setdefault(key, 0)
+                    counter[key] += 1
+                    if counter[key] > 1:
+                        raise ValidationError(_(
+                            "You can't have two payment method lines of the same payment type (%(payment_type)s) "
+                            "and with the same name (%(name)s) on a single journal.",
+                            payment_type=payment_type,
+                            name=line.name,
+                        ))
+
+                for line in lines:
+                    if line.payment_method_id.id in method_information_mapping:
+                        protected_payment_method_ids.add(line.payment_method_id.id)
+                        if manage_providers and method_information_mapping[line.payment_method_id.id]['mode'] == 'electronic':
+                            protected_provider_ids.add(line.payment_provider_id.id)
+
+            for pay_method in pay_methods:
+                values = method_information_mapping[pay_method.id]
+
+                if values['mode'] == 'unique':
+                    # 'unique' are linked to a single journal per company.
+                    already_linked_journal_ids = values['company_journals'].get(company.id, [])
+                    if len(already_linked_journal_ids) > 1:
+                        failing_unicity_payment_methods |= pay_method
+                elif manage_providers and values['mode'] == 'electronic':
+                    # 'electronic' are linked to a single journal per company per provider.
+                    for provider_id in providers_per_code.get(company.id, {}).get(pay_method.code, set()):
+                        already_linked_journal_ids = values['company_journals'].get(company.id, {}).get(provider_id, [])
+                        if len(already_linked_journal_ids) > 1:
+                            failing_unicity_payment_methods |= pay_method
+
+        if failing_unicity_payment_methods:
+            raise ValidationError(_(
+                "Some payment methods supposed to be unique already exists somewhere else.\n(%s)",
+                ', '.join(failing_unicity_payment_methods.mapped('display_name')),
+            ))
 
     @api.constrains('active')
     def _check_auto_post_draft_entries(self):
@@ -539,7 +631,7 @@ class AccountJournal(models.Model):
                         raise UserError(_("The partners of the journal's company and the related bank account mismatch."))
             if 'restrict_mode_hash_table' in vals and not vals.get('restrict_mode_hash_table'):
                 domain = self.env['account.move']._get_move_hash_domain(
-                    common_domain=[('journal_id', '=', self.id), ('secure_sequence_number', '!=', 0)]
+                    common_domain=[('journal_id', '=', journal.id), ('inalterable_hash', '!=', False)]
                 )
                 journal_entry = self.env['account.move'].sudo().search_count(domain, limit=1)
                 if journal_entry:
@@ -548,7 +640,7 @@ class AccountJournal(models.Model):
         result = super(AccountJournal, self).write(vals)
 
         # Ensure alias coherency when changing type
-        if 'type' in vals:
+        if 'type' in vals and not self._context.get('account_journal_skip_alias_sync'):
             for journal in self:
                 alias_vals = journal._alias_get_creation_values()
                 alias_vals = {
@@ -566,9 +658,6 @@ class AccountJournal(models.Model):
         if 'bank_acc_number' in vals:
             for journal in self.filtered(lambda r: r.type == 'bank' and not r.bank_account_id):
                 journal.set_bank_account(vals.get('bank_acc_number'), vals.get('bank_id'))
-        for record in self:
-            if record.restrict_mode_hash_table and not record.secure_sequence_id:
-                record._create_secure_sequence(['secure_sequence_id'])
 
         return result
 
@@ -579,7 +668,10 @@ class AccountJournal(models.Model):
             values['alias_name'] = self._alias_prepare_alias_name(self.alias_name, self.name, self.code, self.type, self.company_id)
             values['alias_defaults'] = defaults = literal_eval(self.alias_defaults or "{}")
             defaults['company_id'] = self.company_id.id
-            defaults['move_type'] = 'in_invoice' if self.type == 'purchase' else 'out_invoice'
+            defaults['move_type'] = {
+                'purchase': 'in_invoice',
+                'sale': 'out_invoice',
+            }.get(self.type, 'entry')
             defaults['journal_id'] = self.id
         return values
 
@@ -601,6 +693,26 @@ class AccountJournal(models.Model):
             company_identifier = company.name if self.env['mail.alias']._is_encodable(company.name) else company.id
             if f'-{company_identifier}' not in alias_name:
                 alias_name = f"{alias_name}-{company_identifier}"
+        return self.env['mail.alias']._sanitize_alias_name(alias_name)
+
+    @api.model
+    def _ensure_unique_alias(self, vals, company):
+        """ Check uniqueness of the alias name within the given alias domain.
+        :param vals: the values of the journal.
+        :return: a unique alias name.
+        """
+        alias_name = vals['alias_name']
+        alias_domain_name = company.alias_domain_id.name
+
+        domain = [('alias_name', '=', alias_name)]
+        if alias_domain_name:
+            domain.append(('alias_domain', '=', alias_domain_name))
+
+        existing_alias = self.env['mail.alias'].search_count(domain, limit=1)
+
+        if existing_alias:
+            alias_name = f"{alias_name}-{vals.get('code')}"
+
         return self.env['mail.alias']._sanitize_alias_name(alias_name)
 
     @api.model
@@ -693,10 +805,12 @@ class AccountJournal(models.Model):
             vals['refund_sequence'] = vals['type'] in ('sale', 'purchase')
 
         # === Fill missing alias name for sale / purchase, to force alias creation ===
-        if journal_type in {'sale', 'purchase'} and 'alias_name' not in vals:
-            vals['alias_name'] = self._alias_prepare_alias_name(
+        if journal_type in {'sale', 'purchase'}:
+            if 'alias_name' not in vals:
+                vals['alias_name'] = self._alias_prepare_alias_name(
                 False, vals.get('name'), vals.get('code'), journal_type, company
             )
+            vals['alias_name'] = self._ensure_unique_alias(vals, company)
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -711,10 +825,6 @@ class AccountJournal(models.Model):
             # Create the bank_account_id if necessary
             if journal.type == 'bank' and not journal.bank_account_id and vals.get('bank_acc_number'):
                 journal.set_bank_account(vals.get('bank_acc_number'), vals.get('bank_id'))
-
-            # Create the secure_sequence_id if necessary
-            if journal.restrict_mode_hash_table and not journal.secure_sequence_id:
-                journal._create_secure_sequence(['secure_sequence_id'])
 
         return journals
 
@@ -749,12 +859,7 @@ class AccountJournal(models.Model):
         visible on dashboard if no bank statement source has been defined yet
         """
         # We simply call the setup bar function.
-        return self.env['res.company'].setting_init_bank_account_action()
-
-    def action_new_transaction(self):
-        action = self.env['ir.actions.act_window']._for_xml_id('account.action_bank_statement_tree')
-        action['context'] = {'default_journal_id': self.id}
-        return action
+        return self.env['res.company'].with_context(default_linked_journal_id=self.id).setting_init_bank_account_action()
 
     def _create_document_from_attachment(self, attachment_ids):
         """ Create the invoices from files."""
@@ -827,35 +932,13 @@ class AccountJournal(models.Model):
             })
         return action_vals
 
-    def _create_secure_sequence(self, sequence_fields):
-        """This function creates a no_gap sequence on each journal in self that will ensure
-        a unique number is given to all posted account.move in such a way that we can always
-        find the previous move of a journal entry on a specific journal.
-        """
-        for journal in self:
-            vals_write = {}
-            for seq_field in sequence_fields:
-                if not journal[seq_field]:
-                    vals = {
-                        'name': _('Securisation of %s - %s', seq_field, journal.name),
-                        'code': 'SECUR%s-%s' % (journal.id, seq_field),
-                        'implementation': 'no_gap',
-                        'prefix': '',
-                        'suffix': '',
-                        'padding': 0,
-                        'company_id': journal.company_id.id}
-                    seq = self.env['ir.sequence'].create(vals)
-                    vals_write[seq_field] = seq.id
-            if vals_write:
-                journal.write(vals_write)
-
     # -------------------------------------------------------------------------
     # REPORTING METHODS
     # -------------------------------------------------------------------------
 
     # TODO move to `account_reports` in master (simple read_group)
     def _get_journal_bank_account_balance(self, domain=None):
-        ''' Get the bank balance of the current journal by filtering the journal items using the journal's accounts.
+        r''' Get the bank balance of the current journal by filtering the journal items using the journal's accounts.
 
         /!\ The current journal is not part of the applied domain. This is the expected behavior since we only want
         a logic based on accounts.
@@ -865,33 +948,17 @@ class AccountJournal(models.Model):
                         along with the total number of move lines having the same account as of the journal's default account.
         '''
         self.ensure_one()
-        self.env['account.move.line'].check_access_rights('read')
-
-        if not self.default_account_id:
-            return 0.0, 0
-
-        domain = (domain or []) + [
-            ('account_id', 'in', tuple(self.default_account_id.ids)),
-            ('display_type', 'not in', ('line_section', 'line_note')),
-            ('parent_state', '!=', 'cancel'),
-        ]
-        query = self.env['account.move.line']._where_calc(domain)
-        tables, where_clause, where_params = query.get_sql()
-
-        query = '''
-            SELECT
-                COUNT(account_move_line.id) AS nb_lines,
-                COALESCE(SUM(account_move_line.balance), 0.0),
-                COALESCE(SUM(account_move_line.amount_currency), 0.0)
-            FROM ''' + tables + '''
-            WHERE ''' + where_clause + '''
-        '''
+        nb_lines, balance, amount_currency = self.env['account.move.line']._read_group(
+            domain=([
+                ('account_id', 'in', tuple(self.default_account_id.ids)),
+                ('display_type', 'not in', ('line_section', 'line_note')),
+                ('parent_state', '!=', 'cancel'),
+            ] + (domain or [])),
+            aggregates=('__count', 'balance:sum', 'amount_currency:sum'),
+        )[0]
 
         company_currency = self.company_id.currency_id
         journal_currency = self.currency_id if self.currency_id and self.currency_id != company_currency else False
-
-        self._cr.execute(query, where_params)
-        nb_lines, balance, amount_currency = self._cr.fetchone()
         return amount_currency if journal_currency else balance, nb_lines
 
     def _get_journal_inbound_outstanding_payment_accounts(self):

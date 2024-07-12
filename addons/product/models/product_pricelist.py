@@ -1,7 +1,6 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from odoo import api, fields, models, _
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 
@@ -10,7 +9,7 @@ class Pricelist(models.Model):
     _inherit = ['mail.thread', 'mail.activity.mixin']
     _description = "Pricelist"
     _rec_names_search = ['name', 'currency_id']  # TODO check if should be removed
-    _order = "sequence asc, id asc"
+    _order = "sequence, id, name"
 
     def _default_currency_id(self):
         return self.env.company.currency_id.id
@@ -45,16 +44,6 @@ class Pricelist(models.Model):
         tracking=10,
     )
 
-    discount_policy = fields.Selection(
-        selection=[
-            ('with_discount', "Discount included in the price"),
-            ('without_discount', "Show public price & discount to the customer"),
-        ],
-        default='with_discount',
-        required=True,
-        tracking=15,
-    )
-
     item_ids = fields.One2many(
         comodel_name='product.pricelist.item',
         inverse_name='pricelist_id',
@@ -69,7 +58,8 @@ class Pricelist(models.Model):
     @api.depends('currency_id')
     def _compute_display_name(self):
         for pricelist in self:
-            pricelist.display_name = f'{pricelist.name} ({pricelist.currency_id.name})'
+            pricelist_name = pricelist.name and pricelist.name or _('New')
+            pricelist.display_name = f'{pricelist_name} ({pricelist.currency_id.name})'
 
     def write(self, values):
         res = super().write(values)
@@ -307,10 +297,26 @@ class Pricelist(models.Model):
         pl_domain = self._get_partner_pricelist_multi_search_domain_hook(company_id)
 
         # if no specific property, try to find a fitting pricelist
-        result = Property._get_multi('property_product_pricelist', Partner._name, partner_ids)
+        specific_properties = Property._get_multi(
+            'property_product_pricelist', Partner._name,
+            list(models.origin_ids(partner_ids)),  # Some NewID can be in the partner_ids
+        )
+        result = {}
+        remaining_partner_ids = []
+        for pid in partner_ids:
+            if (
+                specific_properties.get(pid)
+                and specific_properties[pid]._get_partner_pricelist_multi_filter_hook()
+            ):
+                result[pid] = specific_properties[pid]
+            elif (
+                isinstance(pid, models.NewId) and specific_properties.get(pid.origin)
+                and specific_properties[pid.origin]._get_partner_pricelist_multi_filter_hook()
+            ):
+                result[pid] = specific_properties[pid.origin]
+            else:
+                remaining_partner_ids.append(pid)
 
-        remaining_partner_ids = [pid for pid, val in result.items() if not val or
-                                 not val._get_partner_pricelist_multi_filter_hook()]
         if remaining_partner_ids:
             # get fallback pricelist when no pricelist for a given country
             pl_fallback = (
@@ -324,8 +330,7 @@ class Pricelist(models.Model):
             for country, partners in partners_by_country.items():
                 pl = Pricelist.search(pl_domain + [('country_group_ids.country_ids', '=', country.id if country else False)], limit=1)
                 pl = pl or pl_fallback
-                for pid in partners.ids:
-                    result[pid] = pl
+                result.update(dict.fromkeys(partners._ids, pl))
 
         return result
 
@@ -354,7 +359,7 @@ class Pricelist(models.Model):
         ])
         if linked_items:
             raise UserError(_(
-                'You cannot delete those pricelist(s):\n(%s)\n, they are used in other pricelist(s):\n%s',
-                '\n'.join(linked_items.base_pricelist_id.mapped('display_name')),
-                '\n'.join(linked_items.pricelist_id.mapped('display_name'))
+                'You cannot delete pricelist(s):\n(%(pricelists)s)\nThey are used within pricelist(s):\n%(other_pricelists)s',
+                pricelists='\n'.join(linked_items.base_pricelist_id.mapped('display_name')),
+                other_pricelists='\n'.join(linked_items.pricelist_id.mapped('display_name')),
             ))

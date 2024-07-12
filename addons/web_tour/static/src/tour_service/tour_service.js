@@ -1,6 +1,6 @@
 /** @odoo-module **/
 
-import { EventBus, markup, whenReady, reactive } from "@odoo/owl";
+import { EventBus, markup, whenReady, reactive, validate } from "@odoo/owl";
 import { browser } from "@web/core/browser/browser";
 import { _t } from "@web/core/l10n/translation";
 import { MacroEngine } from "@web/core/macro";
@@ -8,14 +8,14 @@ import { registry } from "@web/core/registry";
 import { config as transitionConfig } from "@web/core/transition";
 import { session } from "@web/session";
 import { TourPointer } from "../tour_pointer/tour_pointer";
-import { compileStepAuto, compileStepManual, compileTourToMacro } from "./tour_compilers";
+import { compileTourToMacro } from "./tour_compilers";
 import { createPointerState } from "./tour_pointer_state";
 import { tourState } from "./tour_state";
 import { callWithUnloadCheck } from "./tour_utils";
 
 /**
- * @typedef {string} JQuerySelector
- * @typedef {import("./tour_utils").RunCommand} RunCommand
+ * @typedef {string} HootSelector
+ * @typedef {import("./tour_compilers").RunCommand} RunCommand
  *
  * @typedef Tour
  * @property {string} url
@@ -31,28 +31,64 @@ import { callWithUnloadCheck } from "./tour_utils";
  * @property {string|undefined} [shadow_dom]
  *
  * @typedef TourStep
+ * @property {"enterprise"|"community"|"mobile"|"desktop"|HootSelector[][]} isActive Active the step following {@link isActiveStep} filter
  * @property {string} [id]
- * @property {JQuerySelector} trigger
- * @property {JQuerySelector} [extra_trigger]
- * @property {JQuerySelector} [alt_trigger]
- * @property {JQuerySelector} [skip_trigger]
- * @property {string} [content]
- * @property {"top" | "botton" | "left" | "right"} [position]
+ * @property {HootSelector} trigger The node on which the action will be executed.
+ * @property {HootSelector} [alt_trigger] An alternative node to the trigger (trigger or alt_trigger).
+ * @property {string} [content] Description of the step.
+ * @property {"top" | "botton" | "left" | "right"} [position] The position where the UI helper is shown.
  * @property {"community" | "enterprise"} [edition]
- * @property {RunCommand} [run]
+ * @property {RunCommand} [run] The action to perform when trigger conditions are verified.
+ * @property {boolean} [allowInvisible] Allow trigger nodes (any of them) to be invisible
+ * @property {boolean} [allowDisabled] Allow the trigger node to be disabled.
+ === run() {}``` (mainly to avoid clicking on the trigger by default)
+ allows that trigger node can be disabled. run() {} does not allow this behavior.
  * @property {boolean} [auto]
- * @property {boolean} [in_modal]
- * @property {number} [width]
- * @property {number} [timeout]
- * @property {boolean} [consumeVisibleOnly]
- * @property {string} [consumeEvent]
- * @property {boolean} [mobile]
+ * @property {boolean} [in_modal] When true, check that trigger node is present in the last visible .modal.
+ * @property {number} [timeout] By default, when the trigger node isn't found after 10000 milliseconds, it throws an error.
+ * You can change this value to lengthen or shorten the time before the error occurs [ms].
+ * @property {string} [consumeEvent] Only in manual mode (onboarding tour). It's the event we want the customer to do.
+ * @property {boolean} [mobile] When true, step will only trigger in mobile view.
  * @property {string} [title]
- * @property {string|false|undefined} [shadow_dom]
- * @property {object} [state]
- *
+ * @property {string|false|undefined} [shadow_dom] By default, trigger nodes are selected in the main document node
+ * but this property forces to search in a shadowRoot document.
+
  * @typedef {"manual" | "auto"} TourMode
  */
+
+/**
+ * Check properties of tourStep
+ * @param {TourStep} tourStep
+ */
+function checkTourStepKeyValues(tourStep) {
+    const stepschema = {
+        id: { type: String, optional: true },
+        trigger: { type: String },
+        alt_trigger: { type: String, optional: true },
+        isActive: { type: Array, element: String, optional: true },
+        content: { type: [String, Object], optional: true }, //allow object for _t && markup
+        position: { type: String, optional: true },
+        run: { type: [String, Function], optional: true },
+        allowInvisible: { type: Boolean, optional: true },
+        allowDisabled: { type: Boolean, optional: true },
+        in_modal: { type: Boolean, optional: true },
+        timeout: { type: Number, optional: true },
+        consumeEvent: { type: String, optional: true },
+        title: { type: String, optional: true },
+        debugHelp: { type: String, optional: true },
+        noPrepend: { type: Boolean, optional: true },
+        pause: { type: Boolean, optional: true }, //ONLY IN DEBUG MODE
+        break: { type: Boolean, optional: true }, //ONLY IN DEBUG MODE
+    };
+
+    try {
+        validate(tourStep, stepschema);
+        return true;
+    } catch (error) {
+        console.error(`Error for step ${JSON.stringify(tourStep, null, 4)}\n${error.message}`);
+        return false;
+    }
+}
 
 export const tourService = {
     // localization dependency to make sure translations used by tours are loaded
@@ -77,14 +113,10 @@ export const tourService = {
                         throw new Error(`tour.steps has to be a function that returns TourStep[]`);
                     }
                     if (!steps) {
-                        steps = tour.steps().map((step) => {
-                            step.shadow_dom = step.shadow_dom ?? tour.shadow_dom;
-                            return step;
-                        });
+                        steps = tour.steps().filter(checkTourStepKeyValues);
                     }
                     return steps;
                 },
-                shadow_dom: tour.shadow_dom,
                 url: tour.url,
                 rainbowMan: tour.rainbowMan === undefined ? true : !!tour.rainbowMan,
                 rainbowManMessage: tour.rainbowManMessage,
@@ -146,7 +178,9 @@ export const tourService = {
                         component: TourPointer,
                         props: { pointerState, ...config },
                     };
-                    remove = overlay.add(pointers[tourName].component, pointers[tourName].props);
+                    remove = overlay.add(pointers[tourName].component, pointers[tourName].props, {
+                        sequence: 1100, // sequence based on bootstrap z-index values.
+                    });
                 },
                 stop() {
                     remove?.();
@@ -154,8 +188,8 @@ export const tourService = {
                     methods.destroy();
                 },
                 ...methods,
-                async pointTo(anchor, step) {
-                    possiblePointTos.push([tourName, () => methods.pointTo(anchor, step)]);
+                async pointTo(anchor, step, isZone) {
+                    possiblePointTos.push([tourName, () => methods.pointTo(anchor, step, isZone)]);
                     await Promise.resolve();
                     // only done once per macro advance
                     if (!possiblePointTos.length) {
@@ -183,26 +217,6 @@ export const tourService = {
         }
 
         /**
-         * @param {TourStep} step
-         * @param {TourMode} mode
-         */
-        function shouldOmit(step, mode) {
-            const isDefined = (key, obj) => key in obj && obj[key] !== undefined;
-            const getEdition = () =>
-                (session.server_version_info || []).at(-1) === "e" ? "enterprise" : "community";
-            const correctEdition = isDefined("edition", step)
-                ? step.edition === getEdition()
-                : true;
-            const correctDevice = isDefined("mobile", step) ? step.mobile === ui.isSmall : true;
-            return (
-                !correctEdition ||
-                !correctDevice ||
-                // `step.auto = true` means omitting a step in a manual tour.
-                (mode === "manual" && step.auto)
-            );
-        }
-
-        /**
          * @param {Tour} tour
          * @param {ReturnType<typeof createPointer>} pointer
          * @param {Object} options
@@ -218,18 +232,14 @@ export const tourService = {
             pointer,
             { mode, stepDelay, keepWatchBrowser, showPointerDuration }
         ) {
-            // IMPROVEMENTS: Custom step compiler. Will probably require decoupling from `mode`.
-            const stepCompiler = mode === "auto" ? compileStepAuto : compileStepManual;
-            const checkDelay = mode === "auto" ? tour.checkDelay : 100;
-            const filteredSteps = tour.steps.filter((step) => !shouldOmit(step, mode));
+            const filteredSteps = tour.steps;
             return compileTourToMacro(tour, {
                 filteredSteps,
-                stepCompiler,
+                mode,
                 pointer,
                 stepDelay,
                 keepWatchBrowser,
                 showPointerDuration,
-                checkDelay,
                 onStepConsummed(tour, step) {
                     bus.trigger("STEP-CONSUMMED", { tour, step });
                 },
@@ -257,39 +267,18 @@ export const tourService = {
                         orm.call("web_tour.tour", "consume", [[name]]);
                     }
                     pointer.stop();
+                    bus.trigger("TOUR-FINISHED");
                     // Used to signal the python test runner that the tour finished without error.
                     browser.console.log("tour succeeded");
+                    // Used to see easily in the python console and to know which tour has been succeeded in suite tours case.
+                    const succeeded = `║ TOUR ${name} SUCCEEDED ║`;
+                    const msg = [succeeded];
+                    msg.unshift("╔" + "═".repeat(succeeded.length - 2) + "╗");
+                    msg.push("╚" + "═".repeat(succeeded.length - 2) + "╝");
+                    browser.console.log(`\n\n${msg.join("\n")}\n`);
                     runningTours.delete(name);
                 },
             });
-        }
-
-        /**
-         * Wait for the shadow hosts matching the given selectors to
-         * appear in the DOM then, register the underlying shadow roots
-         * to the macro engine observer in order to listen to the
-         * changes in the shadow DOM.
-         *
-         * @param {Set<string>} shadowHostSelectors
-         */
-        function observeShadows(shadowHostSelectors) {
-            const observer = new MutationObserver(() => {
-                const shadowRoots = [];
-                for (const selector of shadowHostSelectors) {
-                    const shadowHost = document.querySelector(selector);
-                    if (shadowHost) {
-                        shadowRoots.push(shadowHost.shadowRoot);
-                        shadowHostSelectors.delete(selector);
-                    }
-                }
-                for (const shadowRoot of shadowRoots) {
-                    macroEngine.observer.observe(shadowRoot, macroEngine.observerOptions);
-                }
-                if (shadowHostSelectors.size === 0) {
-                    observer.disconnect();
-                }
-            });
-            observer.observe(macroEngine.target, { childList: true, subtree: true });
         }
 
         /**
@@ -341,19 +330,10 @@ export const tourService = {
             const macro = convertToMacro(tour, pointer, options);
             const willUnload = callWithUnloadCheck(() => {
                 if (tour.url && tour.url !== options.startUrl && options.redirect) {
-                    window.location.href = window.location.origin + tour.url;
+                    browser.location.href = browser.location.origin + tour.url;
                 }
             });
             if (!willUnload) {
-                const shadow_doms = tour.steps.reduce((acc, step) => {
-                    if (step.shadow_dom) {
-                        acc.add(step.shadow_dom);
-                    }
-                    return acc;
-                }, new Set());
-                if (shadow_doms.size > 0) {
-                    observeShadows(shadow_doms);
-                }
                 pointer.start();
                 activateMacro(macro, options.mode);
             }

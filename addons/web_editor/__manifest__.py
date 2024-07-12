@@ -22,7 +22,7 @@ Odoo Web Editor widget.
         # MAIN BUNDLES
         #----------------------------------------------------------------------
 
-        'web_editor.assets_legacy_wysiwyg': [
+        'web_editor.assets_snippets_menu': [
             'web_editor/static/src/js/editor/snippets.editor.js',
             'web_editor/static/src/js/editor/snippets.options.js',
         ],
@@ -31,6 +31,8 @@ Odoo Web Editor widget.
 
             'web/static/src/scss/pre_variables.scss',
             'web/static/lib/bootstrap/scss/_variables.scss',
+            'web/static/lib/bootstrap/scss/_variables-dark.scss',
+            'web/static/lib/bootstrap/scss/_maps.scss',
 
             'web/static/src/libs/fontawesome/css/font-awesome.css',
             'web/static/lib/odoo_ui_icons/*',
@@ -52,10 +54,19 @@ Odoo Web Editor widget.
             'web/static/lib/owl/odoo_module.js',
             'web/static/lib/jquery/jquery.js',
             'web/static/lib/popper/popper.js',
+            'web/static/lib/bootstrap/js/dist/util/index.js',
             'web/static/lib/bootstrap/js/dist/dom/data.js',
             'web/static/lib/bootstrap/js/dist/dom/event-handler.js',
             'web/static/lib/bootstrap/js/dist/dom/manipulator.js',
             'web/static/lib/bootstrap/js/dist/dom/selector-engine.js',
+            'web/static/lib/bootstrap/js/dist/util/config.js',
+            'web/static/lib/bootstrap/js/dist/util/component-functions.js',
+            'web/static/lib/bootstrap/js/dist/util/backdrop.js',
+            'web/static/lib/bootstrap/js/dist/util/focustrap.js',
+            'web/static/lib/bootstrap/js/dist/util/sanitizer.js',
+            'web/static/lib/bootstrap/js/dist/util/scrollbar.js',
+            'web/static/lib/bootstrap/js/dist/util/swipe.js',
+            'web/static/lib/bootstrap/js/dist/util/template-factory.js',
             'web/static/lib/bootstrap/js/dist/base-component.js',
             'web/static/lib/bootstrap/js/dist/alert.js',
             'web/static/lib/bootstrap/js/dist/button.js',
@@ -93,6 +104,8 @@ Odoo Web Editor widget.
             'web_editor/static/src/scss/bootstrap_overridden.scss',
             'web/static/src/scss/pre_variables.scss',
             'web/static/lib/bootstrap/scss/_variables.scss',
+            'web/static/lib/bootstrap/scss/_variables-dark.scss',
+            'web/static/lib/bootstrap/scss/_maps.scss',
             'web_editor/static/src/js/editor/odoo-editor/src/style.scss',
 
             # integration
@@ -117,8 +130,6 @@ Odoo Web Editor widget.
         'web_editor.assets_wysiwyg': [
             # legacy stuff that are no longer in assets_backend
             'web/static/src/legacy/js/core/class.js',
-            'web/static/src/legacy/js/core/dialog.js',
-            'web/static/src/legacy/xml/dialog.xml',
             'web/static/src/legacy/js/core/dom.js',
             'web/static/src/legacy/js/core/mixins.js',
             'web/static/src/legacy/js/core/service_mixins.js',
@@ -166,6 +177,8 @@ Odoo Web Editor widget.
             'web_editor/static/src/scss/bootstrap_overridden.scss',
             'web/static/src/scss/pre_variables.scss',
             'web/static/lib/bootstrap/scss/_variables.scss',
+            'web/static/lib/bootstrap/scss/_variables-dark.scss',
+            'web/static/lib/bootstrap/scss/_maps.scss',
             'web_editor/static/src/js/editor/odoo-editor/src/style.scss',
 
             # integration
@@ -268,7 +281,7 @@ Odoo Web Editor widget.
         # ----------------------------------------------------------------------
 
         'web.qunit_suite_tests': [
-            ('include', 'web_editor.assets_legacy_wysiwyg'),
+            ('include', 'web_editor.assets_snippets_menu'),
             ('include', 'web_editor.backend_assets_wysiwyg'),
 
             'web_editor/static/tests/**/*',

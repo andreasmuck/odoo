@@ -12,18 +12,22 @@ registry.category("web_tour.tours").add('event_booth_sale_pricelists_different_c
     {
         content: 'Open "Test Event Booths" event',
         trigger: 'h5.card-title span:contains("Test Event Booths")',
+        run: "click",
     },
     {
         content: 'Go to "Get A Booth" page',
         trigger: 'li.nav-item a:has(span:contains("Get A Booth"))',
+        run: "click",
     },
     {
         content: 'Select the booth',
         trigger: '.o_wbooth_booths input[name="event_booth_ids"]:nth-child(1)',
+        run: "click",
     },
     {
         content: 'Confirm the booth by clicking the submit button',
         trigger: 'button.o_wbooth_registration_submit',
+        run: "click",
     },
     {
         content: 'Fill in your contact information',
@@ -36,15 +40,9 @@ registry.category("web_tour.tours").add('event_booth_sale_pricelists_different_c
     {
         content: 'Submit your informations',
         trigger: 'button[type="submit"]',
+        run: "click",
     },
     wsTourUtils.goToCheckout(),
-    ...getPriceListChecksSteps({
-        pricelistName: "EUR With Discount Included",
-        eventName: "Test Event Booths",
-        price: "99.00",
-        priceSelected: "99",
-        priceCart: "99.00",
-    }),
     ...getPriceListChecksSteps({
         pricelistName: "EUR Without Discount Included",
         eventName: "Test Event Booths",
@@ -52,13 +50,6 @@ registry.category("web_tour.tours").add('event_booth_sale_pricelists_different_c
         priceSelected: "99",
         priceCart: "99.00",
         priceBeforeDiscount: "110.00",
-    }),
-    ...getPriceListChecksSteps({
-        pricelistName: "EX With Discount Included",
-        eventName: "Test Event Booths",
-        price: "990.00",
-        priceSelected: "990",
-        priceCart: "990.00",
     }),
     ...getPriceListChecksSteps({
         pricelistName: "EX Without Discount Included",

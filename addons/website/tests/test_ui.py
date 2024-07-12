@@ -7,7 +7,9 @@ from werkzeug.urls import url_encode
 
 import odoo
 import odoo.tests
+from odoo import http
 from odoo.addons.base.tests.common import HttpCaseWithUserDemo
+from odoo.addons.web_editor.controllers.main import Web_Editor
 
 
 @odoo.tests.tagged('-at_install', 'post_install')
@@ -112,8 +114,40 @@ class TestUiHtmlEditor(HttpCaseWithUserDemo):
         self.start_tour(self.env['website'].get_client_action_url('/contactus'), 'test_html_editor_scss', login='admin')
         self.start_tour(self.env['website'].get_client_action_url('/'), 'test_html_editor_scss_2', login='demo')
 
-    def media_dialog_undraw(self):
+    def test_media_dialog_undraw(self):
+        BASE_URL = self.base_url()
+        banner = '/website/static/src/img/snippets_demo/s_banner.jpg'
+
+        def mock_media_library_search(self, **params):
+            return {
+                'results': 1,
+                'media': [{
+                    'id': 1,
+                    'media_url': BASE_URL + banner,
+                    'thumbnail_url': BASE_URL + banner,
+                    'tooltip': False,
+                    'author': 'undraw',
+                    'author_link': BASE_URL,
+                }],
+            }
+
+        # disable undraw, no third party should be called in tests
+        # Mocked for the previews in the media dialog
+        mock_media_library_search.routing_type = 'json'
+        Web_Editor.media_library_search = http.route(['/web_editor/media_library_search'], type='json', auth='user', website=True)(mock_media_library_search)
+
         self.start_tour("/", 'website_media_dialog_undraw', login='admin')
+
+    def test_code_editor_usable(self):
+        # TODO: enable debug mode when failing tests have been fixed (props validation)
+        url = '/web#action=website.website_preview'
+        self.start_tour(url, 'website_code_editor_usable', login='admin')
+
+
+@odoo.tests.tagged('external', '-standard', '-at_install', 'post_install')
+class TestUiHtmlEditorWithExternal(HttpCaseWithUserDemo):
+    def test_media_dialog_external_library(self):
+        self.start_tour("/", 'website_media_dialog_external_library', login='admin')
 
 
 @odoo.tests.tagged('-at_install', 'post_install')
@@ -172,11 +206,6 @@ class TestUiTranslate(odoo.tests.HttpCase):
         self.env.ref('website.s_cover').update_field_translations('arch_db', {
             parseltongue.code: {
                 'Contact us': 'Contact us in Parseltongue'
-            }
-        })
-        self.env.ref('web_editor.snippets').update_field_translations('arch_db', {
-            fake_user_lang.code: {
-                'Save': 'Save in fu_GB',
             }
         })
         website = self.env['website'].create({
@@ -274,7 +303,7 @@ class TestUi(odoo.tests.HttpCase):
 
     def test_07_snippet_version(self):
         website_snippets = self.env.ref('website.snippets')
-        self.env['ir.ui.view'].create([{
+        view_ids = self.env['ir.ui.view'].create([{
             'name': 'Test snip',
             'type': 'qweb',
             'key': 'website.s_test_snip',
@@ -292,13 +321,49 @@ class TestUi(odoo.tests.HttpCase):
                 </xpath>
             """,
         }])
-        self.start_tour(self.env['website'].get_client_action_url('/'), 'snippet_version', login='admin')
+        self.start_tour(self.env['website'].get_client_action_url('/'), 'snippet_version_1', login='admin')
+
+        self.env['ir.ui.view'].create([
+            {
+                'name': 'Test snippet version 999',
+                'mode': 'extension',
+                'inherit_id': view_ids[0].id,
+                'arch': """
+                    <xpath expr="//section[hasclass('s_test_snip')]" position="attributes">
+                        <attribute name="data-vjs">999</attribute>
+                    </xpath>
+                """
+            },
+            {
+                'name': 'Share snippet version 999',
+                'mode': 'extension',
+                'inherit_id': self.env.ref("website.s_share").id,
+                'arch': """
+                    <xpath expr="//div" position="attributes">
+                        <attribute name="data-vcss">999</attribute>
+                    </xpath>
+                """
+            },
+            {
+                'name': 's_text_image version 999',
+                'mode': 'extension',
+                'inherit_id': self.env.ref("website.s_text_image").id,
+                'arch': """
+                    <xpath expr="//section[hasclass('s_text_image')]" position="attributes">
+                        <attribute name="data-vxml">999</attribute>
+                    </xpath>
+                """
+            }
+        ])
+
+        self.start_tour(self.env['website'].get_client_action_url('/'), 'snippet_version_2', login='admin')
 
     def test_08_website_style_custo(self):
         self.start_tour(self.env['website'].get_client_action_url('/'), 'website_style_edition', login='admin')
 
     def test_09_website_edit_link_popover(self):
-        self.start_tour('/@/', 'edit_link_popover', login='admin')
+        self.start_tour('/@/', 'edit_link_popover_1', login='admin')
+        self.start_tour('/@/', 'edit_link_popover_2', login='admin')
 
     def test_10_website_conditional_visibility(self):
         self.start_tour(self.env['website'].get_client_action_url('/'), 'conditional_visibility_1', login='admin')
@@ -549,3 +614,45 @@ class TestUi(odoo.tests.HttpCase):
             'res_id': attachment.id,
         })
         self.start_tour(self.env['website'].get_client_action_url('/'), 'drop_404_ir_attachment_url', login='admin')
+
+    def test_mobile_order_with_drag_and_drop(self):
+        self.start_tour(self.env['website'].get_client_action_url('/'), 'website_mobile_order_with_drag_and_drop', login='admin')
+
+    def test_focus_on_input_search(self):
+        self.start_tour(self.env['website'].get_client_action_url('/'), 'focus_on_input_search', login='admin')
+
+    def test_powerbox_snippet(self):
+        self.start_tour('/', 'website_powerbox_snippet', login='admin')
+
+    def test_website_no_dirty_lazy_image(self):
+        website = self.env['website'].browse(1)
+        # Enable multiple langs to reduce the chance of the test being silently
+        # broken by ensuring that it receives a lot of extra o_dirty elements.
+        # This is done to account for potential later changes in the number of
+        # o_dirty elements caused by legitimate modifications in the code.
+        # Perfs: `_activate_lang()` does not load .pot so it is perf friendly
+        lang_fr = self.env['res.lang']._activate_lang('fr_FR')
+        lang_es = self.env['res.lang']._activate_lang('es_AR')
+        lang_zh = self.env['res.lang']._activate_lang('zh_HK')
+        lang_ar = self.env['res.lang']._activate_lang('ar_SY')
+        website.language_ids = self.env.ref('base.lang_en') + lang_fr + lang_es + lang_zh + lang_ar
+        # Select "dropdown with image" language selector template
+        for key, active in [
+            # footer
+            ('portal.footer_language_selector', True),
+            ('website.footer_language_selector_inline', False),
+            ('website.footer_language_selector_flag', True),
+            ('website.footer_language_selector_no_text', False),
+            ('website.footer_language_selector_flag', True),
+            ('website.footer_language_selector_no_text', False),
+            # header
+            ('website.header_language_selector', True),
+            ('website.header_language_selector_inline', False),
+            ('website.header_language_selector_flag', True),
+            ('website.header_language_selector_no_text', False),
+            ('website.header_language_selector_flag', True),
+            ('website.header_language_selector_no_text', False),
+        ]:
+            self.env['website'].with_context(website_id=website.id).viewref(key).active = active
+
+        self.start_tour('/', 'website_no_dirty_lazy_image', login='admin')

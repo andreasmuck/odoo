@@ -1,7 +1,3 @@
-import { describe, test } from "@odoo/hoot";
-
-/** @type {ReturnType<import("@mail/utils/common/misc").rpcWithEnv>} */
-let rpc;
 import {
     assertSteps,
     click,
@@ -13,10 +9,12 @@ import {
     startServer,
     step,
     triggerHotkey,
-} from "../mail_test_helpers";
-import { patchWithCleanup, serverState } from "@web/../tests/web_test_helpers";
-import { rpcWithEnv } from "@mail/utils/common/misc";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, test } from "@odoo/hoot";
 import { mockDate } from "@odoo/hoot-mock";
+import { getService, patchWithCleanup, serverState } from "@web/../tests/web_test_helpers";
+
+import { rpc } from "@web/core/network/rpc";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -29,7 +27,7 @@ test("Messages are received cross-tab", async () => {
     await openDiscuss(channelId, { target: env1 });
     await openDiscuss(channelId, { target: env2 });
     await insertText(".o-mail-Composer-input", "Hello World!", { target: env1 });
-    await click("button:enabled", { target: env1, text: "Send" });
+    await click("button[aria-label='Send']:enabled", { target: env1 });
     await contains(".o-mail-Message-content", { target: env1, text: "Hello World!" });
     await contains(".o-mail-Message-content", { target: env2, text: "Hello World!" });
 });
@@ -37,9 +35,10 @@ test("Messages are received cross-tab", async () => {
 test("Delete starred message updates counter", async () => {
     const pyEnv = await startServer();
     const channelId = pyEnv["discuss.channel"].create({ name: "General" });
-    const messageId = pyEnv["mail.message"].create({
+    pyEnv["mail.message"].create({
         body: "Hello World!",
         model: "discuss.channel",
+        message_type: "comment",
         res_id: channelId,
         starred_partner_ids: [serverState.partnerId],
     });
@@ -47,17 +46,16 @@ test("Delete starred message updates counter", async () => {
     const env2 = await start({ asTab: true });
     await openDiscuss(channelId, { target: env1 });
     await openDiscuss(channelId, { target: env2 });
+    await contains(".o-mail-Message", { target: env1, text: "Hello World!" });
+    await contains(".o-mail-Message", { target: env2, text: "Hello World!" });
     await contains("button", { target: env2, text: "Starred1" });
-    rpc = rpcWithEnv(env1);
-    rpc("/mail/message/update_content", {
-        message_id: messageId,
-        body: "",
-        attachment_ids: [],
-    });
+    await click(":nth-child(1 of .o-mail-Message) [title='Expand']", { target: env2 });
+    await click(".o-mail-Message-moreMenu [title='Delete']", { target: env2 });
+    await click("button", { text: "Confirm" }, { target: env2 });
     await contains("button", { count: 0, target: env2, text: "Starred1" });
 });
 
-test("Thread rename", async () => {
+test("Thread rename [REQUIRE FOCUS]", async () => {
     const pyEnv = await startServer();
     const channelId = pyEnv["discuss.channel"].create({
         create_uid: serverState.userId,
@@ -76,7 +74,7 @@ test("Thread rename", async () => {
     await contains(".o-mail-DiscussSidebarChannel", { target: env2, text: "Sales" });
 });
 
-test("Thread description update", async () => {
+test("Thread description update [REQUIRE FOCUS]", async () => {
     const pyEnv = await startServer();
     const channelId = pyEnv["discuss.channel"].create({
         create_uid: serverState.userId,
@@ -110,15 +108,15 @@ test.skip("Channel subscription is renewed when channel is added from invite", a
     mockDate(
         `${later.year}-${later.month}-${later.day} ${later.hour}:${later.minute}:${later.second}`
     );
-    const env = await start();
-    patchWithCleanup(env.services.bus_service, {
+    await start();
+    patchWithCleanup(getService("bus_service"), {
         forceUpdateChannels() {
             step("update-channels");
         },
     });
     await openDiscuss();
     await contains(".o-mail-DiscussSidebarChannel");
-    env.services.orm.call("discuss.channel", "add_members", [[channelId]], {
+    getService("orm").call("discuss.channel", "add_members", [[channelId]], {
         partner_ids: [serverState.partnerId],
     });
     await contains(".o-mail-DiscussSidebarChannel", { count: 2 });
@@ -142,7 +140,6 @@ test("Adding attachments", async () => {
         name: "test.txt",
         mimetype: "text/plain",
     });
-    rpc = rpcWithEnv(env1);
     rpc("/mail/message/update_content", {
         body: "Hello world!",
         attachment_ids: [attachmentId],
@@ -182,7 +179,6 @@ test("Message delete notification", async () => {
         model: "res.partner",
         res_id: serverState.partnerId,
         needaction: true,
-        needaction_partner_ids: [serverState.partnerId], // not needed, for consistency
     });
     pyEnv["mail.notification"].create({
         mail_message_id: messageId,

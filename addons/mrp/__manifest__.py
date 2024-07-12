@@ -16,6 +16,7 @@
         'data/digest_data.xml',
         'data/mail_templates.xml',
         'data/mrp_data.xml',
+        'data/mail_message_subtype_data.xml',
         'wizard/change_production_qty_views.xml',
         'wizard/mrp_workcenter_block_view.xml',
         'wizard/stock_warn_insufficient_qty_views.xml',
@@ -30,12 +31,12 @@
         'views/mrp_bom_views.xml',
         'views/mrp_production_views.xml',
         'views/mrp_routing_views.xml',
+        'views/product_document_views.xml',
         'views/product_views.xml',
         'views/stock_orderpoint_views.xml',
         'views/stock_warehouse_views.xml',
         'views/stock_picking_views.xml',
         'views/mrp_unbuild_views.xml',
-        'views/ir_attachment_view.xml',
         'views/res_config_settings_views.xml',
         'views/stock_scrap_views.xml',
         'report/report_deliveryslip.xml',
@@ -62,7 +63,7 @@
         'web.assets_tests': [
             'mrp/static/tests/tours/**/*',
         ],
-        'web.qunit_suite_tests': [
+        'web.assets_unit_tests': [
             'mrp/static/tests/**/*',
         ],
     },

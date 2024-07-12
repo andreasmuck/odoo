@@ -128,6 +128,76 @@ class TestProcurement(TestMrpCommon):
             production_product_4 = production_form.save()
             production_product_4.action_confirm()
 
+    def test_procurement_3(self):
+        warehouse = self.env['stock.warehouse'].search([], limit=1)
+        warehouse.write({'reception_steps': 'three_steps'})
+        warehouse.mto_pull_id.route_id.active = True
+        self.env['stock.location']._parent_store_compute()
+        warehouse.reception_route_id.rule_ids.filtered(
+            lambda p: p.location_src_id == warehouse.wh_input_stock_loc_id and
+            p.location_dest_id == warehouse.wh_qc_stock_loc_id).write({
+                'action': 'pull',
+                'location_dest_from_rule': True,
+                'procure_method': 'make_to_stock',
+            })
+        warehouse.reception_route_id.rule_ids.filtered(
+            lambda p: p.location_src_id == warehouse.wh_qc_stock_loc_id and
+            p.location_dest_id == warehouse.lot_stock_id).write({
+                'action': 'pull',
+                'location_dest_from_rule': True,
+            })
+
+        finished_product = self.env['product.product'].create({
+            'name': 'Finished Product',
+            'is_storable': True,
+        })
+        component = self.env['product.product'].create({
+            'name': 'Component',
+            'is_storable': True,
+            'route_ids': [(4, warehouse.mto_pull_id.route_id.id)]
+        })
+        self.env['stock.quant']._update_available_quantity(component, warehouse.wh_input_stock_loc_id, 100)
+        bom = self.env['mrp.bom'].create({
+            'product_id': finished_product.id,
+            'product_tmpl_id': finished_product.product_tmpl_id.id,
+            'product_uom_id': self.uom_unit.id,
+            'product_qty': 1.0,
+            'type': 'normal',
+            'bom_line_ids': [
+                (0, 0, {'product_id': component.id, 'product_qty': 1.0})
+            ]})
+        mo_form = Form(self.env['mrp.production'])
+        mo_form.product_id = finished_product
+        mo_form.bom_id = bom
+        mo_form.product_qty = 5
+        mo_form.product_uom_id = finished_product.uom_id
+        mo_form.location_src_id = warehouse.lot_stock_id
+        mo = mo_form.save()
+        mo.action_confirm()
+        pickings = self.env['stock.picking'].search([('product_id', '=', component.id)])
+        self.assertEqual(len(pickings), 2.0)
+        picking_input_to_qc = pickings.filtered(lambda p: p.location_id == warehouse.wh_input_stock_loc_id)
+        picking_qc_to_stock = pickings - picking_input_to_qc
+        self.assertTrue(picking_input_to_qc)
+        self.assertTrue(picking_qc_to_stock)
+        picking_input_to_qc.action_assign()
+        self.assertEqual(picking_input_to_qc.state, 'assigned')
+        picking_input_to_qc.move_ids.write({'quantity': 5.0, 'picked': True})
+        picking_input_to_qc._action_done()
+        picking_qc_to_stock.action_assign()
+        self.assertEqual(picking_qc_to_stock.state, 'assigned')
+        picking_qc_to_stock.move_ids.write({'quantity': 3.0, 'picked': True})
+        picking_qc_to_stock.with_context(skip_backorder=True, picking_ids_not_to_backorder=picking_qc_to_stock.ids).button_validate()
+        self.assertEqual(picking_qc_to_stock.state, 'done')
+        mo.action_assign()
+        self.assertEqual(mo.move_raw_ids.quantity, 3.0)
+        produce_form = Form(mo)
+        produce_form.qty_producing = 3.0
+        mo = produce_form.save()
+        self.assertEqual(mo.move_raw_ids.quantity, 3.0)
+        picking_qc_to_stock.move_line_ids.quantity = 5.0
+        self.assertEqual(mo.move_raw_ids.quantity, 3.0)
+
     def test_link_date_mo_moves(self):
         """ Check link of shedule date for manufaturing with date stock move."""
 
@@ -291,17 +361,18 @@ class TestProcurement(TestMrpCommon):
         5. When 1st MO is completed => auto-assign to picking
         6. Additionally check that a MO that has component in stock auto-reserves when MO is confirmed (since default setting = 'at_confirm')"""
 
+        self.env['stock.picking.type'].browse(self.picking_type_out).reservation_method = 'at_confirm'
         self.warehouse = self.env.ref('stock.warehouse0')
         route_manufacture = self.warehouse.manufacture_pull_id.route_id
 
         product_1 = self.env['product.product'].create({
             'name': 'Cake',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(6, 0, [route_manufacture.id])]
         })
         product_2 = self.env['product.product'].create({
             'name': 'Cake Mix',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(6, 0, [route_manufacture.id])]
         })
         product_3 = self.env['product.product'].create({
@@ -333,7 +404,7 @@ class TestProcurement(TestMrpCommon):
         # extra manufactured component added to 1st MO after it is already confirmed
         product_4 = self.env['product.product'].create({
             'name': 'Flavor Enchancer',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(6, 0, [route_manufacture.id])]
         })
         product_5 = self.env['product.product'].create({
@@ -460,6 +531,8 @@ class TestProcurement(TestMrpCommon):
         """ Simulate a mto chain with a manufacturing order. Updating the
         initial demand should also impact the initial move but not the
         linked manufacturing order.
+        Secondary test: set the MTO route company-specific and ensure that make
+        sure no new routes have been created
         """
         def create_run_procurement(product, product_qty, values=None):
             if not values:
@@ -478,17 +551,22 @@ class TestProcurement(TestMrpCommon):
             'name': 'Roger'
         })
         # This needs to be tried with MTO route activated
-        self.env['stock.route'].browse(self.ref('stock.route_warehouse0_mto')).action_unarchive()
+        mto_route = self.env['stock.route'].browse(self.ref('stock.route_warehouse0_mto'))
+        mto_route.action_unarchive()
+        # Setup for the secondary test
+        routes_count = self.env['stock.route'].search_count([])
+        mto_route.rule_ids.search([('company_id', 'not in', (False, self.env.company.id))]).unlink()
+        mto_route.company_id = self.env.company
         # Define products requested for this BoM.
         product = self.env['product.product'].create({
             'name': 'product',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(4, self.ref('stock.route_warehouse0_mto')), (4, self.ref('mrp.route_warehouse0_manufacture'))],
             'categ_id': self.env.ref('product.product_category_all').id
         })
         component = self.env['product.product'].create({
             'name': 'component',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': self.env.ref('product.product_category_all').id
         })
         self.env['mrp.bom'].create({
@@ -532,6 +610,9 @@ class TestProcurement(TestMrpCommon):
         manufacturing_orders = self.env['mrp.production'].search([('product_id', '=', product.id)])
         self.assertEqual(len(manufacturing_orders), 2, 'A new MO should have been created for missing demand.')
 
+        # Secondary test
+        self.assertEqual(self.env['stock.route'].search_count([]), routes_count)
+
     def test_rr_with_dependance_between_bom(self):
         self.warehouse = self.env.ref('stock.warehouse0')
         route_mto = self.warehouse.mto_pull_id.route_id
@@ -539,17 +620,17 @@ class TestProcurement(TestMrpCommon):
         route_manufacture = self.warehouse.manufacture_pull_id.route_id
         product_1 = self.env['product.product'].create({
             'name': 'Product A',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(6, 0, [route_manufacture.id])]
         })
         product_2 = self.env['product.product'].create({
             'name': 'Product B',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(6, 0, [route_manufacture.id, route_mto.id])]
         })
         product_3 = self.env['product.product'].create({
             'name': 'Product B',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(6, 0, [route_manufacture.id])]
         })
         product_4 = self.env['product.product'].create({
@@ -647,7 +728,7 @@ class TestProcurement(TestMrpCommon):
             'type': 'consu',
         }, {
             'name': 'finished',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(6, 0, manu_route.ids)],
         }])
 
@@ -708,7 +789,7 @@ class TestProcurement(TestMrpCommon):
         # add a third component, should reflect in picking
         comp3 = self.env['product.product'].create({
             'name': 'Comp3',
-            'type': 'product'
+            'is_storable': True,
         })
         mo.write({
             'move_raw_ids': [(0, 0, {
@@ -742,15 +823,15 @@ class TestProcurement(TestMrpCommon):
 
         super_product = self.env['product.product'].create({
             'name': 'Super Product',
-            'type': 'product',
+            'is_storable': True,
         })
         comp1 = self.env['product.product'].create({
             'name': 'Comp1',
-            'type': 'product',
+            'is_storable': True,
         })
         comp2 = self.env['product.product'].create({
             'name': 'Comp2',
-            'type': 'product',
+            'is_storable': True,
         })
         bom = self.env['mrp.bom'].create({
             'product_id': super_product.id,
@@ -794,7 +875,7 @@ class TestProcurement(TestMrpCommon):
         # add new comp3
         comp3 = self.env['product.product'].create({
             'name': 'Comp3',
-            'type': 'product'
+            'is_storable': True,
         })
         mo.write({
             'move_raw_ids': [(0, 0, {

@@ -1,32 +1,32 @@
 /** @odoo-module */
 
 import { describe, expect, test } from "@odoo/hoot";
-import { TestRunner } from "../../core/runner";
+import { Runner } from "../../core/runner";
 import { Suite } from "../../core/suite";
 import { parseUrl } from "../local_helpers";
 
 describe(parseUrl(import.meta.url), () => {
     test("can register suites", () => {
-        const runner = new TestRunner();
+        const runner = new Runner();
         runner.describe("a suite", () => {});
         runner.describe("another suite", () => {});
 
-        expect(runner.suites.size).toBe(2);
-        expect(runner.tests.size).toBe(0);
+        expect(runner.suites).toHaveLength(2);
+        expect(runner.tests).toHaveLength(0);
         for (const suite of runner.suites.values()) {
             expect(suite).toMatch(Suite);
         }
     });
 
     test("can register nested suites", () => {
-        const runner = new TestRunner();
+        const runner = new Runner();
         runner.describe(["a", "b", "c"], () => {});
 
         expect([...runner.suites.values()].map((s) => s.name)).toEqual(["a", "b", "c"]);
     });
 
     test("can register tests", () => {
-        const runner = new TestRunner();
+        const runner = new Runner();
         runner.describe("suite 1", () => {
             runner.test("test 1", () => {});
         });
@@ -35,12 +35,12 @@ describe(parseUrl(import.meta.url), () => {
             runner.test("test 3", () => {});
         });
 
-        expect(runner.suites.size).toBe(2);
-        expect(runner.tests.size).toBe(3);
+        expect(runner.suites).toHaveLength(2);
+        expect(runner.tests).toHaveLength(3);
     });
 
     test("should not have duplicate suites", () => {
-        const runner = new TestRunner();
+        const runner = new Runner();
         runner.describe(["parent", "child a"], () => {});
         runner.describe(["parent", "child b"], () => {});
 
@@ -52,7 +52,7 @@ describe(parseUrl(import.meta.url), () => {
     });
 
     test("can refuse standalone tests", async () => {
-        const runner = new TestRunner();
+        const runner = new Runner();
         expect(() =>
             runner.test([], "standalone test", () => {
                 expect(true).toBe(false);
@@ -61,11 +61,9 @@ describe(parseUrl(import.meta.url), () => {
     });
 
     test("can register test tags", async () => {
-        console.warn = (message) => expect.step(message);
-
-        const runner = new TestRunner();
+        const runner = new Runner();
         runner.describe("suite", () => {
-            let testFn = runner.test.debug.only.skip; // 3
+            let testFn = runner.test;
             for (let i = 1; i <= 10; i++) {
                 // 10
                 testFn = testFn.tags`Tag-${i}`;
@@ -74,10 +72,7 @@ describe(parseUrl(import.meta.url), () => {
             testFn("tagged test", () => {});
         });
 
-        expect(runner.tags.size).toBe(13);
-        expect(runner.tests.values().next().value.tags.length).toBe(13);
-        expect([
-            `%c[HOOT]%c test "suite/tagged test" is explicitly included but marked as skipped: "skip" modifier has been ignored`,
-        ]).toVerifySteps();
+        expect(runner.tags).toHaveLength(10);
+        expect(runner.tests.values().next().value.tags).toHaveLength(10);
     });
 });

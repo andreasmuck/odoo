@@ -1,6 +1,3 @@
-import { describe, beforeEach, expect, test } from "@odoo/hoot";
-
-import { Composer } from "@mail/core/common/composer";
 import {
     SIZES,
     click,
@@ -20,10 +17,19 @@ import {
     start,
     startServer,
     triggerHotkey,
-} from "../mail_test_helpers";
-import { Command, onRpc, patchWithCleanup, serverState } from "@web/../tests/web_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
+import { beforeEach, describe, expect, test } from "@odoo/hoot";
 import { Deferred, tick } from "@odoo/hoot-mock";
-import { withUser } from "@web/../tests/_framework/mock_server/mock_server";
+import {
+    Command,
+    getService,
+    onRpc,
+    patchWithCleanup,
+    serverState,
+    withUser,
+} from "@web/../tests/web_test_helpers";
+
+import { Composer } from "@mail/core/common/composer";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -256,14 +262,6 @@ test("send message only once when button send is clicked twice quickly", async (
     await contains(".o-mail-Message");
 });
 
-test('send button on discuss.channel should have "Send" as label', async () => {
-    const pyEnv = await startServer();
-    const channelId = pyEnv["discuss.channel"].create({ name: "minecraft-wii-u" });
-    await start();
-    await openDiscuss(channelId);
-    await contains(".o-mail-Composer-send:disabled", { text: "Send" });
-});
-
 test("Show send button in mobile", async () => {
     const pyEnv = await startServer();
     patchUiSize({ size: SIZES.SM });
@@ -419,7 +417,7 @@ test('post message on channel with "Enter" keyboard shortcut', async () => {
     await contains(".o-mail-Message");
 });
 
-test.skip("leave command on channel", async () => {
+test("leave command on channel", async () => {
     const pyEnv = await startServer();
     const channelId = pyEnv["discuss.channel"].create({ name: "general" });
     await start();
@@ -431,7 +429,7 @@ test.skip("leave command on channel", async () => {
     await contains(".o-mail-Composer-input", { value: "/leave " });
     triggerHotkey("Enter");
     await contains(".o-mail-DiscussSidebarChannel", { count: 0, text: "general" });
-    await contains(".o-mail-Discuss", { text: "No conversation selected." });
+    await contains(".o-mail-Discuss-threadName", { value: "Inbox" });
     await contains(".o_notification", { text: "You unsubscribed from general." });
 });
 
@@ -446,10 +444,10 @@ test("Can handle leave notification from unknown member", async () => {
             Command.create({ partner_id: partnerId }),
         ],
     });
-    const env = await start();
+    await start();
     await openDiscuss(channelId);
     await withUser(userId, () =>
-        env.services.orm.call("discuss.channel", "action_unfollow", [channelId])
+        getService("orm").call("discuss.channel", "action_unfollow", [channelId])
     );
     await click("button[title='Show Member List']");
     await contains(".o-discuss-ChannelMember", { text: "Mitchell Admin" });
@@ -475,7 +473,7 @@ test("leave command on chat", async () => {
     await contains(".o-mail-Composer-input", { value: "/leave " });
     triggerHotkey("Enter");
     await contains(".o-mail-DiscussSidebarChannel", { count: 0, text: "Chuck Norris" });
-    await contains(".o-mail-Discuss h4.text-muted", { text: "No conversation selected." });
+    await contains(".o-mail-Discuss-threadName", { value: "Inbox" });
     await contains(".o_notification", { text: "You unpinned your conversation with Chuck Norris" });
 });
 
@@ -507,7 +505,7 @@ test("composer text input placeholder should contain correspondent name when thr
     await contains("textarea.o-mail-Composer-input[placeholder='Message Marc Demo…']");
 });
 
-test("quick edit last self-message from UP arrow", async () => {
+test("quick edit last self-message from UP arrow [REQUIRE FOCUS]", async () => {
     const pyEnv = await startServer();
     const channelId = pyEnv["discuss.channel"].create({ name: "general" });
     pyEnv["mail.message"].create({
@@ -622,7 +620,6 @@ test("composer: add an attachment in reply to message in history", async () => {
     const messageId = pyEnv["mail.message"].create({
         body: "not empty",
         model: "discuss.channel",
-        history_partner_ids: [serverState.partnerId],
         res_id: channelId,
     });
     pyEnv["mail.notification"].create({
@@ -706,7 +703,7 @@ test("composer: paste attachments", async () => {
     await contains(".o-mail-AttachmentList .o-mail-AttachmentCard");
 });
 
-test("Replying on a channel should focus composer initially", async () => {
+test("Replying on a channel should focus composer initially [REQUIRE FOCUS]", async () => {
     const pyEnv = await startServer();
     const channelId = pyEnv["discuss.channel"].create({
         channel_type: "channel",
@@ -727,10 +724,7 @@ test("Replying on a channel should focus composer initially", async () => {
 test("remove an uploading attachment", async () => {
     const pyEnv = await startServer();
     const channelId = pyEnv["discuss.channel"].create({ name: "test" });
-    onRpc("/mail/attachment/upload", async (route, args) => {
-        // simulates uploading indefinitely
-        await new Deferred();
-    });
+    onRpc("/mail/attachment/upload", () => new Deferred()); // simulates uploading indefinitely
     await start();
     await openDiscuss(channelId);
     await inputFiles(".o-mail-Composer-coreMain .o_input_file", [
@@ -773,7 +767,9 @@ test("Show recipient list when there is more than 5 followers.", async () => {
     await contains("li", { text: "test4@odoo.com" });
     await contains("li", { text: "test5@odoo.com" });
     await contains("li", { text: "test6@odoo.com" });
-    await contains(".o-mail-Chatter", { text: "To: test1, test2, test3, test4, test5, and 1 more" });
+    await contains(".o-mail-Chatter", {
+        text: "To: test1, test2, test3, test4, test5, and 1 more",
+    });
 });
 
 test("Show 'No recipient found.' with 0 followers.", async () => {
@@ -788,9 +784,7 @@ test("Show 'No recipient found.' with 0 followers.", async () => {
 test("Uploading multiple files in the composer create multiple temporary attachments", async () => {
     const pyEnv = await startServer();
     const channelId = pyEnv["discuss.channel"].create({ name: "test" });
-    onRpc("/mail/attachment/upload", async (route, args) => {
-        await new Deferred();
-    });
+    onRpc("/mail/attachment/upload", () => new Deferred());
     await start();
     await openDiscuss(channelId);
     await inputFiles(".o-mail-Composer-coreMain .o_input_file", [
@@ -861,7 +855,7 @@ test('display canned response suggestions on typing ":"', async () => {
     const channelId = pyEnv["discuss.channel"].create({
         name: "test",
         channel_member_ids: [
-            [0, 0, { partner_id: serverState.partnerId }],
+            Command.create({ partner_id: serverState.partnerId }),
             Command.create({ guest_id: guestId }),
         ],
     });
@@ -884,7 +878,7 @@ test("select a canned response suggestion", async () => {
     const channelId = pyEnv["discuss.channel"].create({
         name: "test",
         channel_member_ids: [
-            [0, 0, { partner_id: serverState.partnerId }],
+            Command.create({ partner_id: serverState.partnerId }),
             Command.create({ guest_id: guestId }),
         ],
     });
@@ -908,7 +902,7 @@ test("select a canned response suggestion with some text", async () => {
     const channelId = pyEnv["discuss.channel"].create({
         name: "Mario",
         channel_member_ids: [
-            [0, 0, { partner_id: serverState.partnerId }],
+            Command.create({ partner_id: serverState.partnerId }),
             Command.create({ guest_id: guestId }),
         ],
     });
@@ -933,7 +927,7 @@ test("add an emoji after a canned response", async () => {
     const channelId = pyEnv["discuss.channel"].create({
         name: "Mario",
         channel_member_ids: [
-            [0, 0, { partner_id: serverState.partnerId }],
+            Command.create({ partner_id: serverState.partnerId }),
             Command.create({ guest_id: guestId }),
         ],
     });
@@ -959,7 +953,7 @@ test("Canned response can be inserted from the bus", async () => {
     const channelId = pyEnv["discuss.channel"].create({
         name: "test",
         channel_member_ids: [
-            [0, 0, { partner_id: serverState.partnerId }],
+            Command.create({ partner_id: serverState.partnerId }),
             Command.create({ guest_id: guestId }),
         ],
     });
@@ -984,7 +978,7 @@ test("Canned response can be updated from the bus", async () => {
     const channelId = pyEnv["discuss.channel"].create({
         name: "test",
         channel_member_ids: [
-            [0, 0, { partner_id: serverState.partnerId }],
+            Command.create({ partner_id: serverState.partnerId }),
             Command.create({ guest_id: guestId }),
         ],
     });
@@ -1012,7 +1006,7 @@ test("Canned response can be deleted from the bus", async () => {
     const channelId = pyEnv["discuss.channel"].create({
         name: "test",
         channel_member_ids: [
-            [0, 0, { partner_id: serverState.partnerId }],
+            Command.create({ partner_id: serverState.partnerId }),
             Command.create({ guest_id: guestId }),
         ],
     });
@@ -1037,4 +1031,84 @@ test("Canned response can be deleted from the bus", async () => {
     await insertText(".o-mail-Composer-input", ":");
     await contains(".o-mail-Composer-input", { value: ":" });
     await contains(".o-mail-NavigableList-item", { count: 1 });
+});
+
+test("Canned response last used changes on posting", async () => {
+    const pyEnv = await startServer();
+    const channelId = pyEnv["discuss.channel"].create({ name: "Expelliarmus" });
+    const cannedResponseId = pyEnv["mail.canned.response"].create({
+        source: "test",
+        substitution: "Test a canned response?",
+    });
+    let cannedResponse = pyEnv["mail.canned.response"].search_read([
+        ["id", "=", cannedResponseId],
+    ])[0];
+    await start();
+    await openDiscuss(channelId);
+    await insertText(".o-mail-Composer-input", ":");
+    await click(".o-mail-NavigableList-item", { text: "testTest a canned response?" });
+    await contains(".o-mail-Composer-input", { value: "Test a canned response? " });
+    expect(cannedResponse.last_used).toBeEmpty();
+    await click(".o-mail-Composer-send:enabled");
+    await contains(".o-mail-Message");
+    cannedResponse = pyEnv["mail.canned.response"].search_read([["id", "=", cannedResponseId]])[0];
+    expect(cannedResponse.last_used).not.toBeEmpty();
+});
+
+test("Does not auto-select 1st canned response suggestion", async () => {
+    const pyEnv = await startServer();
+    const channelId = pyEnv["discuss.channel"].create({ name: "General" });
+    pyEnv["mail.canned.response"].create({ source: "Hello", substitution: "Hello! How are you?" });
+    await start();
+    await openDiscuss(channelId);
+    await insertText(".o-mail-Composer-input", "@");
+    await contains(".o-mail-NavigableList-active", { text: "Mitchell Admin" });
+    await insertText(".o-mail-Composer-input", ":", { replace: true });
+    await contains(".o-mail-NavigableList-item", { text: "HelloHello! How are you?" });
+    await contains(".o-mail-NavigableList-active", { count: 0 });
+});
+
+test("TAB/ARROW focuses 1st canned response suggestion", async () => {
+    const pyEnv = await startServer();
+    const channelId = pyEnv["discuss.channel"].create({ name: "General" });
+    pyEnv["mail.canned.response"].create([
+        { source: "Hello", substitution: "Hello! How are you?" },
+        { source: "Goodbye", substitution: "Goodbye! See you soon!" },
+    ]);
+    await start();
+    await openDiscuss(channelId);
+    await insertText(".o-mail-Composer-input", ":");
+    // Assuming the suggestions are displayed in alphabetical order
+    await contains(".o-mail-NavigableList-item", {
+        text: "GoodbyeGoodbye! See you soon!",
+        before: [".o-mail-NavigableList-item", { text: "HelloHello! How are you?" }],
+    });
+    await contains(".o-mail-NavigableList-active", { count: 0 });
+    await triggerHotkey("Tab");
+    await contains(".o-mail-NavigableList-active", { text: "GoodbyeGoodbye! See you soon!" });
+    await triggerHotkey("Escape");
+    await contains(".o-mail-NavigableList-item", { count: 0 });
+    await insertText(".o-mail-Composer-input", ":", { replace: true });
+    await contains(".o-mail-NavigableList-item", { count: 2 });
+    await triggerHotkey("ArrowDown");
+    await contains(".o-mail-NavigableList-active", { text: "GoodbyeGoodbye! See you soon!" });
+    await triggerHotkey("Escape");
+    await contains(".o-mail-NavigableList-active", { count: 0 });
+    await insertText(".o-mail-Composer-input", ":", { replace: true });
+    await contains(".o-mail-NavigableList-item", { count: 2 });
+    await triggerHotkey("ArrowUp");
+    await contains(".o-mail-NavigableList-active", { text: "GoodbyeGoodbye! See you soon!" });
+});
+
+test("ENTER closes canned response suggestions", async () => {
+    const pyEnv = await startServer();
+    const channelId = pyEnv["discuss.channel"].create({ name: "General" });
+    pyEnv["mail.canned.response"].create({ source: "Hello", substitution: "Hello! How are you?" });
+    await start();
+    await openDiscuss(channelId);
+    await insertText(".o-mail-Composer-input", ":");
+    await contains(".o-mail-NavigableList-item", { text: "HelloHello! How are you?" });
+    await contains(".o-mail-NavigableList-active", { count: 0 });
+    await triggerHotkey("Enter");
+    await contains(".o-mail-NavigableList-item", { count: 0 });
 });

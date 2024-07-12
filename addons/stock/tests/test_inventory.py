@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
@@ -18,12 +17,12 @@ class TestInventory(TransactionCase):
         cls.uom_unit = cls.env.ref('uom.product_uom_unit')
         cls.product1 = cls.env['product.product'].create({
             'name': 'Product A',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': cls.env.ref('product.product_category_all').id,
         })
         cls.product2 = cls.env['product.product'].create({
             'name': 'Product A',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'serial',
             'categ_id': cls.env.ref('product.product_category_all').id,
         })
@@ -153,7 +152,7 @@ class TestInventory(TransactionCase):
         stock_confirmation_wizard.action_confirm()
 
         # check
-        self.assertEqual(self.env['stock.quant']._get_available_quantity(self.product2, self.stock_location, lot_id=lot1, strict=True), 11.0)
+        self.assertEqual(self.env['stock.quant']._get_available_quantity(self.product2, self.stock_location, lot_id=lot1, strict=False), 11.0)
         self.assertEqual(self.env['stock.quant']._get_available_quantity(self.product2, self.stock_location, strict=True), 10.0)
         self.assertEqual(self.env['stock.quant']._get_available_quantity(self.product2, self.stock_location), 11.0)
         self.assertEqual(len(self.env['stock.quant']._gather(self.product2, self.stock_location, lot_id=lot1, strict=True).filtered(lambda q: q.lot_id)), 1.0)
@@ -322,6 +321,69 @@ class TestInventory(TransactionCase):
         })
         self.assertEqual(inventory_quant.inventory_quantity_set, False)
 
+    def test_inventory_request_count_quantity(self):
+        """ Ensures when a request to count a quant for tracked product is done, other quants for
+        the same product in the same location are also marked as to count."""
+        # Config: enable tracking and multilocations.
+        grp_lot = self.env.ref('stock.group_production_lot')
+        grp_multi_loc = self.env.ref('stock.group_stock_multi_locations')
+        self.env.user.write({'groups_id': [(3, grp_lot.id)]})
+        self.env.user.write({'groups_id': [(3, grp_multi_loc.id)]})
+        # Creates other locations.
+        stock_location_2 = self.env['stock.location'].create({
+            'name': 'stock 2',
+            'location_id': self.stock_location.location_id.id,
+        })
+        sub_location = self.env['stock.location'].create({
+            'name': 'stock 2',
+            'location_id': self.stock_location.id,
+        })
+        # Creates some quants for product2 (tracked by serail numbers.)
+        serial_numbers = self.env['stock.lot'].create([{
+            'product_id': self.product2.id,
+            'name': f'sn{i + 1}'
+        } for i in range(4)])
+        quants = self.env['stock.quant'].create([
+            {
+                'location_id': self.stock_location.id,
+                'product_id': self.product2.id,
+                'lot_id': serial_numbers[0].id,
+                'inventory_quantity': 1,
+            },
+            {
+                'location_id': self.stock_location.id,
+                'product_id': self.product2.id,
+                'lot_id': serial_numbers[1].id,
+                'inventory_quantity': 1,
+            },
+            {
+                'location_id': sub_location.id,
+                'product_id': self.product2.id,
+                'lot_id': serial_numbers[2].id,
+                'inventory_quantity': 1,
+            },
+            {
+                'location_id': stock_location_2.id,
+                'product_id': self.product2.id,
+                'lot_id': serial_numbers[3].id,
+                'inventory_quantity': 1,
+            }
+        ])
+        # Request count for 1 quant => The other quant in the same location
+        # should also be updated, other quants shouldn't
+        request_wizard = self.env['stock.request.count'].create({
+            'quant_ids': quants[1].ids,
+            'set_count': 'empty',
+            'user_id': self.env.user.id,
+        })
+        request_wizard.action_request_count()
+        self.assertRecordValues(quants, [
+            {'lot_id': serial_numbers[0].id, 'user_id': self.env.user.id, 'location_id': self.stock_location.id},
+            {'lot_id': serial_numbers[1].id, 'user_id': self.env.user.id, 'location_id': self.stock_location.id},
+            {'lot_id': serial_numbers[2].id, 'user_id': False, 'location_id': sub_location.id},
+            {'lot_id': serial_numbers[3].id, 'user_id': False, 'location_id': stock_location_2.id},
+        ])
+
     def test_inventory_outdate_1(self):
         """ Checks that applying an inventory adjustment that is outdated due to
         its corresponding quant being modified after its inventory quantity is set
@@ -441,7 +503,7 @@ class TestInventory(TransactionCase):
         # Create quant for product3
         product3 = self.env['product.product'].create({
             'name': 'Product C',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': self.env.ref('product.product_category_all').id,
         })
         self.env['stock.quant'].create({

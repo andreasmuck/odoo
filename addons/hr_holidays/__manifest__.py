@@ -42,9 +42,12 @@ A synchronization with an internal agenda (Meetings of the CRM module) is also p
         'views/hr_leave_accrual_views.xml',
         'views/hr_leave_mandatory_day_views.xml',
         'views/mail_activity_views.xml',
+        'views/calendar_views.xml',
 
         'wizard/hr_holidays_cancel_leave_views.xml',
         'wizard/hr_holidays_summary_employees_views.xml',
+        'wizard/hr_leave_generate_multi_wizard_views.xml',
+        'wizard/hr_leave_allocation_generate_multi_wizard_views.xml',
 
         'report/hr_holidays_templates.xml',
         'report/hr_holidays_reports.xml',
@@ -69,13 +72,13 @@ A synchronization with an internal agenda (Meetings of the CRM module) is also p
         "web.assets_web_dark": [
             'hr_holidays/static/src/**/*.dark.scss',
         ],
-        'web.tests_assets': [
-            'hr_holidays/static/tests/helpers/**/*',
+        'web.assets_unit_tests': [
+            'hr_holidays/static/tests/**/*',
+            ('remove', 'hr_holidays/static/tests/tours/**/*'),
+            ('remove', 'hr_holidays/static/tests/legacy/**/*'),
         ],
         'web.qunit_suite_tests': [
-            'hr_holidays/static/tests/**/*.js',
-            ('remove', 'hr_holidays/static/tests/tours/**/*'),
-            ('remove', 'hr_holidays/static/tests/helpers/**/*'),
+            'hr_holidays/static/tests/legacy/**/*',
         ],
         'web.assets_tests': [
             '/hr_holidays/static/tests/tours/**/*'

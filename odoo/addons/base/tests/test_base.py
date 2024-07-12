@@ -3,6 +3,8 @@
 
 import ast
 
+from textwrap import dedent
+
 from odoo import Command
 from odoo.tests.common import TransactionCase, BaseCase
 from odoo.tools import mute_logger
@@ -22,6 +24,36 @@ class TestSafeEval(BaseCase):
         expected = 3 * 4
         actual = expr_eval('3 * 4')
         self.assertEqual(actual, expected)
+
+    def test_expr_eval_opcodes(self):
+        for expr, expected in [
+            ('3', 3),  # RETURN_CONST
+            ('[1,2,3,4][1:3]', [2, 3]),  # BINARY_SLICE
+        ]:
+            self.assertEqual(expr_eval(expr), expected)
+
+    def test_safe_eval_opcodes(self):
+        for expr, locals_dict, expected in [
+            ('[x for x in (1,2)]', {}, [1, 2]),  # LOAD_FAST_AND_CLEAR
+            ('list(x for x in (1,2))', {}, [1, 2]),  # END_FOR, CALL_INTRINSIC_1
+            ('v if v is None else w', {'v': False, 'w': 'foo'}, 'foo'),  # POP_JUMP_IF_NONE
+            ('v if v is not None else w', {'v': None, 'w': 'foo'}, 'foo'),  # POP_JUMP_IF_NOT_NONE
+            ('{a for a in (1, 2)}', {}, {1, 2}),  # RERAISE
+        ]:
+            self.assertEqual(safe_eval(expr, locals_dict=locals_dict), expected)
+
+    def test_safe_eval_exec_opcodes(self):
+        for expr, locals_dict, expected in [
+            ("""
+                def f(v):
+                    if v:
+                        x = 1
+                    return x
+                result = f(42)
+            """, {}, 1),  # LOAD_FAST_CHECK
+        ]:
+            safe_eval(dedent(expr), locals_dict=locals_dict, mode="exec", nocopy=True)
+            self.assertEqual(locals_dict['result'], expected)
 
     def test_01_safe_eval(self):
         """ Try a few common expressions to verify they work with safe_eval """
@@ -143,17 +175,17 @@ class TestGroups(TransactionCase):
         groups = all_groups.search([('full_name', 'in', ['Administration / Access Rights','Contact Creation'])])
         self.assertTrue(groups, "did not match search for 'Administration / Access Rights' and 'Contact Creation'")
 
-    def test_res_group_recursion(self):
+    def test_res_group_has_cycle(self):
         # four groups with no cycle, check them all together
         a = self.env['res.groups'].create({'name': 'A'})
         b = self.env['res.groups'].create({'name': 'B'})
         c = self.env['res.groups'].create({'name': 'G', 'implied_ids': [Command.set((a + b).ids)]})
         d = self.env['res.groups'].create({'name': 'D', 'implied_ids': [Command.set(c.ids)]})
-        self.assertTrue((a + b + c + d)._check_m2m_recursion('implied_ids'))
+        self.assertFalse((a + b + c + d)._has_cycle('implied_ids'))
 
         # create a cycle and check
         a.implied_ids = d
-        self.assertFalse(a._check_m2m_recursion('implied_ids'))
+        self.assertTrue(a._has_cycle('implied_ids'))
 
     def test_res_group_copy(self):
         a = self.env['res.groups'].with_context(lang='en_US').create({'name': 'A'})

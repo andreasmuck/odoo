@@ -1,57 +1,49 @@
-import { after, registerDebugInfo } from "@odoo/hoot";
+import { after, afterEach, beforeEach, registerDebugInfo } from "@odoo/hoot";
 import { startRouter } from "@web/core/browser/router";
 import { createDebugContext } from "@web/core/debug/debug_context";
+import { translatedTerms, translationLoaded } from "@web/core/l10n/translation";
 import { registry } from "@web/core/registry";
 import { makeEnv, startServices } from "@web/env";
 import { MockServer, makeMockServer } from "./mock_server/mock_server";
+import { patch } from "@web/core/utils/patch";
 
 /**
+ * @typedef {Record<keyof Services, any>} Dependencies
+ *
  * @typedef {import("@web/env").OdooEnv} OdooEnv
  *
- * @typedef {import("services").Services} Services
+ * @typedef {import("@web/core/registry").Registry} Registry
+ *
+ * @typedef {import("services").ServiceFactories} Services
  */
 
 //-----------------------------------------------------------------------------
 // Internals
 //-----------------------------------------------------------------------------
 
-const toRestoreRegistry = new WeakMap();
-
-export function restoreRegistryFromBeforeTest(registry, { withSubRegistries = false } = {}) {
-    const content = toRestoreRegistry.get(registry);
-    toRestoreRegistry.delete(registry);
-    if (content) {
-        registry.content = Object.fromEntries(content);
-        registry.elements = null;
-        registry.entries = null;
-    }
-    if (withSubRegistries) {
-        for (const subRegistry of Object.values(registry.subRegistries)) {
-            restoreRegistryFromBeforeTest(subRegistry);
-        }
-    }
-}
-
 /**
  * TODO: remove when services do not have side effects anymore
  * This forsaken block of code ensures that all are properly cleaned up after each
  * test because they were populated during the starting process of some services.
  *
- * @param {typeof registry} registry
+ * @param {Registry} registry
  */
-const restoreRegistryAfterTest = (registry) => {
+const registerRegistryForCleanup = (registry) => {
     const content = Object.entries(registry.content).map(([key, value]) => [key, value.slice()]);
-    toRestoreRegistry.set(registry, content);
-    after(() => {
-        restoreRegistryFromBeforeTest(registry);
-    });
+    registriesContent.set(registry, content);
+
     for (const subRegistry of Object.values(registry.subRegistries)) {
-        restoreRegistryAfterTest(subRegistry);
+        registerRegistryForCleanup(subRegistry);
     }
 };
 
+const registriesContent = new WeakMap();
 /** @type {OdooEnv | null} */
 let currentEnv = null;
+
+// Registers all registries for cleanup in all tests
+beforeEach(() => registerRegistryForCleanup(registry));
+afterEach(() => restoreRegistry(registry));
 
 //-----------------------------------------------------------------------------
 // Exports
@@ -60,7 +52,7 @@ let currentEnv = null;
 /**
  * Empties the given registry.
  *
- * @param {import("@web/core/registry").Registry} registry
+ * @param {Registry} registry
  */
 export function clearRegistry(registry) {
     registry.content = {};
@@ -98,15 +90,24 @@ export async function makeMockEnv(partialEnv, { makeNew = false } = {}) {
     }
 
     currentEnv = makeEnv();
+    after(() => {
+        currentEnv = null;
+
+        // Ideally: should be done in a patch of the localization service, but this
+        // is less intrusive for now.
+        if (translatedTerms[translationLoaded]) {
+            for (const key in translatedTerms) {
+                delete translatedTerms[key];
+            }
+            translatedTerms[translationLoaded] = false;
+        }
+    });
     Object.assign(currentEnv, partialEnv, createDebugContext(currentEnv)); // This is needed if the views are in debug mode
 
     registerDebugInfo(currentEnv);
-    restoreRegistryAfterTest(registry);
 
     startRouter();
     await startServices(currentEnv);
-
-    after(() => (currentEnv = null));
 
     return currentEnv;
 }
@@ -131,13 +132,41 @@ export async function makeDialogMockEnv(partialEnv) {
 /**
  * @template {keyof Services} T
  * @param {T} name
- * @param {(env: OdooEnv, dependencies: Record<keyof Services, any>) => Services[T]} serviceFactory
+ * @param {Partial<Services[T]> |
+ *  (env: OdooEnv, dependencies: Dependencies) => Services[T]
+ * } serviceFactory
  */
 export function mockService(name, serviceFactory) {
     const serviceRegistry = registry.category("services");
     const originalService = serviceRegistry.get(name, null);
-    serviceRegistry.add(name, { start: serviceFactory }, { force: true });
-    if (originalService) {
-        after(() => serviceRegistry.add(name, originalService, { force: true }));
+    serviceRegistry.add(
+        name,
+        {
+            ...originalService,
+            start() {
+                if (typeof serviceFactory === "function") {
+                    return serviceFactory(...arguments);
+                }
+                const service = originalService.start(...arguments);
+                patch(service, serviceFactory);
+                return service;
+            },
+        },
+        { force: true }
+    );
+}
+
+/**
+ * @param {Registry} registry
+ */
+export function restoreRegistry(registry) {
+    if (registriesContent.has(registry)) {
+        clearRegistry(registry);
+
+        registry.content = Object.fromEntries(registriesContent.get(registry));
+    }
+
+    for (const subRegistry of Object.values(registry.subRegistries)) {
+        restoreRegistry(subRegistry);
     }
 }

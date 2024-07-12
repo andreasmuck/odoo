@@ -15,12 +15,11 @@ class SaleOrderLine(models.Model):
     qty_delivered_method = fields.Selection(selection_add=[('milestones', 'Milestones')])
     project_id = fields.Many2one(
         'project.project', 'Generated Project',
-        index=True, copy=False)
+        index=True, copy=False, export_string_translation=False)
     task_id = fields.Many2one(
         'project.task', 'Generated Task',
-        index=True, copy=False)
-    # used to know if generate a task and/or a project, depending on the product settings
-    reached_milestones_ids = fields.One2many('project.milestone', 'sale_line_id', string='Reached Milestones', domain=[('is_reached', '=', True)])
+        index=True, copy=False, export_string_translation=False)
+    reached_milestones_ids = fields.One2many('project.milestone', 'sale_line_id', string='Reached Milestones', domain=[('is_reached', '=', True)], export_string_translation=False)
 
     def default_get(self, fields):
         res = super().default_get(fields)
@@ -138,7 +137,7 @@ class SaleOrderLine(models.Model):
                 line.sudo()._timesheet_service_generation()
                 # if the SO line created a task, post a message on the order
                 if line.task_id and not has_task:
-                    msg_body = _("Task Created (%s): %s", line.product_id.name, line.task_id._get_html_link())
+                    msg_body = _("Task Created (%(name)s): %(link)s", name=line.product_id.name, link=line.task_id._get_html_link())
                     line.order_id.message_post(body=msg_body)
 
         # Set a service SOL on the project, if any is given
@@ -191,8 +190,7 @@ class SaleOrderLine(models.Model):
         values = self._timesheet_create_project_prepare_values()
         if self.product_id.project_template_id:
             values['name'] = "%s - %s" % (values['name'], self.product_id.project_template_id.name)
-            # The no_create_folder context key is used in documents_project
-            project = self.product_id.project_template_id.with_context(no_create_folder=True).copy(values)
+            project = self.product_id.project_template_id.copy(values)
             project.tasks.write({
                 'sale_line_id': self.id,
                 'partner_id': self.order_id.partner_id.id,
@@ -209,8 +207,7 @@ class SaleOrderLine(models.Model):
             ])
             if project_only_sol_count == 1:
                 values['name'] = "%s - [%s] %s" % (values['name'], self.product_id.default_code, self.product_id.name) if self.product_id.default_code else "%s - %s" % (values['name'], self.product_id.name)
-            # The no_create_folder context key is used in documents_project
-            project = self.env['project.project'].with_context(no_create_folder=True).create(values)
+            project = self.env['project.project'].create(values)
 
         # Avoid new tasks to go to 'Undefined Stage'
         if not project.type_ids:
@@ -259,9 +256,9 @@ class SaleOrderLine(models.Model):
         task = self.env['project.task'].sudo().create(values)
         self.write({'task_id': task.id})
         # post message on task
-        task_msg = _("This task has been created from: %s (%s)",
-            self.order_id._get_html_link(),
-            self.product_id.name
+        task_msg = _("This task has been created from: %(order_link)s (%(product_name)s)",
+            order_link=self.order_id._get_html_link(),
+            product_name=self.product_id.name,
         )
         task.message_post(body=task_msg)
         return task
@@ -299,21 +296,6 @@ class SaleOrderLine(models.Model):
                     return True
             return False
 
-        def _determine_project(so_line):
-            """Determine the project for this sale order line.
-            Rules are different based on the service_tracking:
-
-            - 'project_only': the project_id can only come from the sale order line itself
-            - 'task_in_project': the project_id comes from the sale order line only if no project_id was configured
-              on the parent sale order"""
-
-            if so_line.product_id.service_tracking == 'project_only':
-                return so_line.project_id
-            elif so_line.product_id.service_tracking == 'task_in_project':
-                return so_line.order_id.project_id or so_line.project_id
-
-            return False
-
         # task_global_project: create task in global project
         for so_line in so_line_task_global_project:
             if not so_line.task_id:
@@ -323,7 +305,9 @@ class SaleOrderLine(models.Model):
         # project_only, task_in_project: create a new project, based or not on a template (1 per SO). May be create a task too.
         # if 'task_in_project' and project_id configured on SO, use that one instead
         for so_line in so_line_new_project:
-            project = _determine_project(so_line)
+            project = False
+            if so_line.product_id.service_tracking in ['project_only', 'task_in_project']:
+                project = so_line.project_id
             if not project and _can_create_project(so_line):
                 project = so_line._timesheet_create_project()
                 if so_line.product_id.project_template_id:

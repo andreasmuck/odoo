@@ -9,12 +9,17 @@ from datetime import datetime, timedelta
 @tagged('post_install', '-at_install')
 class TestPurchaseOrderReport(AccountTestInvoicingCommon):
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.other_currency = cls.setup_other_currency('EUR')
+
     def test_00_purchase_order_report(self):
         uom_dozen = self.env.ref('uom.product_uom_dozen')
 
         po = self.env['purchase.order'].create({
             'partner_id': self.partner_a.id,
-            'currency_id': self.currency_data['currency'].id,
+            'currency_id': self.other_currency.id,
             'order_line': [
                 (0, 0, {
                     'name': self.product_a.name,
@@ -23,7 +28,7 @@ class TestPurchaseOrderReport(AccountTestInvoicingCommon):
                     'product_uom': uom_dozen.id,
                     'price_unit': 100.0,
                     'date_planned': datetime.today(),
-                    'taxes_id': False,
+                    'tax_ids': False,
                 }),
                 (0, 0, {
                     'name': self.product_b.name,
@@ -32,7 +37,7 @@ class TestPurchaseOrderReport(AccountTestInvoicingCommon):
                     'product_uom': uom_dozen.id,
                     'price_unit': 200.0,
                     'date_planned': datetime.today(),
-                    'taxes_id': False,
+                    'tax_ids': False,
                 }),
             ],
         })
@@ -124,7 +129,7 @@ class TestPurchaseOrderReport(AccountTestInvoicingCommon):
     def test_02_po_report_note_section_filter(self):
         po = self.env['purchase.order'].create({
             'partner_id': self.partner_a.id,
-            'currency_id': self.currency_data['currency'].id,
+            'currency_id': self.other_currency.id,
             'order_line': [
                 (0, 0, {
                     'name': 'This is a note',
@@ -133,7 +138,7 @@ class TestPurchaseOrderReport(AccountTestInvoicingCommon):
                     'product_qty': 0.0,
                     'product_uom': False,
                     'price_unit': 0.0,
-                    'taxes_id': False,
+                    'tax_ids': False,
                 }),
                 (0, 0, {
                     'name': 'This is a section',
@@ -142,7 +147,7 @@ class TestPurchaseOrderReport(AccountTestInvoicingCommon):
                     'product_qty': 0.0,
                     'product_uom': False,
                     'price_unit': 0.0,
-                    'taxes_id': False,
+                    'tax_ids': False,
                 }),
             ],
         })
@@ -157,7 +162,7 @@ class TestPurchaseOrderReport(AccountTestInvoicingCommon):
         """
         po = self.env['purchase.order'].create({
             'partner_id': self.partner_a.id,
-            'currency_id': self.currency_data['currency'].id,
+            'currency_id': self.other_currency.id,
             'order_line': [
                 (0, 0, {
                     'product_id': self.product_a.id,

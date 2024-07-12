@@ -35,7 +35,7 @@
             <calendar string="Sales Orders" create="0" mode="month" date_start="activity_date_deadline" color="state" event_limit="5" quick_create="0">
                 <field name="currency_id" invisible="1"/>
                 <field name="state" filters="1" invisible="1"/>
-                <field name="activity_ids" options="{'icon': 'fa fa-clock-o'}"/>
+                <field name="activity_ids" options="{'icon': 'fa fa-clock-o'}" invisible="not activity_ids"/>
                 <field name="partner_id" avatar_field="avatar_128" options="{'icon': 'fa fa-users'}"/>
                 <field name="amount_total" widget="monetary"/>
                 <field name="payment_term_id"/>
@@ -226,7 +226,19 @@
         <field name="mode">primary</field>
         <field name="arch" type="xml">
             <xpath expr="//tree" position="attributes">
-                <attribute name="banner_route">/onboarding/sale_quotation</attribute>
+                <attribute name="js_class">sale_onboarding_list</attribute>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_quotation_kanban_with_onboarding" model="ir.ui.view">
+        <field name="name">sale.order.kanban</field>
+        <field name="model">sale.order</field>
+        <field name="inherit_id" ref="view_sale_order_kanban"/>
+        <field name="mode">primary</field>
+        <field name="arch" type="xml">
+            <xpath expr="//kanban" position="attributes">
+                <attribute name="js_class">sale_onboarding_kanban</attribute>
             </xpath>
         </field>
     </record>
@@ -247,14 +259,14 @@
                         confirm="Are you sure you want to void the authorized transaction? This action can't be undone."
                         invisible="not authorized_transaction_ids"/>
                 <button id="create_invoice" name="%(sale.action_view_sale_advance_payment_inv)d" string="Create Invoice"
-                    type="action" class="btn-primary" data-hotkey="i"
+                    type="action" class="btn-primary" data-hotkey="q"
                     invisible="invoice_status != 'to invoice'"/>
                 <button id="create_invoice_percentage" name="%(sale.action_view_sale_advance_payment_inv)d" string="Create Invoice"
-                    type="action" context="{'default_advance_payment_method': 'percentage'}" data-hotkey="i"
+                    type="action" context="{'default_advance_payment_method': 'percentage'}" data-hotkey="q"
                     invisible="invoice_status != 'no' or state != 'sale'"/>
                 <button name="action_quotation_send" id="send_by_email_primary" string="Send by Email" type="object" data-hotkey="g"
                     invisible="state != 'draft'" class="btn-primary"
-                    context="{'validate_analytic': True}"/>
+                    context="{'validate_analytic': True, 'check_document_layout': True}"/>
                 <button name="action_quotation_send" id="send_proforma_primary" type="object" string="Send PRO-FORMA Invoice" class="btn-primary"
                     groups="sale.group_proforma_sales"
                     invisible="state != 'draft' or invoice_count &gt;= 1" context="{'proforma': True, 'validate_analytic': True}"/>
@@ -265,7 +277,7 @@
                     string="Confirm" type="object" context="{'validate_analytic': True}"
                     invisible="state != 'draft'"/>
                 <button name="action_quotation_send" id="send_proforma" type="object" string="Send PRO-FORMA Invoice" groups="sale.group_proforma_sales" invisible="state == 'draft' or invoice_count &gt;= 1" context="{'proforma': True, 'validate_analytic': True}"/>
-                <button name="action_quotation_send" id="send_by_email" string="Send by Email" type="object" invisible="state not in ('sent', 'sale')" data-hotkey="g" context="{'validate_analytic': True}"/>
+                <button name="action_quotation_send" id="send_by_email" string="Send by Email" type="object" invisible="state not in ('sent', 'sale')" data-hotkey="g" context="{'validate_analytic': True, 'check_document_layout': True}"/>
 
                 <!-- allow to unlock locked orders even if setting is not enabled (e.g. orders synchronized from connectors) -->
                 <button name="action_unlock" type="object" string="Unlock"
@@ -285,6 +297,10 @@
                  class="alert alert-warning" role="alert"
                  invisible="partner_credit_warning == ''">
                 <field name="partner_credit_warning"/>
+            </div>
+            <div class="alert alert-warning p-3 text-center" role="alert"
+                invisible="state not in ['draft', 'sent'] or not has_archived_products">
+                <span>Warning: This quote contains archived product(s)</span>
             </div>
             <sheet>
                 <div class="oe_button_box" name="button_box">
@@ -377,13 +393,26 @@
                                 <group>
                                     <group invisible="display_type">
                                         <field name="product_updatable" invisible="1"/>
-                                        <field name="product_id"
-                                            domain="[('sale_ok', '=', True)]"
-                                            context="{'partner_id':parent.partner_id, 'quantity':product_uom_qty, 'pricelist':parent.pricelist_id, 'uom':product_uom, 'company_id': parent.company_id}"
-                                            readonly="not product_updatable"
-                                            required="not display_type and not is_downpayment"
-                                            force_save="1"
-                                            widget="many2one_barcode"/>
+                                        <div class="d-flex align-items-baseline">
+                                            <span class="fa fa-exclamation-triangle text-warning me-1"
+                                                title="This product is archived"
+                                                invisible="state not in ['draft', 'sent'] or not is_product_archived"
+                                            />
+                                            <field name="product_id"
+                                                domain="[('sale_ok', '=', True)]"
+                                                context="{
+                                                    'partner_id': parent.partner_id,
+                                                    'quantity': product_uom_qty,
+                                                    'pricelist': parent.pricelist_id,
+                                                    'uom': product_uom,
+                                                    'company_id': parent.company_id
+                                                }"
+                                                readonly="not product_updatable"
+                                                required="not display_type and not is_downpayment"
+                                                force_save="1"
+                                                widget="many2one_barcode"
+                                            />
+                                        </div>
                                         <field name="product_type" invisible="1"/>
                                         <field name="invoice_status" invisible="1"/>
                                         <field name="qty_to_invoice" invisible="1"/>
@@ -417,8 +446,8 @@
                                         <field name="product_packaging_qty" invisible="not product_id or not product_packaging_id" groups="product.group_stock_packaging"/>
                                         <field name="product_packaging_id" invisible="not product_id" context="{'default_product_id': product_id, 'tree_view_ref':'product.product_packaging_tree_view', 'form_view_ref':'product.product_packaging_form_view'}" groups="product.group_stock_packaging" />
                                         <field name="price_unit"/>
-                                        <field name="tax_id" widget="many2many_tags" options="{'no_create': True}" context="{'search_view_ref': 'account.account_tax_view_search'}" domain="[('type_tax_use', '=', 'sale'), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id)]"
-                                            readonly="qty_invoiced &gt; 0"/>
+                                        <field name="tax_ids" widget="many2many_tags" options="{'no_create': True}" context="{'search_view_ref': 'account.account_tax_view_search'}" domain="[('type_tax_use', '=', 'sale'), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id)]"
+                                               readonly="qty_invoiced &gt; 0"/>
                                         <t groups="sale.group_discount_per_so_line">
                                             <label for="discount"/>
                                             <div name="discount">
@@ -448,8 +477,8 @@
                                 <label for="name" string="Note" invisible="display_type != 'line_note'"/>
                                 <field name="name"/>
                                 <div name="invoice_lines" groups="base.group_no_one" invisible="display_type">
-                                    <label for="invoice_lines"/>
-                                    <field name="invoice_lines"/>
+                                    <label for="account_move_line_ids"/>
+                                    <field name="account_move_line_ids"/>
                                 </div>
                                 <field name="state" invisible="1"/>
                                 <field name="company_id" invisible="1"/>
@@ -458,6 +487,7 @@
                                 string="Sales Order Lines"
                                 editable="bottom"
                                 limit="200"
+                                decoration-warning="state in ['draft', 'sent'] and is_product_archived"
                             >
                                 <control>
                                     <create name="add_product_control" string="Add a product"/>
@@ -575,7 +605,7 @@
                                     name="price_unit"
                                     readonly="qty_invoiced &gt; 0"/>
                                 <field
-                                    name="tax_id"
+                                    name="tax_ids"
                                     widget="many2many_tags"
                                     options="{'no_create': True}"
                                     domain="[('type_tax_use', '=', 'sale'), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id)]"
@@ -609,13 +639,14 @@
                                 <field name="price_total"/>
                                 <field name="price_unit"/>
                                 <field name="display_type"/>
-                                <field name="tax_id"/>
+                                <field name="tax_ids"/>
                                 <field name="company_id"/>
                                 <field name="tax_calculation_rounding_method"/>
+                                <field name="currency_id"/>
                                 <control>
-                                    <create name="add_product_control" string="Add a product"/>
-                                    <create name="add_section_control" string="Add a section" context="{'default_display_type': 'line_section'}"/>
-                                    <create name="add_note_control" string="Add a note" context="{'default_display_type': 'line_note'}"/>
+                                    <create name="add_product_control" string="Add product"/>
+                                    <create name="add_section_control" string="Add section" context="{'default_display_type': 'line_section'}"/>
+                                    <create name="add_note_control" string="Add note" context="{'default_display_type': 'line_note'}"/>
                                     <button name="action_add_from_catalog"
                                             context="{'order_id': parent.id}"
                                             string="Catalog"
@@ -627,18 +658,21 @@
                                         <div t-attf-class="oe_kanban_card oe_kanban_global_click ps-0 pe-0 {{ record.display_type.raw_value ? 'o_is_' + record.display_type.raw_value : '' }}">
                                             <t t-if="!record.display_type.raw_value">
                                                 <div class="row g-0">
-                                                    <div class="col-2 pe-3">
+                                                    <div class="col-2 p-1">
                                                         <img t-att-src="kanban_image('product.product', 'image_128', record.product_id.raw_value)" t-att-title="record.product_id.value" t-att-alt="record.product_id.value" style="max-width: 100%;"/>
                                                     </div>
                                                     <div class="col-10">
                                                         <div class="row">
                                                             <div class="col">
+                                                                <span class="fa fa-exclamation-triangle text-warning me-1"
+                                                                    title="This product is archived"
+                                                                    invisible="state not in ['draft', 'sent'] or not is_product_archived"
+                                                                />
                                                                 <strong t-out="record.product_id.value" />
                                                             </div>
                                                             <div class="col-auto">
-                                                                <strong>Tax excl.: </strong>
                                                                 <t t-set="line_price" t-value="record.price_subtotal.value"/>
-                                                                <strong class="float-end text-end" t-out="line_price" />
+                                                                <strong class="float-end text-end pe-1" t-out="line_price" widget="monetary"/>
                                                             </div>
                                                         </div>
                                                         <div class="row">
@@ -651,11 +685,6 @@
                                                             <div class="col text-muted">
                                                                 Unit Price:
                                                                 <t t-out="record.price_unit.value"/>
-                                                            </div>
-                                                            <div class="col-auto" t-if="record.tax_calculation_rounding_method.raw_value === 'round_per_line'">
-                                                                <strong>Tax incl.: </strong>
-                                                                <t t-set="line_price" t-value="record.price_total.value"/>
-                                                                <strong class="float-end text-end" t-out="line_price" />
                                                             </div>
                                                         </div>
                                                         <t t-if="record.discount?.raw_value">
@@ -681,7 +710,7 @@
                                 </templates>
                             </kanban>
                         </field>
-                        <div class="float-end d-flex gap-1 mb-2 ms-1"
+                        <div class="float-end d-flex gap-1 mb-2"
                              name="so_button_below_order_lines">
                             <button string="Discount"
                                     name="action_open_discount_wizard"
@@ -690,13 +719,12 @@
                                     groups="sale.group_discount_per_so_line"/>
                         </div>
                         <group name="note_group" col="6" class="mt-2 mt-md-0">
-                            <group colspan="4">
+                            <group colspan="4" class="order-1 order-lg-0">
                                 <field  colspan="2" name="note" nolabel="1" placeholder="Terms and conditions..."/>
                             </group>
-                            <group class="oe_subtotal_footer" colspan="2" name="sale_total">
+                            <group class="oe_subtotal_footer d-flex order-0 order-lg-1 flex-column gap-0 gap-sm-3" colspan="2" name="sale_total">
                                 <field name="tax_totals" widget="account-tax-totals-field" nolabel="1" colspan="2" readonly="1"/>
                             </group>
-                            <div class="clearfix"/>
                         </group>
                     </page>
                     <page string="Other Info" name="other_information">
@@ -909,11 +937,20 @@
         <field name="search_view_id" ref="sale_order_view_search_inherit_quotation"/>
         <field name="context">{'search_default_my_quotation': 1}</field>
         <field name="help" type="html">
-            <p class="o_view_nocontent_smiling_face">
-            Create a new quotation, the first step of a new sale!
-            </p><p>
-            Once the quotation is confirmed by the customer, it becomes a sales order.<br/> You will be able to create an invoice and collect the payment.
+            <br/>
+            <h2>
+            Beat competitors with stunning quotations!
+            </h2><p>
+            Boost sales with online payments or signatures, upsells, and a great customer portal.
             </p>
+            <a
+                role="button"
+                class="btn btn-secondary"
+                href="https://www.odoo.com/documentation/master/_downloads/56a93429515b36105d952e1d2b802f9e/sample_quotation.pdf"
+                target="_blank"
+            >
+                Check a sample. It's clean!
+            </a>
         </field>
     </record>
 
@@ -925,25 +962,33 @@
         <field name="context">{'search_default_my_quotation': 1}</field>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">
-            Create a new quotation, the first step of a new sale!
+            Beat competitors with stunning quotations!
             </p><p>
-            Once the quotation is confirmed by the customer, it becomes a sales order.<br/> You will be able to create an invoice and collect the payment.
+            Boost sales with online payments or signatures, upsells, and a great customer portal.
             </p>
+            <a
+                role="button"
+                class="btn btn-secondary"
+                href="https://www.odoo.com/documentation/master/_downloads/56a93429515b36105d952e1d2b802f9e/sample_quotation.pdf"
+                target="_blank"
+            >
+                Check a sample. It's clean!
+            </a>
         </field>
     </record>
 
     <record id="sale_order_action_view_quotation_tree" model="ir.actions.act_window.view">
         <field name="sequence" eval="1"/>
         <field name="view_mode">tree</field>
-        <field name="view_id" ref="sale.view_quotation_tree"/>
-        <field name="act_window_id" ref="action_quotations"/>
+        <field name="view_id" ref="sale.view_quotation_tree_with_onboarding"/>
+        <field name="act_window_id" ref="action_quotations_with_onboarding"/>
     </record>
 
     <record id="sale_order_action_view_quotation_kanban" model="ir.actions.act_window.view">
         <field name="sequence" eval="2"/>
         <field name="view_mode">kanban</field>
-        <field name="view_id" ref="sale.view_sale_order_kanban"/>
-        <field name="act_window_id" ref="action_quotations"/>
+        <field name="view_id" ref="sale.view_quotation_kanban_with_onboarding"/>
+        <field name="act_window_id" ref="action_quotations_with_onboarding"/>
     </record>
 
     <record id="sale_order_action_view_quotation_form" model="ir.actions.act_window.view">

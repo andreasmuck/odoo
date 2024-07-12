@@ -8,7 +8,7 @@ import { Wysiwyg } from '@web_editor/js/wysiwyg/wysiwyg';
 import options from "@web_editor/js/editor/snippets.options";
 import { TABLE_ATTRIBUTES, TABLE_STYLES } from '@web_editor/js/backend/convert_inline';
 
-const COLOR_PICKER_TEMPLATE = `
+export const COLOR_PICKER_TEMPLATE = `
     <colorpicker>
         <div class="o_colorpicker_section" data-name="theme" data-display="Theme Colors" data-icon-class="fa fa-flask">
             <button data-color="o-color-1"/>
@@ -42,31 +42,25 @@ const COLOR_PICKER_TEMPLATE = `
     </colorpicker>
 `;
 const SNIPPETS_TEMPLATE = `
-    <h2 id="snippets_menu">Add blocks</h2>
-    <div id="o_scroll">
-        <div id="snippet_structure" class="o_panel">
-            <div class="o_panel_header">First Panel</div>
-            <div class="o_panel_body">
-                <div name="Separator" data-oe-type="snippet" data-oe-thumbnail="/web_editor/static/src/img/snippets_thumbs/s_hr.svg">
-                    <div class="s_hr pt32 pb32">
-                        <hr class="s_hr_1px s_hr_solid w-100 mx-auto"/>
-                    </div>
-                </div>
-                <div name="Content" data-oe-type="snippet" data-oe-thumbnail="/website/static/src/img/snippets_thumbs/s_text_block.png">
-                    <section name="Content+Options" class="test_option_all pt32 pb32" data-oe-type="snippet" data-oe-thumbnail="/website/static/src/img/snippets_thumbs/s_text_block.png">
-                        <div class="container">
-                            <div class="row">
-                                <div class="col-lg-10 offset-lg-1 pt32 pb32">
-                                    <h2>Title</h2>
-                                    <p class="lead o_default_snippet_text">Content</p>
-                                </div>
-                            </div>
-                        </div>
-                    </section>
-                </div>
+    <snippets id="snippet_structure">
+        <div name="Separator" data-oe-type="snippet" data-oe-thumbnail="/web_editor/static/src/img/snippets_thumbs/s_hr.svg">
+            <div class="s_hr pt32 pb32">
+                <hr class="s_hr_1px s_hr_solid w-100 mx-auto"/>
             </div>
         </div>
-    </div>
+        <div name="Content" data-oe-type="snippet" data-oe-thumbnail="/website/static/src/img/snippets_thumbs/s_text_block.png">
+            <section name="Content+Options" class="test_option_all pt32 pb32" data-oe-type="snippet" data-oe-thumbnail="/website/static/src/img/snippets_thumbs/s_text_block.png">
+                <div class="container">
+                    <div class="row">
+                        <div class="col-lg-10 offset-lg-1 pt32 pb32">
+                            <h2>Title</h2>
+                            <p class="lead o_default_snippet_text">Content</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </snippets>
     <div id="snippet_options" class="d-none">
         <div data-js="many2one" data-selector="[data-oe-many2one-model]:not([data-oe-readonly])" data-no-check="true"/>
         <div data-js="content"

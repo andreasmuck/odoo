@@ -221,7 +221,7 @@
     @return $-with-support-font;
 }
 
-// Function to remove all null values of a map
+// Function to remove all null values of a map.
 @function o-map-omit($map) {
     $-map: ();
     @each $key, $value in $map {
@@ -268,33 +268,6 @@
     font-weight: 500;
     margin-bottom: 0;
     margin-top: 0;
-}
-@mixin o-kanban-colorpicker {
-    max-width: 150px;
-    padding: 3px ($o-dropdown-hpadding - $o-kanban-inner-hmargin) 3px $o-dropdown-hpadding;
-
-    > li {
-        display: inline-block;
-        margin: $o-kanban-inner-hmargin $o-kanban-inner-hmargin 0 0;
-        border: 1px solid white;
-        box-shadow: 0 0 0 1px map-get($grays, '300');
-
-        > a {
-            display: block;
-
-            &::after {
-                content: "";
-                display: block;
-                width: 20px;
-                height: 15px;
-            }
-        }
-
-        // No Color
-        &:first-child > a:after {
-            background: linear-gradient(45deg, rgba($dropdown-bg, 0) 0%, rgba($dropdown-bg, 0) 48%, $danger 48%, $danger 52%, rgba($dropdown-bg, 0) 52%, rgba($dropdown-bg, 0) 100%);
-        }
-    }
 }
 
 // Emulate dropdown links
@@ -373,12 +346,32 @@
 @mixin print-variable($key, $value) {
     @if $value != null {
         $-type: type-of($value);
-        @if $-type == 'string' {
+        @if $-type == 'string' and str-index($value, 'var(') != 1 {
             --#{$key}: '#{$value}';
         } @else if $-type == 'list' {
             --#{$key}: #{inspect($value)};
         } @else {
             --#{$key}: #{$value};
         }
+    }
+}
+
+
+// ----------------------------------------------------------------------------
+// Media Type
+// ----------------------------------------------------------------------------
+
+// Conditionally includes SCSS  based on the current media context.
+// It serves two main purposes:
+// 1. Keep the base code clean by avoiding redundant `@media only screen {}`.
+// 2. Reduces CSS footprint by only compiling styles that match the current `$o-webclient-media`.
+
+@mixin media-only($-media) {
+    @if ($-media != null and type-of($-media) == 'string') {
+        @if $-media == $o-webclient-media {
+            @content;
+        }
+    } @else {
+        @warn "'media-only()' - missing argument"
     }
 }

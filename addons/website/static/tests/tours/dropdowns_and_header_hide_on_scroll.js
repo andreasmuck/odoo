@@ -7,6 +7,7 @@ const checkIfUserMenuNotMasked = function () {
         {
             content: "Click on the user dropdown",
             trigger: ":iframe #wrapwrap header .o_header_hide_on_scroll li.dropdown > a",
+            run: "click",
         },
         wTourUtils.checkIfVisibleOnScreen(":iframe #wrapwrap header .o_header_hide_on_scroll li.dropdown .dropdown-menu.show a[href='/my/home']"),
     ];
@@ -28,7 +29,7 @@ wTourUtils.registerWebsitePreviewTour("dropdowns_and_header_hide_on_scroll", {
     url: "/",
     edition: true,
 }, () => [
-    wTourUtils.dragNDrop({id: "s_media_list", name: "Media List"}),
+    ...wTourUtils.dragNDrop({id: "s_media_list", name: "Media List"}),
     wTourUtils.selectHeader(),
     wTourUtils.changeOption("undefined", 'we-select[data-variable="header-scroll-effect"]'),
     wTourUtils.changeOption("undefined", 'we-button[data-name="header_effect_fixed_opt"]'),
@@ -47,7 +48,7 @@ wTourUtils.registerWebsitePreviewTour("dropdowns_and_header_hide_on_scroll", {
     {
         content: "Type a search query into the searchbar input",
         trigger: ":iframe #wrapwrap header .s_searchbar_input input.search-query",
-        run: "text a",
+        run: "edit a",
     },
     wTourUtils.checkIfVisibleOnScreen(":iframe #wrapwrap header .s_searchbar_input.show .o_dropdown_menu.show"),
 ]);

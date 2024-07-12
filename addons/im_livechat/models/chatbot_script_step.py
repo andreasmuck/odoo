@@ -317,7 +317,6 @@ class ChatbotScriptStep(models.Model):
 
         if self.step_type == 'forward_operator':
             return self._process_step_forward_operator(discuss_channel)
-
         return discuss_channel._chatbot_post_message(self.chatbot_script_id, plaintext2html(self.message))
 
     def _process_step_forward_operator(self, discuss_channel):
@@ -329,13 +328,13 @@ class ChatbotScriptStep(models.Model):
         (e.g: ask for the visitor's email and create a lead). """
 
         human_operator = False
-        posted_message = False
+        posted_message = self.env["mail.message"]
 
         if discuss_channel.livechat_channel_id:
             # sudo: res.users - visitor can access operator of their channel
             # sudo: res.lang - visitor can access their own lang
             human_operator = discuss_channel.livechat_channel_id.sudo()._get_operator(
-                lang=discuss_channel.livechat_visitor_id.sudo().lang_id.code,
+                lang=discuss_channel.livechat_visitor_id.sudo().lang_id.code if hasattr(discuss_channel, "livechat_visitor_id") else None,
                 country_id=discuss_channel.country_id.id
             )
 

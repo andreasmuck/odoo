@@ -1,5 +1,3 @@
-/** @odoo-module **/
-
 import { _t } from "@web/core/l10n/translation";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { patch } from "@web/core/utils/patch";
@@ -82,7 +80,10 @@ patch(PaymentScreen.prototype, {
                 points: pe.points - order._getPointsCorrection(ProgramModel.get(pe.program_id)),
             });
             const program = ProgramModel.get(pe.program_id);
-            if (program.is_nominative && partner) {
+            if (
+                (program.is_nominative || program.program_type == "next_order_coupons") &&
+                partner
+            ) {
                 agg[pe.coupon_id].partner_id = partner.id;
             }
             return agg;

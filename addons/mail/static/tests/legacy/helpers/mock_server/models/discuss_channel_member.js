@@ -30,8 +30,7 @@ patch(MockServer.prototype, {
             Object.assign(data, {
                 isTyping: is_typing,
             });
-            notifications.push([channel, "discuss.channel.member/typing_status", data]);
-            notifications.push([channel.uuid, "discuss.channel.member/typing_status", data]);
+            notifications.push([channel, "mail.record/insert", { ChannelMember: [data] }]);
         }
         this.pyEnv["bus.bus"]._sendmany(notifications);
     },
@@ -49,10 +48,6 @@ patch(MockServer.prototype, {
             let persona;
             if (member.partner_id) {
                 persona = this._mockDiscussChannelMember_GetPartnerData([member.id]);
-            }
-            if (member.guest_id) {
-                const [guest] = this.getRecords("mail.guest", [["id", "=", member.guest_id]]);
-                persona = this._mockMailGuestGuestFormat([guest.id]).get(guest.id);
             }
             const data = {
                 create_date: member.create_date,

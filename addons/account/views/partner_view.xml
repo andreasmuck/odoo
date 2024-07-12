@@ -66,7 +66,7 @@
                                         domain="[
                                             ('type_tax_use', '!=', 'none'),
                                             ('country_id', '=', parent.company_country_id),
-                                            '|', ('company_id', '=', False), ('company_id', '=', parent.company_id)
+                                            '|', ('company_id', '=', False), ('company_id', 'parent_of', parent.company_id)
                                         ]"
                                         context="{'append_type_to_tax_name': True}"
                                     />
@@ -75,7 +75,7 @@
                                         domain="[
                                             ('type_tax_use', '!=', 'none'),
                                             ('country_id', '=', parent.country_id if parent.foreign_vat else parent.company_country_id),
-                                            '|', ('company_id', '=', False), ('company_id', '=', parent.company_id)]"
+                                            '|', ('company_id', '=', False), ('company_id', 'parent_of', parent.company_id)]"
                                         context="{'append_type_to_tax_name': True}"
                                     />
                                 </tree>
@@ -292,6 +292,17 @@
               </p><p>
                 Odoo helps you easily track all activities related to a supplier.
               </p>
+            </field>
+        </record>
+
+        <record id="partner_missing_account_list_view" model="ir.ui.view">
+            <field name="name">res.partner.tree</field>
+            <field name="model">res.partner</field>
+            <field name="arch" type="xml">
+                <tree string="Partners Missing a bank account" create="false" edit="false" delete="false"
+                      import="false" open_form_view="True">
+                    <field name="name"/>
+                </tree>
             </field>
         </record>
     </data>

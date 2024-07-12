@@ -7,6 +7,7 @@ from odoo import fields
 from odoo.addons.point_of_sale.tests.common import TestPoSCommon
 from freezegun import freeze_time
 from dateutil.relativedelta import relativedelta
+from datetime import datetime, timedelta
 
 
 @odoo.tests.tagged('post_install', '-at_install')
@@ -28,6 +29,7 @@ class TestPoSBasicConfig(TestPoSCommon):
         self.product99 = self.create_product('Product_99', self.categ_basic, 99, 50)
         self.product_multi_tax = self.create_product('Multi-tax product', self.categ_basic, 100, 100, (self.taxes['tax8'] | self.taxes['tax9']).ids)
         self.adjust_inventory([self.product1, self.product2, self.product3], [100, 50, 50])
+        self.company_data_2 = self.setup_other_company()
 
     def test_orders_no_invoiced(self):
         """ Test for orders without invoice
@@ -1081,3 +1083,108 @@ class TestPoSBasicConfig(TestPoSCommon):
             {'account_id': self.tax_received_account.id, 'balance': -9.72, 'reconciled': False},
             {'account_id': self.receivable_account.id, 'balance': 117.72, 'reconciled': True},
         ])
+
+    def test_limited_products_loading(self):
+        self.env['ir.config_parameter'].sudo().set_param('point_of_sale.limited_product_count', 3)
+
+        # Make the service products that are available in the pos inactive.
+        # We don't need them to test the loading of 'consu' products.
+        self.env['product.template'].search([('available_in_pos', '=', True), ('type', '=', 'service')]).write({'active': False})
+
+        session = self.open_new_session(0)
+
+        def get_top_product_ids(count):
+            data = session.load_data([])
+            return [p['id'] for p in data['product.product']['data'][:count]]
+
+        self.patch(self.env.cr, 'now', lambda: datetime.now() + timedelta(days=1))
+        self.env['pos.order'].sync_from_ui([self.create_ui_order_data([(self.product1, 1)])])
+        self.assertEqual(get_top_product_ids(1), [self.product1.id])
+
+        self.patch(self.env.cr, 'now', lambda: datetime.now() + timedelta(days=2))
+        self.env['pos.order'].sync_from_ui([self.create_ui_order_data([(self.product2, 1)])])
+        self.assertEqual(get_top_product_ids(2), [self.product2.id, self.product1.id])
+
+        self.patch(self.env.cr, 'now', lambda: datetime.now() + timedelta(days=3))
+        self.env['pos.order'].sync_from_ui([self.create_ui_order_data([(self.product3, 1)])])
+        self.assertEqual(get_top_product_ids(3), [self.product3.id, self.product2.id, self.product1.id])
+
+    def test_closing_entry_by_product(self):
+        # set the Group by Product at Closing Entry
+        self.config.is_closing_entry_by_product = True
+        self.open_new_session()
+
+        # 4 orders
+
+        # Orders
+        # ======
+        # +---------+----------+---------------+----------+-----+-------+
+        # | order   | payments | invoiced?     | product  | qty | total |
+        # +---------+----------+---------------+----------+-----+-------+
+        # | order 1 | bank     | no            | product1 |   2 |    60 |
+        # |         |          |               | product4 |   3 | 39.84 |
+        # +---------+----------+---------------+----------+-----+-------+
+        # | order 2 | bank     | yes           | product4 |   1 | 29.88 |
+        # |         |          |               | product2 |   5 |   400 |
+        # +---------+----------+---------------+----------+-----+-------+
+        # | order 3 | bank     | yes           | product1 |   3 | 29.88 |
+        # |         |          |               | product2 |  10 |   400 |
+        # +---------+----------+---------------+----------+-----+-------+
+        # | order 4 | bank     | yes           | product1 |   5 | 29.88 |
+        # |         |          |               | product0 |  10|   400 |
+        # +---------+----------+---------------+----------+-----+-------+
+
+        # Expected Output
+        # +---------------+-----------+
+        # | invoice_line  | Quantity  |
+        # +---------------+-----------+
+        # | Product 0     |      10   |
+        # +---------------+-----------+
+        # | Product 1     |      10   |
+        # +---------------+-----------+
+        # | Product 2     |      15   |
+        # +---------------+-----------+
+        # | Product 4     |       4   |
+        # +---------------+-----------+
+
+        # create orders
+        orders = []
+
+        # create orders
+        orders = []
+        orders.append(self.create_ui_order_data(
+            [(self.product1, 2), (self.product4, 3)],
+            payments=[(self.bank_pm1, 49.88)]
+        ))
+        orders.append(self.create_ui_order_data(
+            [(self.product4, 1), (self.product2, 5)],
+            payments=[(self.bank_pm1, 109.96)]
+        ))
+        orders.append(self.create_ui_order_data(
+            [(self.product1, 3), (self.product2, 10)],
+            payments=[(self.bank_pm1, 230)]
+        ))
+        orders.append(self.create_ui_order_data(
+            [(self.product1, 5), (self.product0, 10)],
+            payments=[(self.bank_pm1, 50)]
+        ))
+
+        # sync orders
+        self.env['pos.order'].sync_from_ui(orders)
+        # close the session
+        self.pos_session.action_pos_session_validate()
+
+        # check values after the session is closed
+        session_account_move = self.pos_session.move_id
+
+        # Define expected quantities for each product
+        expected_product_quantity = {
+            self.product0: 10,
+            self.product1: 10,
+            self.product2: 15,
+            self.product4: 4,
+        }
+        # Iterate through invoice lines and assert the expected quantities
+        for i in session_account_move.line_ids:
+            if i.product_id and expected_product_quantity.get(i.product_id):
+                self.assertEqual(i.quantity, expected_product_quantity.get(i.product_id), f"Unexpected quantity for {i.product_id.name}")

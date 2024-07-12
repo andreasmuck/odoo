@@ -1,14 +1,14 @@
 import { _t } from "@web/core/l10n/translation";
-import { is24HourFormat } from "@web/core/l10n/dates";
+import { getLocalWeekNumber, is24HourFormat } from "@web/core/l10n/dates";
 import { localization } from "@web/core/l10n/localization";
 import { renderToString } from "@web/core/utils/render";
 import { getColor } from "../colors";
 import { useCalendarPopover, useClickHandler, useFullCalendar } from "../hooks";
 import { CalendarCommonPopover } from "./calendar_common_popover";
 import { makeWeekColumn } from "./calendar_common_week_column";
-import { getWeekNumber } from "@web/views/calendar/utils";
 
 import { Component } from "@odoo/owl";
+import { useBus } from "@web/core/utils/hooks";
 
 const SCALE_TO_FC_VIEW = {
     day: "timeGridDay",
@@ -62,6 +62,9 @@ export class CalendarCommonRenderer extends Component {
         this.fc = useFullCalendar("fullCalendar", this.options);
         this.click = useClickHandler(this.onClick, this.onDblClick);
         this.popover = useCalendarPopover(this.constructor.components.Popover);
+        useBus(this.props.model.bus, "SCROLL_TO_CURRENT_HOUR", () =>
+            this.fc.api.scrollToTime(`${luxon.DateTime.local().hour - 2}:00:00`)
+        );
     }
 
     get options() {
@@ -85,6 +88,7 @@ export class CalendarCommonRenderer extends Component {
             moreLinkClick: this.onEventLimitClick,
             eventMouseEnter: this.onEventMouseEnter,
             eventMouseLeave: this.onEventMouseLeave,
+            eventClassNames: this.eventClassNames,
             eventDidMount: this.onEventDidMount,
             eventContent: this.onEventContent,
             eventResizableFromStart: true,
@@ -111,7 +115,7 @@ export class CalendarCommonRenderer extends Component {
                 week: this.props.model.scale === "month" || this.env.isSmall ? "numeric" : "long",
             },
             weekends: this.props.isWeekendVisible,
-            weekNumberCalculation: (date) => getWeekNumber(date, this.props.model.firstDayOfWeek),
+            weekNumberCalculation: (date) => getLocalWeekNumber(date),
             weekNumbers: true,
             dayHeaderContent: this.getHeaderHtml,
             eventDisplay: "block", // Restore old render in daygrid view for single-day timed events
@@ -190,7 +194,7 @@ export class CalendarCommonRenderer extends Component {
         this.popover.open(
             target,
             this.getPopoverProps(record),
-            `o_cw_popover o_calendar_color_${typeof color === "number" ? color : 0}`
+            `o_cw_popover card o_calendar_color_${typeof color === "number" ? color : 0}`
         );
     }
 
@@ -232,9 +236,42 @@ export class CalendarCommonRenderer extends Component {
         }
         return true;
     }
+    eventClassNames({ el, event }) {
+        const classesToAdd = [];
+        classesToAdd.push("o_event");
+        const record = this.props.model.records[event.id];
+
+        if (record) {
+            const color = getColor(record.colorIndex);
+            if (typeof color === "number") {
+                classesToAdd.push(`o_calendar_color_${color}`);
+            } else if (typeof color !== "string") {
+                classesToAdd.push("o_calendar_color_0");
+            }
+
+            if (record.isHatched) {
+                classesToAdd.push("o_event_hatched");
+            }
+            if (record.isStriked) {
+                classesToAdd.push("o_event_striked");
+            }
+            if (record.duration <= 0.25) {
+                classesToAdd.push("o_event_oneliner");
+            }
+            if (DateTime.now() >= record.end) {
+                classesToAdd.push("o_past_event");
+            }
+
+            if (!record.isAllDay && !record.isTimeHidden && record.isMonth) {
+                classesToAdd.push("o_event_dot");
+            } else if (record.isAllDay) {
+                classesToAdd.push("o_event_allday");
+            }
+        }
+        return classesToAdd;
+    }
     onEventDidMount({ el, event }) {
         el.dataset.eventId = event.id;
-        el.classList.add("o_event");
         const record = this.props.model.records[event.id];
 
         if (record) {
@@ -248,29 +285,6 @@ export class CalendarCommonRenderer extends Component {
             const color = getColor(record.colorIndex);
             if (typeof color === "string") {
                 el.style.backgroundColor = color;
-            } else if (typeof color === "number") {
-                el.classList.add(`o_calendar_color_${color}`);
-            } else {
-                el.classList.add("o_calendar_color_0");
-            }
-
-            if (record.isHatched) {
-                el.classList.add("o_event_hatched");
-            }
-            if (record.isStriked) {
-                el.classList.add("o_event_striked");
-            }
-            if (record.duration <= 0.25) {
-                el.classList.add("o_event_oneliner");
-            }
-            if (DateTime.now() >= record.end) {
-                el.classList.add("o_past_event");
-            }
-
-            if (!record.isAllDay && !record.isTimeHidden && record.isMonth) {
-                el.classList.add("o_event_dot");
-            } else if (record.isAllDay) {
-                el.classList.add("o_event_allday");
             }
 
             if (!el.classList.contains("fc-bg")) {
@@ -348,7 +362,10 @@ export class CalendarCommonRenderer extends Component {
 
     headerTemplateProps(date) {
         const scale = this.props.model.scale;
-        const { weekdayShort, weekdayLong, day } = DateTime.fromJSDate(date);
+        // when rendering months, FullCalendar uses a date w/out tz
+        // so use UTC instead of local tz when converting to DateTime
+        const options = scale === "month" ? { zone: "UTC" } : {};
+        const { weekdayShort, weekdayLong, day } = DateTime.fromJSDate(date, options);
         return {
             weekdayShort,
             weekdayLong,

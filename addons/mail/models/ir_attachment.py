@@ -7,6 +7,7 @@ from odoo import _, api, models, SUPERUSER_ID
 from odoo.exceptions import AccessError, MissingError, UserError
 from odoo.http import request
 from odoo.tools import consteq
+from odoo.addons.mail.tools.discuss import Store
 
 
 class IrAttachment(models.Model):
@@ -36,9 +37,8 @@ class IrAttachment(models.Model):
     def _post_add_create(self, **kwargs):
         """ Overrides behaviour when the attachment is created through the controller
         """
-        super(IrAttachment, self)._post_add_create(**kwargs)
-        for record in self:
-            record.register_as_main_attachment(force=False)
+        super()._post_add_create(**kwargs)
+        self.register_as_main_attachment(force=False)
 
     def register_as_main_attachment(self, force=True):
         """ Registers this attachment as the main one of the model it is
@@ -47,18 +47,20 @@ class IrAttachment(models.Model):
         :param bool force: if set, the method always updates the existing main attachment
             otherwise it only sets the main attachment if there is none.
         """
-        self.ensure_one()
-        if not self.res_model or not self.res_id:
-            return
-        related_record = self.env[self.res_model].browse(self.res_id)
-        if not related_record or \
-                not related_record.check_access_rights('write', raise_exception=False) or \
-                not hasattr(related_record, 'message_main_attachment_id'):
+        todo = self.filtered(lambda a: a.res_model and a.res_id)
+        if not todo:
             return
 
-        if force or not related_record.message_main_attachment_id:
-            with contextlib.suppress(AccessError):
-                related_record.message_main_attachment_id = self
+        for model, attachments in todo.grouped("res_model").items():
+            related_records = self.env[model].browse(attachments.mapped("res_id"))
+            if not hasattr(related_records, '_message_set_main_attachment_id'):
+                return
+
+            # this action is generic; if user cannot update record do not crash
+            # just skip update
+            for related_record, attachment in zip(related_records, attachments):
+                with contextlib.suppress(AccessError):
+                    related_record._message_set_main_attachment_id(attachment, force=force)
 
     def _delete_and_notify(self, message=None):
         if message:
@@ -73,19 +75,32 @@ class IrAttachment(models.Model):
         self.ensure_one()
         return self.env.user.partner_id
 
-    def _attachment_format(self):
-        safari = request and request.httprequest.user_agent and request.httprequest.user_agent.browser == 'safari'
-        return [{
-            'checksum': attachment.checksum,
-            'create_date': attachment.create_date,
-            'id': attachment.id,
-            'filename': attachment.name,
-            'name': attachment.name,
-            "size": attachment.file_size,
-            'res_name': attachment.res_name,
-            'mimetype': 'application/octet-stream' if safari and attachment.mimetype and 'video' in attachment.mimetype else attachment.mimetype,
-            'thread': [('ADD', {
-                'id': attachment.res_id,
-                'model': attachment.res_model,
-            })],
-        } for attachment in self]
+    def _to_store(self, store: Store, *, access_token=False):
+        safari = (
+            request
+            and request.httprequest.user_agent
+            and request.httprequest.user_agent.browser == "safari"
+        )
+        for attachment in self:
+            res = {
+                "checksum": attachment.checksum,
+                "create_date": attachment.create_date,
+                "filename": attachment.name,
+                "id": attachment.id,
+                "mimetype": (
+                    "application/octet-stream"
+                    if safari and attachment.mimetype and "video" in attachment.mimetype
+                    else attachment.mimetype
+                ),
+                "name": attachment.name,
+                "res_name": attachment.res_name,
+                "size": attachment.file_size,
+                "thread": (
+                    {"id": attachment.res_id, "model": attachment.res_model}
+                    if attachment.res_id and attachment.res_model != "mail.compose.message"
+                    else False
+                ),
+            }
+            if access_token:
+                res["accessToken"] = attachment.access_token
+            store.add("Attachment", res)

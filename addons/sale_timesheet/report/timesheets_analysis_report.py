@@ -3,7 +3,7 @@
 
 from odoo import fields, models, api
 
-from odoo.addons.sale_timesheet.models.account import TIMESHEET_INVOICE_TYPES
+from odoo.addons.sale_timesheet.models.hr_timesheet import TIMESHEET_INVOICE_TYPES
 
 
 class TimesheetsAnalysisReport(models.Model):
@@ -15,8 +15,8 @@ class TimesheetsAnalysisReport(models.Model):
     timesheet_invoice_id = fields.Many2one("account.move", string="Invoice", readonly=True, help="Invoice created from the timesheet")
     timesheet_revenues = fields.Float("Timesheet Revenues", readonly=True, help="Number of hours spent multiplied by the unit price per hour/day.")
     margin = fields.Float("Margin", readonly=True, help="Timesheets revenues minus the costs")
-    billable_time = fields.Float("Billable Hours", readonly=True, help="Number of hours/days linked to a SOL.")
-    non_billable_time = fields.Float("Non-billable Hours", readonly=True, help="Number of hours/days not linked to a SOL.")
+    billable_time = fields.Float("Billable Time", readonly=True, help="Number of hours/days linked to a SOL.")
+    non_billable_time = fields.Float("Non-billable Time", readonly=True, help="Number of hours/days not linked to a SOL.")
 
     @property
     def _table_query(self):
@@ -40,7 +40,7 @@ class TimesheetsAnalysisReport(models.Model):
                 WHEN A.order_id IS NULL OR T.service_type in ('manual', 'milestones')
                 THEN 0
                 WHEN T.invoice_policy = 'order' AND SOL.qty_delivered != 0
-                THEN (SOL.price_total / SOL.qty_delivered) * A.unit_amount
+                THEN (SOL.price_subtotal / SOL.qty_delivered) * (A.unit_amount * sol_product_uom.factor / a_product_uom.factor)
                 ELSE A.unit_amount * SOL.price_unit * sol_product_uom.factor / a_product_uom.factor
             END AS timesheet_revenues,
             CASE WHEN A.order_id IS NULL THEN 0 ELSE A.unit_amount END AS billable_time

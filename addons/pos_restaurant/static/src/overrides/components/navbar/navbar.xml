@@ -1,19 +1,40 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates id="template" xml:space="preserve">
     <t t-name="pos_restaurant.Navbar" t-inherit="point_of_sale.Navbar" t-inherit-mode="extension">
-        <xpath expr="//li[hasclass('backend-button')]" position="before">
-            <li t-if="pos.mainScreen.component.name == 'FloorScreen'" class="menu-item navbar-button" t-on-click="() => this.pos.toggleEditMode()">
-                <a class="dropdown-item py-2">Edit Plan</a>
-            </li>
-            <li t-if="pos.mainScreen.component.name == 'FloorScreen'" class="menu-item navbar-button" t-on-click="onSwitchButtonClick">
-                <a class="dropdown-item py-2">Switch Floor View</a>
-            </li>
+        <xpath expr="//DropdownItem[contains(text(), 'Backend')]" position="before">
+            <t t-if="pos.mainScreen.component.name == 'FloorScreen'">
+                <DropdownItem t-if="showEditPlanButton" onSelected="() => this.pos.toggleEditMode()">
+                    Edit Plan
+                </DropdownItem>
+            </t>
+            <DropdownItem t-if="pos.mainScreen.component.name == 'FloorScreen'" onSelected="() => this.onSwitchButtonClick()">
+                Switch Floor View
+            </DropdownItem>
         </xpath>
-        <xpath expr="//BackButton" position="before">
-            <span t-if="pos.selectedTable?.name" t-esc="pos.selectedTable.name" t-attf-style="background-color: {{pos.selectedTable.color}};border-radius: 0.25rem;" class="text-white fw-bolder my-2 px-3 d-flex align-items-center" />
-        </xpath>
-        <xpath expr="//BackButton[@t-if='showBackButtonMobile()']" position="after">
-            <span t-if="pos.selectedTable?.name and showBackButtonMobile()" t-esc="pos.selectedTable.name" t-attf-style="background-color: {{pos.selectedTable.color}};border-radius: 0.25rem;" class="text-white fw-bolder my-2 px-3 d-flex align-items-center" />
+        <xpath expr="//div[hasclass('pos-rightheader')]" position="before">
+            <div t-if="pos.config.module_pos_restaurant" class="ms-1 d-flex overflow-hidden position-relative">
+                <span t-if="showTableIcon"
+                    t-esc="getTable().name"
+                    t-attf-style="background-color: {{getTable().color}};border-radius: 0.25rem;"
+                    class="table-name text-white fw-bolder px-3 my-2 me-1 py-1 d-flex align-items-center" />
+                <t t-if="!pos.orderToTransferUuid">
+                    <button t-if="!pos.selectedOrderUuid" class="btn btn-primary mx-2" t-on-click="newFloatingOrder">
+                        <i class="fa fa-plus-circle" aria-hidden="true"/>
+                    </button>
+                    <ListContainer t-if="!pos.selectedOrderUuid and !pos.selectedTable" items="getFloatingOrders()" t-slot-scope="scope">
+                        <t t-set="order" t-value="scope.item"/>
+                        <button t-esc="order.getFloatingOrderName()" class="btn btn-secondary tab" t-on-click="() => this.selectFloatingOrder(order)"/>
+                    </ListContainer>
+                    <button t-if="pos.get_order() and !pos.get_order()?.table_id" class="btn btn-secondary ms-2" t-on-click="() => this.editOrderNote(this.pos.get_order())">
+                        <i class="fa fa-pencil-square-o me-1" aria-hidden="true" /><t t-if="!ui.isSmall" t-esc="pos.get_order().getFloatingOrderName()"/>
+                    </button>
+                </t>
+                <div class="d-flex align-items-center" t-else="">
+                    <strong class="ms-2">
+                        Select table to transfer order
+                    </strong>
+                </div>
+            </div>
         </xpath>
     </t>
 </templates>

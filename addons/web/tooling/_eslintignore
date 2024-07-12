@@ -63,10 +63,6 @@ web_cohort/static/tests/legacy/**/*
 !web_gantt
 !web_gantt/**/*
 
-# blacklist legacy
-web_gantt/static/src/legacy/**/*
-web_gantt/static/tests/legacy/**/*
-
 # planning
 # whitelist new code
 !planning
@@ -95,8 +91,12 @@ web_map/static/src/legacy/**/*
 web_map/static/tests/legacy/**/*
 
 # whitelist web_tour
-!web_tour
-!web_tour/**/*
+!addons/web_tour
+!addons/web_tour/**/*
+
+# whitelist web_tour_recorder
+!addons/web_tour_recorder
+!addons/web_tour_recorder/**/*
 
 # whitelist base_setup
 !addons/base_setup

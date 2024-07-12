@@ -24,7 +24,7 @@ from PIL import Image
 from odoo import api, fields, models
 from odoo.tools.translate import _
 from odoo.tools.mimetypes import guess_mimetype
-from odoo.tools import config, DEFAULT_SERVER_DATE_FORMAT, DEFAULT_SERVER_DATETIME_FORMAT, pycompat
+from odoo.tools import config, DEFAULT_SERVER_DATE_FORMAT, DEFAULT_SERVER_DATETIME_FORMAT, pycompat, parse_version
 
 FIELDS_RECURSION_LIMIT = 3
 ERROR_PREVIEW_BYTES = 200
@@ -55,10 +55,21 @@ try:
 except ImportError:
     odf_ods_reader = None
 
+try:
+    from openpyxl import load_workbook
+except ImportError:
+    load_workbook = None
+
+
 FILE_TYPE_DICT = {
     'text/csv': ('csv', True, None),
     'application/vnd.ms-excel': ('xls', xlrd, 'xlrd'),
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ('xlsx', xlsx, 'xlrd >= 1.0.0'),
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': (
+        'xlsx',
+        load_workbook or xlsx,
+        # if xlrd 2.x then xlsx is not available, so don't suggest it
+        'openpyxl' if xlrd and parse_version(xlrd.__VERSION__) >= parse_version("2.0") else 'openpyxl or xlrd >= 1.0.0 < 2.0',
+    ),
     'application/vnd.oasis.opendocument.spreadsheet': ('ods', odf_ods_reader, 'odfpy')
 }
 EXTENSIONS = {
@@ -430,7 +441,39 @@ class Import(models.TransientModel):
         return sheet.nrows, rows
 
     # use the same method for xlsx and xls files
-    _read_xlsx = _read_xls
+    def _read_xlsx(self, options):
+        if xlsx:
+            return self._read_xls(options)
+
+        import openpyxl.cell.cell as types
+        book = load_workbook(io.BytesIO(self.file or b''), read_only=True, data_only=True)
+        sheets = options['sheets'] = book.sheetnames
+        sheet_name = options['sheet'] = options.get('sheet') or sheets[0]
+        sheet = book[sheet_name]
+        rows = []
+        for rowx, row in enumerate(sheet.rows, 1):
+            values = []
+            for colx, cell in enumerate(row, 1):
+                if cell.data_type is types.TYPE_ERROR:
+                    raise ValueError(
+                        _("Invalid cell value at row %(row)s, column %(col)s: %(cell_value)s", row=rowx, col=colx, cell_value=cell.value)
+                    )
+
+                if isinstance(cell.value, float):
+                    if cell.value % 1 == 0:
+                        values.append(str(int(cell.value)))
+                    else:
+                        values.append(str(cell.value))
+                elif isinstance(cell.value, datetime.datetime):
+                    values.append(cell.value.strftime(DEFAULT_SERVER_DATETIME_FORMAT))
+                elif isinstance(cell.value, datetime.date):
+                    values.append(cell.value.strftime(DEFAULT_SERVER_DATE_FORMAT))
+                else:
+                    values.append(str(cell.value))
+
+            if any(x.strip() for x in values):
+                rows.append(values)
+        return sheet.max_row, rows
 
     def _read_ods(self, options):
         doc = odf_ods_reader.ODSReader(file=io.BytesIO(self.file or b''))
@@ -1052,7 +1095,11 @@ class Import(models.TransientModel):
         _file_length, rows_to_import = self._read_file(options)
         if len(rows_to_import[0]) != len(fields):
             raise ImportValidationError(
-                _("Error while importing records: all rows should be of the same size, but the title row has %d entries while the first row has %d. You may need to change the separator character.", len(fields), len(rows_to_import[0]))
+                _(
+                    "Error while importing records: all rows should be of the same size, but the title row has %(title_row_entries)d entries while the first row has %(first_row_entries)d. You may need to change the separator character.",
+                    title_row_entries=len(fields),
+                    first_row_entries=len(rows_to_import[0]),
+                ),
             )
 
         if options.get('has_headers'):
@@ -1118,7 +1165,7 @@ class Import(models.TransientModel):
             old_value = line[index]
             line[index] = self._remove_currency_symbol(line[index])
             if line[index] is False:
-                raise ImportValidationError(_("Column %s contains incorrect values (value: %s)", name, old_value), field=name)
+                raise ImportValidationError(_("Column %(column)s contains incorrect values (value: %(value)s)", column=name, value=old_value), field=name)
 
     def _infer_separators(self, value, options):
         """ Try to infer the shape of the separators: if there are two
@@ -1223,12 +1270,12 @@ class Import(models.TransientModel):
                 line[index] = fmt(dt.strptime(v, d_fmt))
             except ValueError as e:
                 raise ImportValidationError(
-                    _("Column %s contains incorrect values. Error in line %d: %s") % (name, num + 1, e),
+                    _("Column %(column)s contains incorrect values. Error in line %(line)d: %(error)s", column=name, line=num + 1, error=e),
                     field=name, field_type=field_type
                 )
             except Exception as e:
                 raise ImportValidationError(
-                    _("Error Parsing Date [%s:L%d]: %s") % (name, num + 1, e),
+                    _("Error Parsing Date [%(field)s:L%(line)d]: %(error)s", field=name, line=num + 1, error=e),
                     field=name, field_type=field_type
                 )
 

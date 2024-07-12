@@ -4,6 +4,8 @@ from collections import defaultdict
 
 from odoo import models, fields, api, _, _lt
 from odoo.exceptions import ValidationError, RedirectWarning
+from odoo.tools import SQL
+
 
 class Project(models.Model):
     _inherit = "project.project"
@@ -18,18 +20,20 @@ class Project(models.Model):
             ('partner_id', '=?', partner_id),
         ]"""
     )
+    analytic_account_active = fields.Boolean("Active Account", related="analytic_account_id.active", export_string_translation=False)
 
-    timesheet_ids = fields.One2many('account.analytic.line', 'project_id', 'Associated Timesheets')
-    timesheet_encode_uom_id = fields.Many2one('uom.uom', compute='_compute_timesheet_encode_uom_id')
+    timesheet_ids = fields.One2many('account.analytic.line', 'project_id', 'Associated Timesheets', export_string_translation=False)
+    timesheet_encode_uom_id = fields.Many2one('uom.uom', compute='_compute_timesheet_encode_uom_id', export_string_translation=False)
     total_timesheet_time = fields.Integer(
         compute='_compute_total_timesheet_time', groups='hr_timesheet.group_hr_timesheet_user',
-        help="Total number of time (in the proper UoM) recorded in the project, rounded to the unit.", compute_sudo=True)
-    encode_uom_in_days = fields.Boolean(compute='_compute_encode_uom_in_days')
-    is_internal_project = fields.Boolean(compute='_compute_is_internal_project', search='_search_is_internal_project')
-    remaining_hours = fields.Float(compute='_compute_remaining_hours', string='Remaining Hours', compute_sudo=True)
-    is_project_overtime = fields.Boolean('Project in Overtime', compute='_compute_remaining_hours', search='_search_is_project_overtime', compute_sudo=True)
-    allocated_hours = fields.Float(string='Allocated Hours')
-    effective_hours = fields.Float(string='Hours Spent', compute='_compute_remaining_hours', compute_sudo=True)
+        string="Total number of time (in the proper UoM) recorded in the project, rounded to the unit.",
+        compute_sudo=True, export_string_translation=False)
+    encode_uom_in_days = fields.Boolean(compute='_compute_encode_uom_in_days', export_string_translation=False)
+    is_internal_project = fields.Boolean(compute='_compute_is_internal_project', search='_search_is_internal_project', export_string_translation=False)
+    remaining_hours = fields.Float(compute='_compute_remaining_hours', string='Time Remaining', compute_sudo=True)
+    is_project_overtime = fields.Boolean('Project in Overtime', compute='_compute_remaining_hours', search='_search_is_project_overtime', compute_sudo=True, export_string_translation=False)
+    allocated_hours = fields.Float(string='Allocated Time')
+    effective_hours = fields.Float(string='Time Spent', compute='_compute_remaining_hours', compute_sudo=True)
 
     def _compute_encode_uom_in_days(self):
         self.encode_uom_in_days = self.env.company.timesheet_encode_uom_id == self.env.ref('uom.product_uom_day')
@@ -57,30 +61,15 @@ class Project(models.Model):
         if operator not in ['=', '!=']:
             raise ValueError(_('Invalid operator: %s', operator))
 
-        query = """
-            SELECT C.internal_project_id
-            FROM res_company C
-            WHERE C.internal_project_id IS NOT NULL
-        """
+        Company = self.env['res.company']
+        sql = Company._where_calc(
+            [('internal_project_id', '!=', False)], active_test=False
+        ).subselect("internal_project_id")
         if (operator == '=' and value is True) or (operator == '!=' and value is False):
-            operator_new = 'inselect'
+            operator_new = 'in'
         else:
-            operator_new = 'not inselect'
-        return [('id', operator_new, (query, ()))]
-
-    @api.model
-    def _get_view_cache_key(self, view_id=None, view_type='form', **options):
-        """The override of _get_view changing the time field labels according to the company timesheet encoding UOM
-        makes the view cache dependent on the company timesheet encoding uom"""
-        key = super()._get_view_cache_key(view_id, view_type, **options)
-        return key + (self.env.company.timesheet_encode_uom_id,)
-
-    @api.model
-    def _get_view(self, view_id=None, view_type='form', **options):
-        arch, view = super()._get_view(view_id, view_type, **options)
-        if view_type in ['tree', 'form'] and self.env.company.timesheet_encode_uom_id == self.env.ref('uom.product_uom_day'):
-            arch = self.env['account.analytic.line']._apply_time_label(arch, related_model=self._name)
-        return arch, view
+            operator_new = 'not in'
+        return [('id', operator_new, sql)]
 
     @api.depends('allow_timesheets', 'timesheet_ids.unit_amount', 'allocated_hours')
     def _compute_remaining_hours(self):
@@ -102,7 +91,7 @@ class Project(models.Model):
         if operator not in ['=', '!=']:
             raise ValueError(_('Invalid operator: %s', operator))
 
-        query = """
+        sql = SQL("""(
             SELECT Project.id
               FROM project_project AS Project
               JOIN project_task AS Task
@@ -113,12 +102,12 @@ class Project(models.Model):
                AND Task.state IN ('01_in_progress', '02_changes_requested', '03_approved', '04_waiting_normal')
           GROUP BY Project.id
             HAVING Project.allocated_hours - SUM(Task.effective_hours) < 0
-        """
+        )""")
         if (operator == '=' and value is True) or (operator == '!=' and value is False):
-            operator_new = 'inselect'
+            operator_new = 'in'
         else:
-            operator_new = 'not inselect'
-        return [('id', operator_new, (query, ()))]
+            operator_new = 'not in'
+        return [('id', operator_new, sql)]
 
     @api.constrains('allow_timesheets', 'analytic_account_id')
     def _check_allow_timesheet(self):
@@ -155,27 +144,27 @@ class Project(models.Model):
             Note: create it before calling super() to avoid raising the ValidationError from _check_allow_timesheet
         """
         defaults = self.default_get(['allow_timesheets', 'analytic_account_id'])
-        for vals in vals_list:
-            allow_timesheets = vals.get('allow_timesheets', defaults.get('allow_timesheets'))
-            analytic_account_id = vals.get('analytic_account_id', defaults.get('analytic_account_id'))
-            if allow_timesheets and not analytic_account_id:
-                analytic_account = self._create_analytic_account_from_values(vals)
-                vals['analytic_account_id'] = analytic_account.id
+        analytic_accounts_vals = [vals for vals in vals_list if
+            vals.get('allow_timesheets', defaults.get('allow_timesheets'))
+            and not vals.get('analytic_account_id', defaults.get('analytic_account_id'))
+        ]
+        analytic_accounts = self.env['account.analytic.account'].create(self._get_values_analytic_account_batch(analytic_accounts_vals))
+        for vals, analytic_account in zip(analytic_accounts_vals, analytic_accounts):
+            vals['analytic_account_id'] = analytic_account.id
         return super().create(vals_list)
 
     def write(self, values):
         # create the AA for project still allowing timesheet
         if values.get('allow_timesheets') and not values.get('analytic_account_id'):
-            for project in self:
-                if not project.analytic_account_id:
-                    project._create_analytic_account()
+            project_new_account = self.filtered(lambda project: not project.analytic_account_id)
+            project_new_account._create_analytic_account()
         return super(Project, self).write(values)
 
     @api.depends('is_internal_project', 'company_id')
     @api.depends_context('allowed_company_ids')
     def _compute_display_name(self):
         super()._compute_display_name()
-        if len(self.env.context.get('allowed_company_ids', [])) <= 1:
+        if len(self.env.context.get('allowed_company_ids') or []) <= 1:
             return
 
         for project in self:
@@ -285,3 +274,9 @@ class Project(models.Model):
             })
 
         return buttons
+
+    def action_view_tasks(self):
+        # Using the timesheet filter hide context
+        action = super().action_view_tasks()
+        action['context']['allow_timesheets'] = self.allow_timesheets
+        return action

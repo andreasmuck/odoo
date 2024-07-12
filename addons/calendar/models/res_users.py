@@ -10,6 +10,35 @@ from pytz import timezone, UTC
 class Users(models.Model):
     _inherit = 'res.users'
 
+    calendar_default_privacy = fields.Selection(related='res_users_settings_id.calendar_default_privacy', readonly=False, required=True)
+
+    @property
+    def SELF_READABLE_FIELDS(self):
+        return super().SELF_READABLE_FIELDS + ['calendar_default_privacy']
+
+    @property
+    def SELF_WRITEABLE_FIELDS(self):
+        return super().SELF_READABLE_FIELDS + ['calendar_default_privacy']
+
+    def get_selected_calendars_partner_ids(self, include_user=True):
+        """
+        Retrieves the partner IDs of the attendees selected in the calendar view.
+
+        :param bool include_user: Determines whether to include the current user's partner ID in the results.
+        :return: A list of integer IDs representing the partners selected in the calendar view.
+                 If 'include_user' is True, the list will also include the current user's partner ID.
+        :rtype: list
+        """
+        self.ensure_one()
+        partner_ids = self.env['calendar.filters'].search([
+            ('user_id', '=', self.id),
+            ('partner_checked', '=', True)
+        ]).partner_id.ids
+
+        if include_user:
+            partner_ids += [self.env.user.partner_id.id]
+        return partner_ids
+
     def _systray_get_calendar_event_domain(self):
         # Determine the domain for which the users should be notified. This method sends notification to
         # events occurring between now and the end of the day. Note that "now" needs to be computed in the
@@ -37,9 +66,8 @@ class Users(models.Model):
         #   |           |
         #   |           | <--- `stop_dt_utc` = `stop_dt` if user lives in an area of West longitude (positive shift compared to UTC, America for example)
         #   |           |
-        now_utc = datetime.datetime.utcnow()
-        start_dt_utc = start_dt = now_utc.replace(tzinfo=UTC)
-        stop_dt_utc = datetime.datetime.combine(now_utc.date(), datetime.time.max).replace(tzinfo=UTC)
+        start_dt_utc = start_dt = datetime.datetime.now(UTC)
+        stop_dt_utc = datetime.datetime.combine(start_dt_utc.date(), datetime.time.max).replace(tzinfo=UTC)
 
         tz = self.env.user.tz
         if tz:
@@ -90,4 +118,7 @@ class Users(models.Model):
 
     @api.model
     def check_calendar_credentials(self):
+        return {}
+
+    def check_synchronization_status(self):
         return {}

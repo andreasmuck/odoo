@@ -40,7 +40,10 @@ class ReSequenceWizard(models.TransientModel):
         ):
             raise UserError(_('The sequences of this journal are different for Invoices and Refunds but you selected some of both types.'))
         is_payment = set(active_move_ids.mapped(lambda x: bool(x.payment_id)))
-        if len(is_payment) > 1:
+        if (
+            active_move_ids.journal_id.payment_sequence
+            and len(is_payment) > 1
+        ):
             raise UserError(_('The sequences of this journal are different for Payments and non-Payments but you selected some of both types.'))
         values['move_ids'] = [(6, 0, active_move_ids.ids)]
         return values
@@ -71,7 +74,13 @@ class ReSequenceWizard(models.TransientModel):
                  or (self.sequence_number_reset == 'year_range' and line['server-year-start-date'][0:4] != previous_line['server-year-start-date'][0:4])\
                  or (self.sequence_number_reset == 'month' and line['server-date'][0:7] != previous_line['server-date'][0:7]):
                     if in_elipsis:
-                        changeLines.append({'id': 'other_' + str(line['id']), 'current_name': _('... (%s other)', in_elipsis), 'new_by_name': '...', 'new_by_date': '...', 'date': '...'})
+                        changeLines.append({
+                            'id': 'other_' + str(line['id']),
+                            'current_name': _('... (%(nb_of_values)s other)', nb_of_values=in_elipsis),
+                            'new_by_name': '...',
+                            'new_by_date': '...',
+                            'date': '...',
+                        })
                         in_elipsis = 0
                     changeLines.append(line)
                 else:

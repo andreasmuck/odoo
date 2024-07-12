@@ -22,7 +22,7 @@
             <field name="name">website.form</field>
             <field name="model">website</field>
             <field name="arch" type="xml">
-                <form string="Website Settings">
+                <form string="Website Settings" duplicate="0">
                     <sheet>
                         <group name="domain">
                             <field name="name"/>
@@ -69,7 +69,7 @@
             <field name="name">website.tree</field>
             <field name="model">website</field>
             <field name="arch" type="xml">
-                <tree string="Websites">
+                <tree string="Websites" duplicate="0">
                     <field name="sequence" widget="handle"/>
                     <field name="name"/>
                     <field name="domain"/>
@@ -111,6 +111,10 @@
                             </group>
                             <group>
                                 <field name="parent_id" context="{'display_website': True}"/>
+                                <div colspan="2" class="oe_edit_only alert alert-info" role="alert">
+                                    Note that the "Website / Editor and Designer" group is implicitly added when saving if any group is specified.
+                                </div>
+                                <field name="group_ids"/>
                             </group>
                         </group>
                         <label for="child_id" string="Child Menus"/>
@@ -138,6 +142,7 @@
                     <field name="is_mega_menu"/>
                     <field name="new_window"/>
                     <field name="parent_id" context="{'display_website': True}"/>
+                    <field name="group_ids" widget="many2many_tags"/>
                 </tree>
             </field>
         </record>
@@ -229,7 +234,7 @@
             <field name="name">Themes Kanban</field>
             <field name="model">ir.module.module</field>
             <field name="arch" type="xml">
-                <kanban create="false" default_order="state,sequence,name" js_class="theme_preview_kanban">
+                <kanban create="false" can_open="0" default_order="state,sequence,name" js_class="theme_preview_kanban">
                     <field name="icon"/>
                     <field name="summary"/>
                     <field name="name"/>

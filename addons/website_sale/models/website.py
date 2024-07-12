@@ -119,6 +119,14 @@ class Website(models.Model):
         required=True,
         default='small',
     )
+    ecommerce_access = fields.Selection(
+        selection=[
+            ('everyone', "All users"),
+            ('logged_in', "Logged in users"),
+        ],
+        required=True,
+        default='everyone',
+    )
     product_page_grid_columns = fields.Integer(default=2)
 
     prevent_zero_price_sale = fields.Boolean(string="Hide 'Add To Cart' when price = 0")
@@ -129,7 +137,6 @@ class Website(models.Model):
     )
 
     # Computed fields
-    enabled_delivery = fields.Boolean(string="Enable Shipping", compute='_compute_enabled_delivery')
     fiscal_position_id = fields.Many2one(
         comodel_name='account.fiscal.position',
         compute='_compute_fiscal_position_id',
@@ -179,12 +186,6 @@ class Website(models.Model):
     def _compute_currency_id(self):
         for website in self:
             website.currency_id = website.pricelist_id.currency_id or website.company_id.currency_id
-
-    def _compute_enabled_delivery(self):
-        for website in self:
-            website.enabled_delivery = bool(website.env['delivery.carrier'].sudo().search_count(
-                [('website_id', 'in', (False, website.id)), ('is_published', '=', True)], limit=1
-            ))
 
     #=== SELECTION METHODS ===#
 
@@ -247,7 +248,8 @@ class Website(models.Model):
 
         # no GeoIP or no pricelist for this country
         if not pricelists:
-            pricelists = pricelists.browse(website_pricelist_ids).filtered(check_pricelist)
+            pricelists = pricelists.browse(website_pricelist_ids).filtered(
+                lambda pl: check_pricelist(pl) and not (country_code and pl.country_group_ids))
 
         # if logged in, add partner pl (which is `property_product_pricelist`, might not be website compliant)
         if not self.env.user._is_public():
@@ -354,18 +356,23 @@ class Website(models.Model):
         return pricelist
 
     def sale_product_domain(self):
-        return expression.AND([self._product_domain(), self.get_current_website().website_domain()])
+        website_domain = self.get_current_website().website_domain()
+        if not self.env.user._is_internal():
+            website_domain = expression.AND([website_domain, [
+                ('is_published', '=', True),
+                ('service_tracking', 'in', self.env['product.template']._get_saleable_tracking_types()),
+            ]])
+        return expression.AND([self._product_domain(), website_domain])
 
     def _product_domain(self):
         return [('sale_ok', '=', True)]
 
-    def sale_get_order(self, force_create=False, update_pricelist=False):
+    def sale_get_order(self, force_create=False):
         """ Return the current sales order after mofications specified by params.
 
         :param bool force_create: Create sales order if not already existing
-        :param bool update_pricelist: Force to recompute all the lines from sales order to adapt the price with the current pricelist.
-        :returns: record for the current sales order (might be empty)
-        :rtype: `sale.order` recordset
+
+        :returns: current cart, as a sudoed `sale.order` recordset (might be empty)
         """
         self.ensure_one()
 
@@ -413,9 +420,6 @@ class Website(models.Model):
                 request.session.pop('website_sale_cart_quantity', None)
             return self.env['sale.order']
 
-        # Only set when neeeded
-        pricelist_id = False
-
         partner_sudo = self.env.user.partner_id
 
         # cart creation was requested
@@ -438,38 +442,8 @@ class Website(models.Model):
             request.session['website_sale_cart_quantity'] = sale_order_sudo.cart_quantity
 
         # check for change of partner_id ie after signup
-        if sale_order_sudo.partner_id.id != partner_sudo.id and request.website.partner_id.id != partner_sudo.id:
-            previous_fiscal_position = sale_order_sudo.fiscal_position_id
-            previous_pricelist = sale_order_sudo.pricelist_id
-
-            # Reset the session pricelist according to logged partner pl
-            request.session.pop('website_sale_current_pl', None)
-            # Force recomputation of the website pricelist after reset
-            self.invalidate_recordset(['pricelist_id'])
-            pricelist_id = self.pricelist_id.id
-            request.session['website_sale_current_pl'] = pricelist_id
-
-            # change the partner, and trigger the computes (fpos)
-            sale_order_sudo.write({
-                'partner_id': partner_sudo.id,
-                # Must be specified to ensure it is not recomputed when it shouldn't
-                'pricelist_id': pricelist_id,
-            })
-
-            if sale_order_sudo.fiscal_position_id != previous_fiscal_position:
-                sale_order_sudo.order_line._compute_tax_id()
-
-            if sale_order_sudo.pricelist_id != previous_pricelist:
-                update_pricelist = True
-        elif update_pricelist:
-            # Only compute pricelist if needed
-            pricelist_id = self.pricelist_id.id
-
-        # update the pricelist
-        if update_pricelist:
-            request.session['website_sale_current_pl'] = pricelist_id
-            sale_order_sudo.write({'pricelist_id': pricelist_id})
-            sale_order_sudo._recompute_prices()
+        if partner_sudo.id not in (sale_order_sudo.partner_id.id, self.partner_id.id):
+            sale_order_sudo._update_address(partner_sudo.id, ['partner_id'])
 
         return sale_order_sudo
 
@@ -478,7 +452,7 @@ class Website(models.Model):
         addr = partner_sudo.address_get(['delivery', 'invoice'])
         if not request.website.is_public_user():
             last_sale_order = self.env['sale.order'].sudo().search(
-                [('partner_id', '=', partner_sudo.id)],
+                [('partner_id', '=', partner_sudo.id), ('website_id', '=', self.id)],
                 limit=1,
                 order='date_order desc, id desc',
             )
@@ -503,7 +477,7 @@ class Website(models.Model):
 
             'pricelist_id': self.pricelist_id.id,
 
-            'team_id': self.salesteam_id.id or partner_sudo.parent_id.team_id.id or partner_sudo.team_id.id,
+            'team_id': self.salesteam_id.id,
             'user_id': salesperson_user_sudo.id,
             'website_id': self.id,
         }
@@ -520,7 +494,8 @@ class Website(models.Model):
                 [('code', '=', request.geoip.country_code)],
                 limit=1,
             )
-            fpos = AccountFiscalPosition._get_fpos_by_region(country.id)
+            partner_geoip = self.env["res.partner"].new({'country_id': country.id})
+            fpos = AccountFiscalPosition._get_fiscal_position(partner_geoip)
 
         if not fpos:
             fpos = AccountFiscalPosition._get_fiscal_position(partner_sudo)
@@ -545,6 +520,8 @@ class Website(models.Model):
 
     def _search_get_details(self, search_type, order, options):
         result = super()._search_get_details(search_type, order, options)
+        if not self.has_ecommerce_access():
+            return result
         if search_type in ['products', 'product_categories_only', 'all']:
             result.append(self.env['product.public.category']._search_get_detail(self, order, options))
         if search_type in ['products', 'products_only', 'all']:
@@ -632,11 +609,11 @@ class Website(models.Model):
             'name': _lt("Review Order"),
             'current_href': '/shop/cart',
             'main_button': _lt("Sign In") if redirect_to_sign_in else _lt("Checkout"),
-            'main_button_href': f'{"/web/login?redirect=" if redirect_to_sign_in else ""}/shop/checkout?express=1',
+            'main_button_href': f'{"/web/login?redirect=" if redirect_to_sign_in else ""}/shop/checkout?try_skip_step=true',
             'back_button':  _lt("Continue shopping"),
             'back_button_href': '/shop',
         }), (['website_sale.checkout', 'website_sale.address'], {
-            'name': _lt("Shipping"),
+            'name': _lt("Delivery"),
             'current_href': '/shop/checkout',
             'main_button': _lt("Confirm"),
             'main_button_href': f'{"/shop/extra_info" if is_extra_step_active else "/shop/confirm_order"}',
@@ -649,14 +626,14 @@ class Website(models.Model):
                 'current_href': '/shop/extra_info',
                 'main_button': _lt("Continue checkout"),
                 'main_button_href': '/shop/confirm_order',
-                'back_button':  _lt("Return to shipping"),
+                'back_button':  _lt("Back to delivery"),
                 'back_button_href': '/shop/checkout',
             }))
         steps.append((['website_sale.payment'], {
             'name': _lt("Payment"),
             'current_href': '/shop/payment',
-            'back_button':  _lt("Back to cart"),
-            'back_button_href': '/shop/cart',
+            'back_button':  _lt("Back to delivery"),
+            'back_button_href': '/shop/checkout',
         }))
         return steps
 
@@ -675,3 +652,9 @@ class Website(models.Model):
         if current_step:
             return next(step for step in steps if current_step in step[0])[1]
         return steps
+
+    def has_ecommerce_access(self):
+        """ Return whether the current user is allowed to access eCommerce-related content. """
+        return not (self.env.user._is_public() and self.ecommerce_access == 'logged_in')
+
+

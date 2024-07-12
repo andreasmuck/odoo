@@ -13,8 +13,8 @@ from odoo.addons.account.tests.common import AccountTestInvoicingCommon
 class TestEventProductConfiguratorUi(AccountTestInvoicingCommon, HttpCase):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
         # Adding sale users to test the access rights
         cls.salesman = mail_new_test_user(
@@ -58,7 +58,8 @@ class TestEventProductConfiguratorUi(AccountTestInvoicingCommon, HttpCase):
         cls.event_product_template = cls.env['product.template'].create({
             'name': 'Registration Event (TEST variants)',
             'list_price': 30.0,
-            'detailed_type': 'event',
+            'type': 'service',
+            'service_tracking': 'event',
         })
 
         # Generate variants

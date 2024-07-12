@@ -7,13 +7,16 @@ from werkzeug.exceptions import NotFound
 from odoo import http
 from odoo.http import request
 from odoo.addons.mail.models.discuss.mail_guest import add_guest_to_context
+from odoo.addons.mail.tools.discuss import Store
 
 
 class ThreadController(http.Controller):
     @http.route("/mail/thread/data", methods=["POST"], type="json", auth="user")
     def mail_thread_data(self, thread_model, thread_id, request_list):
         thread = request.env[thread_model].with_context(active_test=False).search([("id", "=", thread_id)])
-        return thread._get_mail_thread_data(request_list)
+        store = Store()
+        thread._thread_to_store(store, request_list=request_list)
+        return store.get_result()
 
     @http.route("/mail/thread/messages", methods=["POST"], type="json", auth="user")
     def mail_thread_messages(self, thread_model, thread_id, search_term=None, before=None, after=None, around=None, limit=30):
@@ -23,9 +26,14 @@ class ThreadController(http.Controller):
             ("message_type", "!=", "user_notification"),
         ]
         res = request.env["mail.message"]._message_fetch(domain, search_term=search_term, before=before, after=after, around=around, limit=limit)
+        messages = res.pop("messages")
         if not request.env.user._is_public():
-            res["messages"].set_message_done()
-        return {**res, "messages": res["messages"].message_format()}
+            messages.set_message_done()
+        return {
+            **res,
+            "data": Store(messages, for_current_user=True).get_result(),
+            "messages": [{"id": message.id} for message in messages],
+        }
 
     @http.route("/mail/partner/from_email", methods=["POST"], type="json", auth="user")
     def mail_thread_partner_from_email(self, emails, additional_values=None):
@@ -72,14 +80,14 @@ class ThreadController(http.Controller):
 
     @http.route("/mail/message/post", methods=["POST"], type="json", auth="public")
     @add_guest_to_context
-    def mail_message_post(self, thread_model, thread_id, post_data, context=None):
+    def mail_message_post(self, thread_model, thread_id, post_data, context=None, special_mentions=[], **kwargs):
         guest = request.env["mail.guest"]._get_guest_from_context()
         guest.env["ir.attachment"].browse(post_data.get("attachment_ids", []))._check_attachments_access(
-            post_data.get("attachment_tokens")
+            kwargs.get("attachment_tokens")
         )
         if context:
             request.update_context(**context)
-        canned_response_ids = tuple(cid for cid in post_data.pop('canned_response_ids', []) if isinstance(cid, int))
+        canned_response_ids = tuple(cid for cid in kwargs.get('canned_response_ids', []) if isinstance(cid, int))
         if canned_response_ids:
             # Avoid serialization errors since last used update is not
             # essential and should not block message post.
@@ -100,17 +108,21 @@ class ThreadController(http.Controller):
         if "body" in post_data:
             post_data["body"] = Markup(post_data["body"])  # contains HTML such as @mentions
         new_partners = []
-        if "partner_emails" in post_data:
+        if "partner_emails" in kwargs:
             new_partners = [record.id for record in request.env["res.partner"]._find_or_create_from_emails(
-                post_data["partner_emails"], post_data.get("partner_additional_values", {})
+                kwargs["partner_emails"], kwargs.get("partner_additional_values", {})
             )]
         post_data["partner_ids"] = list(set((post_data.get("partner_ids", [])) + new_partners))
-        message_data = thread.message_post(
-            **{key: value for key, value in post_data.items() if key in self._get_allowed_message_post_params()}
-        ).message_format()[0]
-        if "temporary_id" in request.context:
-            message_data["temporary_id"] = request.context["temporary_id"]
-        return message_data
+        if "everyone" in special_mentions:
+            post_data["partner_ids"] = [channel_member.partner_id.id for channel_member in thread.channel_member_ids if channel_member.partner_id]
+        message = thread.message_post(
+            **{
+                key: value
+                for key, value in post_data.items()
+                if key in self._get_allowed_message_post_params()
+            }
+        )
+        return Store(message, for_current_user=True).get_result()
 
     @http.route("/mail/message/update_content", methods=["POST"], type="json", auth="public")
     @add_guest_to_context
@@ -126,4 +138,4 @@ class ThreadController(http.Controller):
         guest.env[message_sudo.model].browse([message_sudo.res_id])._message_update_content(
             message_sudo, body, attachment_ids=attachment_ids, partner_ids=partner_ids
         )
-        return message_sudo.message_format()[0]
+        return Store(message_sudo, for_current_user=True).get_result()

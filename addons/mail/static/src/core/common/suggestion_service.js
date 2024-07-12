@@ -1,5 +1,6 @@
 import { partnerCompareRegistry } from "@mail/core/common/partner_compare";
 import { cleanTerm } from "@mail/utils/common/format";
+import { toRaw } from "@odoo/owl";
 
 import { registry } from "@web/core/registry";
 
@@ -12,7 +13,6 @@ export class SuggestionService {
         this.env = env;
         this.orm = services.orm;
         this.store = services["mail.store"];
-        this.personaService = services["mail.persona"];
     }
 
     getSupportedDelimiters(thread) {
@@ -44,7 +44,7 @@ export class SuggestionService {
         if (thread?.model === "discuss.channel") {
             kwargs.channel_id = thread.id;
         }
-        const suggestedPartners = await this.orm.silent.call(
+        const data = await this.orm.silent.call(
             "res.partner",
             thread?.model === "discuss.channel"
                 ? "get_mention_suggestions_from_channel"
@@ -52,7 +52,7 @@ export class SuggestionService {
             [],
             kwargs
         );
-        this.store.Persona.insert(suggestedPartners);
+        this.store.insert(data);
     }
 
     /**
@@ -99,7 +99,7 @@ export class SuggestionService {
         };
         return {
             type: "CannedResponse",
-            mainSuggestions: sort ? cannedResponses.sort(sortFunc) : cannedResponses,
+            suggestions: sort ? cannedResponses.sort(sortFunc) : cannedResponses,
         };
     }
 
@@ -112,9 +112,10 @@ export class SuggestionService {
      * @param {Object} [options={}]
      * @param {Integer} [options.thread] prioritize and/or restrict
      *  result in the context of given thread
-     * @returns {{ type: String, mainSuggestions: Array, extraSuggestions: Array }}
+     * @returns {{ type: String, suggestions: Array }}
      */
     searchSuggestions({ delimiter, term }, { thread, sort = false } = {}) {
+        thread = toRaw(thread);
         const cleanedSearchTerm = cleanTerm(term);
         switch (delimiter) {
             case "@": {
@@ -127,8 +128,7 @@ export class SuggestionService {
         }
         return {
             type: undefined,
-            mainSuggestions: [],
-            extraSuggestions: [],
+            suggestions: [],
         };
     }
 
@@ -149,12 +149,14 @@ export class SuggestionService {
                 .map((member) => member.persona)
                 .filter((persona) => persona.type === "partner");
         } else {
-            partners = Object.values(this.store.Persona.records).filter(
-                (persona) => persona.type === "partner"
-            );
+            partners = Object.values(this.store.Persona.records).filter((persona) => {
+                if (thread?.model !== "discuss.channel" && persona.eq(this.store.odoobot)) {
+                    return false;
+                }
+                return persona.type === "partner";
+            });
         }
-        const mainSuggestionList = [];
-        const extraSuggestionList = [];
+        const suggestions = [];
         for (const partner of partners) {
             if (!partner.name) {
                 continue;
@@ -163,26 +165,29 @@ export class SuggestionService {
                 cleanTerm(partner.name).includes(cleanedSearchTerm) ||
                 (partner.email && cleanTerm(partner.email).includes(cleanedSearchTerm))
             ) {
-                if (partner.user) {
-                    mainSuggestionList.push(partner);
-                } else {
-                    extraSuggestionList.push(partner);
-                }
+                suggestions.push(partner);
             }
         }
+        suggestions.push(
+            ...this.store.specialMentions.filter(
+                (special) =>
+                    thread &&
+                    special.channel_types.includes(thread.channel_type) &&
+                    cleanedSearchTerm.length >= Math.min(4, special.label.length) &&
+                    (special.label.startsWith(cleanedSearchTerm) ||
+                        cleanTerm(special.description.toString()).includes(cleanedSearchTerm))
+            )
+        );
         return {
             type: "Partner",
-            mainSuggestions: sort
-                ? this.sortPartnerSuggestions(mainSuggestionList, cleanedSearchTerm, thread)
-                : mainSuggestionList,
-            extraSuggestions: sort
-                ? this.sortPartnerSuggestions(extraSuggestionList, cleanedSearchTerm, thread)
-                : extraSuggestionList,
+            suggestions: sort
+                ? [...this.sortPartnerSuggestions(suggestions, cleanedSearchTerm, thread)]
+                : suggestions,
         };
     }
 
     /**
-     * @param {[import("models").Persona]} [partners]
+     * @param {[import("models").Persona | import("@mail/core/common/store_service").SpecialMention]} [partners]
      * @param {String} [searchTerm]
      * @param {import("models").Thread} thread
      * @returns {[import("models").Persona]}
@@ -190,11 +195,22 @@ export class SuggestionService {
     sortPartnerSuggestions(partners, searchTerm = "", thread = undefined) {
         const cleanedSearchTerm = cleanTerm(searchTerm);
         const compareFunctions = partnerCompareRegistry.getAll();
-        const context = { recentChatPartnerIds: this.personaService.getRecentChatPartnerIds() };
+        const context = { recentChatPartnerIds: this.store.getRecentChatPartnerIds() };
+        const memberPartnerIds = new Set(
+            thread?.channelMembers
+                .filter((member) => member.persona.type === "partner")
+                .map((member) => member.persona.id)
+        );
         return partners.sort((p1, p2) => {
+            p1 = toRaw(p1);
+            p2 = toRaw(p2);
+            if (p1.isSpecial || p2.isSpecial) {
+                return 0;
+            }
             for (const fn of compareFunctions) {
                 const result = fn(p1, p2, {
                     env: this.env,
+                    memberPartnerIds,
                     searchTerms: cleanedSearchTerm,
                     thread,
                     context,
@@ -252,14 +268,13 @@ export class SuggestionService {
         };
         return {
             type: "Thread",
-            mainSuggestions: sort ? suggestionList.sort(sortFunc) : suggestionList,
-            extraSuggestions: [],
+            suggestions: sort ? suggestionList.sort(sortFunc) : suggestionList,
         };
     }
 }
 
 export const suggestionService = {
-    dependencies: ["orm", "mail.store", "mail.persona"],
+    dependencies: ["orm", "mail.store"],
     /**
      * @param {import("@web/env").OdooEnv} env
      * @param {Partial<import("services").Services>} services

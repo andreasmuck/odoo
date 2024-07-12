@@ -4,15 +4,17 @@
 from datetime import datetime
 from uuid import uuid4
 import pytz
+import secrets
 
 from odoo import api, fields, models, _, Command
 from odoo.osv.expression import OR, AND
 from odoo.exceptions import AccessError, ValidationError, UserError
+from odoo.tools import convert, SQL
 
 
 class PosConfig(models.Model):
     _name = 'pos.config'
-    _inherit = ['pos.bus.mixin']
+    _inherit = ['pos.bus.mixin', 'pos.load.mixin']
     _description = 'Point of Sale Configuration'
     _check_company_auto = True
 
@@ -62,6 +64,9 @@ class PosConfig(models.Model):
             tip_product_id = self.env['product.product'].search([('default_code', '=', 'TIPS')], limit=1)
         return tip_product_id
 
+    def _get_customer_display_types(self):
+        return [('none', 'None'), ('local', 'The same device'), ('remote', 'Another device'), ('proxy', 'An IOT-connected screen')]
+
     name = fields.Char(string='Point of Sale', required=True, help="An internal identification of the point of sale.")
     printer_ids = fields.Many2many('pos.printer', 'pos_config_printer_rel', 'config_id', 'printer_id', string='Order Printers')
     is_order_printer = fields.Boolean('Order Printer')
@@ -72,7 +77,7 @@ class PosConfig(models.Model):
         string='Operation Type',
         default=_default_picking_type_id,
         required=True,
-        domain="[('code', '=', 'outgoing'), ('warehouse_id.company_id', '=', company_id)]",
+        domain=lambda self: [('code', '=', 'outgoing'), ('warehouse_id.company_id', '=', self.env.company.id)],
         ondelete='restrict')
     journal_id = fields.Many2one(
         'account.journal', string='Point of Sale Journal',
@@ -90,10 +95,6 @@ class PosConfig(models.Model):
     currency_id = fields.Many2one('res.currency', compute='_compute_currency', compute_sudo=True, string="Currency")
     iface_cashdrawer = fields.Boolean(string='Cashdrawer', help="Automatically open the cashdrawer.")
     iface_electronic_scale = fields.Boolean(string='Electronic Scale', help="Enables Electronic Scale integration.")
-    iface_customer_facing_display = fields.Boolean(compute='_compute_customer_facing_display')
-    iface_customer_facing_display_via_proxy = fields.Boolean(string='Customer Facing Display', help="Show checkout to customers with a remotely-connected screen.")
-    iface_customer_facing_display_local = fields.Boolean(string='Local Customer Facing Display', help="Show checkout to customers.")
-    iface_customer_facing_display_background_image_1920 = fields.Image(string='Background Image', max_width=1920, max_height=1920, compute='_compute_iface_customer_facing_display_background_image_1920', store=True)
     iface_print_via_proxy = fields.Boolean(string='Print via Proxy', help="Bypass browser printing and prints via the hardware proxy.")
     iface_scan_via_proxy = fields.Boolean(string='Scan via Proxy', help="Enable barcode scanning with a remotely connected barcode scanner and card swiping with a Vantiv card reader.")
     iface_big_scrollbars = fields.Boolean('Large Scrollbars', help='For imprecise industrial touchscreens.')
@@ -106,6 +107,9 @@ class PosConfig(models.Model):
         help='The point of sale will display this product category by default. If no category is specified, all available products will be shown.')
     iface_available_categ_ids = fields.Many2many('pos.category', string='Available PoS Product Categories',
         help='The point of sale will only display products which are within one of the selected category trees. If no category is specified, all available products will be shown')
+    customer_display_type = fields.Selection(selection=lambda self: self._get_customer_display_types(), string='Customer Facing Display', help="Show checkout to customers.", default='local')
+    customer_display_bg_img = fields.Image(string='Background Image', max_width=1920, max_height=1920)
+    customer_display_bg_img_name = fields.Char(string='Background Image Name')
     restrict_price_control = fields.Boolean(string='Restrict Price Modifications to Managers',
         help="Only users with Manager access rights for PoS app can modify the product prices on orders.")
     is_margins_costs_accessible_to_every_user = fields.Boolean(string='Margins & Costs', default=False,
@@ -182,12 +186,32 @@ class PosConfig(models.Model):
         "product lead time. Otherwise, it will be based on the shortest.")
     auto_validate_terminal_payment = fields.Boolean(default=True, help="Automatically validates orders paid with a payment terminal.")
     trusted_config_ids = fields.Many2many("pos.config", relation="pos_config_trust_relation", column1="is_trusting",
-                                          column2="is_trusted", string="Trusted Point of Sale Configurations",
-                                          domain="[('id', '!=', pos_config_id), ('module_pos_restaurant', '=', False)]")
+                                          column2="is_trusted", string="Trusted Point of Sale Configurations")
     access_token = fields.Char("Access Token", default=lambda self: uuid4().hex[:16])
     show_product_images = fields.Boolean(string="Show Product Images", help="Show product images in the Point of Sale interface.", default=True)
     show_category_images = fields.Boolean(string="Show Category Images", help="Show category images in the Point of Sale interface.", default=True)
     note_ids = fields.Many2many('pos.note', string='Note Models', help='The predefined notes of this point of sale.')
+    module_pos_sms = fields.Boolean(string="SMS Enabled", help="Activate SMS feature for point_of_sale")
+    is_closing_entry_by_product = fields.Boolean(
+        string='Closing Entry by product',
+        help="Display the breakdown of sales lines by product in the automatically generated closing entry.")
+
+    @api.model
+    def _load_pos_data_domain(self, data):
+        return [('id', '=', data['pos.session']['data'][0]['config_id'])]
+
+    def _load_pos_data(self, data):
+        domain = self._load_pos_data_domain(data)
+        fields = self._load_pos_data_fields(self.id)
+        data = self.search_read(domain, fields, load=False)
+
+        if not data[0]['use_pricelist']:
+            data[0]['pricelist_id'] = False
+
+        return {
+            'data': data,
+            'fields': fields,
+        }
 
     @api.depends('payment_method_ids')
     def _compute_cash_control(self):
@@ -258,17 +282,6 @@ class PosConfig(models.Model):
                 pos_config.pos_session_state = False
                 pos_config.pos_session_duration = 0
                 pos_config.current_user_id = False
-
-    @api.depends('iface_customer_facing_display_via_proxy', 'iface_customer_facing_display_local')
-    def _compute_customer_facing_display(self):
-        for config in self:
-            config.iface_customer_facing_display = config.iface_customer_facing_display_via_proxy or config.iface_customer_facing_display_local
-
-    @api.depends('iface_customer_facing_display')
-    def _compute_iface_customer_facing_display_background_image_1920(self):
-        for config in self:
-            if not config.iface_customer_facing_display:
-                config.iface_customer_facing_display_background_image_1920 = False
 
     @api.constrains('rounding_method')
     def _check_rounding_method_strategy(self):
@@ -352,7 +365,7 @@ class PosConfig(models.Model):
     @api.constrains('payment_method_ids')
     def _check_payment_method_ids_journal(self):
         for cash_method in self.payment_method_ids.filtered(lambda m: m.journal_id.type == 'cash'):
-            if self.env['pos.config'].search([('id', '!=', self.id), ('payment_method_ids', 'in', cash_method.ids)]):
+            if self.env['pos.config'].search_count([('id', '!=', self.id), ('payment_method_ids', 'in', cash_method.ids)], limit=1):
                 raise ValidationError(_("This cash payment method is already used in another Point of Sale.\n"
                                         "A new cash payment method should be created for this Point of Sale."))
             if len(cash_method.journal_id.pos_payment_method_ids) > 1:
@@ -368,6 +381,12 @@ class PosConfig(models.Model):
     def _check_header_footer(self, values):
         if not self.env.is_admin() and {'is_header_or_footer', 'receipt_header', 'receipt_footer'} & values.keys():
             raise AccessError(_('Only administrators can edit receipt headers and footers'))
+
+    @api.constrains('customer_display_type', 'proxy_ip', 'is_posbox')
+    def _check_customer_display_type(self):
+        for config in self:
+            if config.customer_display_type == 'proxy' and (not config.is_posbox or not config.proxy_ip):
+                raise UserError(_("You must set the iot box's IP address to use an IoT-connected screen. You'll find the field under the 'IoT Box' option."))
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -646,101 +665,6 @@ class PosConfig(models.Model):
             'type': 'ir.actions.act_window',
         }
 
-    # All following methods are made to create data needed in POS, when a localisation
-    # is installed, or if POS is installed on database having companies that already have
-    # a localisation installed
-    @api.model
-    def post_install_pos_localisation(self, companies=False):
-        self = self.sudo()
-        if not companies:
-            companies = self.env['res.company'].search([])
-        for company in companies.filtered('chart_template'):
-            domain = AND([
-                [('company_id', '=', company.id), ('module_pos_restaurant', '=', False)],
-                OR([[('active', '=', True)], [('active', '=', False)]]),
-            ])
-            pos_configs = self.search(domain)
-            if not pos_configs:
-                self = self.with_company(company)
-                pos_configs = self.env['pos.config'].create({
-                'name': _('Shop'),
-                'company_id': company.id,
-                'module_pos_restaurant': False,
-            })
-            pos_configs.setup_defaults(company)
-
-    def setup_defaults(self, company):
-        """Extend this method to customize the existing pos.config of the company during the installation
-        of a localisation.
-
-        :param self pos.config: pos.config records present in the company during the installation of localisation.
-        :param company res.company: the single company where the pos.config defaults will be setup.
-        """
-        self.assign_payment_journals(company)
-        self.generate_pos_journal(company)
-        self.setup_invoice_journal(company)
-
-    def assign_payment_journals(self, company):
-        for pos_config in self:
-            if pos_config.payment_method_ids or pos_config.has_active_session:
-                continue
-            cash_journal = self.env['account.journal'].search([
-                *self.env['account.journal']._check_company_domain(company),
-                ('type', '=', 'cash'),
-                ('currency_id', 'in', [pos_config.currency_id.id, False]),
-            ], limit=1)
-            bank_journal = self.env['account.journal'].search([
-                *self.env['account.journal']._check_company_domain(company),
-                ('type', '=', 'bank'),
-                ('currency_id', 'in', [pos_config.currency_id.id, False]),
-            ], limit=1)
-            payment_methods = self.env['pos.payment.method']
-            if cash_journal and len(cash_journal.pos_payment_method_ids.ids) == 0:
-                payment_methods |= payment_methods.create({
-                    'name': _('Cash'),
-                    'journal_id': cash_journal.id,
-                    'company_id': company.id,
-                })
-            if bank_journal:
-                payment_methods |= payment_methods.create({
-                    'name': _('Bank'),
-                    'journal_id': bank_journal.id,
-                    'company_id': company.id,
-                })
-            payment_methods |= payment_methods.create({
-                'name': _('Customer Account'),
-                'company_id': company.id,
-                'split_transactions': True,
-            })
-            pos_config.write({'payment_method_ids': [(6, 0, payment_methods.ids)]})
-
-    def generate_pos_journal(self, company):
-        for pos_config in self:
-            if pos_config.journal_id:
-                continue
-            pos_journal = self.env['account.journal'].search([
-                *self.env['account.journal']._check_company_domain(company),
-                ('code', '=', 'POSS'),
-            ])
-            if not pos_journal:
-                pos_journal = self.env['account.journal'].create({
-                    'type': 'general',
-                    'name': _('Point of Sale'),
-                    'code': 'POSS',
-                    'company_id': company.id,
-                    'sequence': 20
-                })
-            pos_config.write({'journal_id': pos_journal.id})
-
-    def setup_invoice_journal(self, company):
-        for pos_config in self:
-            invoice_journal_id = pos_config.invoice_journal_id or self.env['account.journal'].search([
-                *self.env['account.journal']._check_company_domain(company),
-                ('type', '=', 'sale'),
-            ], limit=1)
-            if invoice_journal_id:
-                pos_config.write({'invoice_journal_id': invoice_journal_id.id})
-
     def _get_available_categories(self):
         return (
             self.env["pos.category"]
@@ -768,11 +692,6 @@ class PosConfig(models.Model):
         if self.iface_tipproduct:
             domain = OR([domain, [('id', '=', self.tip_product_id.id)]])
         return domain
-
-    def _link_same_non_cash_payment_methods_if_exists(self, source_config_ref_id):
-        src_cfg = self.env.ref(source_config_ref_id, raise_if_not_found=False)
-        if src_cfg and src_cfg.company_id == self.company_id:
-            self._link_same_non_cash_payment_methods(src_cfg)
 
     def _link_same_non_cash_payment_methods(self, source_config):
         pms = source_config.payment_method_ids.filtered(lambda pm: not pm.is_cash_count)
@@ -808,42 +727,38 @@ class PosConfig(models.Model):
             'company_id': company_id,
         }).id
 
-    def _ensure_cash_payment_method(self, journal_code, name):
-        self.ensure_one()
-        if not self.company_id.chart_template or self.payment_method_ids.filtered('is_cash_count'):
-            return
-        company_id = self.company_id.id
-        cash_journal_id = self._is_journal_exist(journal_code, name, company_id)
-        cash_pm_id = self._is_pos_pm_exist(name, cash_journal_id, company_id)
-        self.payment_method_ids = [Command.link(cash_pm_id)]
-
     def get_limited_products_loading(self, fields):
-        tables, where_clause, params = self.env['product.product']._where_calc(
+        query = self.env['product.product']._where_calc(
             self._get_available_product_domain()
-        ).get_sql()
-        query = f"""
+        )
+        sql = SQL(
+            """
             WITH pm AS (
                   SELECT product_id,
-                         Max(write_date) date
-                    FROM stock_quant
+                         MAX(write_date) date
+                    FROM stock_move_line
                 GROUP BY product_id
             )
                SELECT product_product.id
-                 FROM {tables}
+                 FROM %s
             LEFT JOIN pm ON product_product.id=pm.product_id
-                WHERE {where_clause}
+                WHERE %s
              ORDER BY product_product__product_tmpl_id.is_favorite DESC,
-                      product_product__product_tmpl_id.detailed_type DESC,
-                      COALESCE(pm.date, product_product.write_date) DESC
+                      CASE WHEN product_product__product_tmpl_id.type = 'service' THEN 1 ELSE 0 END DESC,
+                      pm.date DESC NULLS LAST,
+                      product_product.write_date DESC
                 LIMIT %s
-        """
-        self.env.cr.execute(query, params + [self.get_limited_product_count()])
-        product_ids = self.env.cr.fetchall()
-        products = self.env['product.product'].search([('id', 'in', product_ids)])
-        product_combo = products.filtered(lambda p: p['detailed_type'] == 'combo')
+            """,
+            query.from_clause,
+            query.where_clause or SQL("TRUE"),
+            self.get_limited_product_count(),
+        )
+        product_ids = [r[0] for r in self.env.execute_query(sql)]
+        products = self.env['product.product'].browse(product_ids)
+        product_combo = products.filtered(lambda p: p['type'] == 'combo')
         product_in_combo = product_combo.combo_ids.combo_line_ids.product_id
         products_available = products | product_in_combo
-        return products_available.read(fields)
+        return products_available.read(fields, load=False)
 
     def get_limited_product_count(self):
         default_limit = 20000
@@ -891,37 +806,6 @@ class PosConfig(models.Model):
     def _remove_trusted_config_id(self, config_id):
         self.trusted_config_ids -= config_id
 
-    @api.model
-    def add_cash_payment_method(self):
-        companies = self.env['res.company'].search([])
-        for company in companies.filtered('chart_template'):
-            pos_configs = self.search([
-                *self._check_company_domain(company),
-            ])
-            journal_counter = 1
-            for pos_config in pos_configs:
-                if pos_config.payment_method_ids.filtered('is_cash_count'):
-                    continue
-                journal_counter += self.env['account.journal'].search_count([
-                    *self.env['account.journal']._check_company_domain(company),
-                    ('type', '=', 'cash'),
-                    ('pos_payment_method_ids', '=', False),
-                ])
-                cash_journal = self.env['account.journal'].create({
-                    'name': _('Cash %s', journal_counter),
-                    'code': 'RCSH%s' % journal_counter,
-                    'type': 'cash',
-                    'company_id': company.id
-                })
-                journal_counter += 1
-                payment_methods = pos_config.payment_method_ids
-                payment_methods |= self.env['pos.payment.method'].create({
-                    'name': _('Cash %s', pos_config.name),
-                    'journal_id': cash_journal.id,
-                    'company_id': company.id,
-                })
-                pos_config.with_context(bypass_payment_method_ids_forbidden_change=True).write({'payment_method_ids': [(6, 0, payment_methods.ids)]})
-
     def _get_payment_method(self, payment_type):
         for pm in self.payment_method_ids:
             if pm.type == payment_type:
@@ -930,3 +814,211 @@ class PosConfig(models.Model):
 
     def _get_special_products(self):
         return self.env.ref('point_of_sale.product_product_tip', raise_if_not_found=False) or self.env['product.product']
+
+    def update_customer_display(self, order, access_token):
+        self.ensure_one()
+        if not access_token or not secrets.compare_digest(self.access_token, access_token):
+            return
+        self._notify("UPDATE_CUSTOMER_DISPLAY", order)
+
+    def _get_display_device_ip(self):
+        self.ensure_one()
+        return self.proxy_ip
+
+    def _get_customer_display_data(self):
+        self.ensure_one()
+        return {
+            'config_id': self.id,
+            'access_token': self.access_token,
+            'type': self.customer_display_type,
+            'has_bg_img': bool(self.customer_display_bg_img),
+            'company_id': self.company_id.id,
+            **({'proxy_ip': self._get_display_device_ip()} if self.customer_display_type == 'proxy' else {}),
+        }
+
+    @api.model
+    def _create_cash_payment_method(self):
+        cash_journal = self.env['account.journal'].create({
+            'name': _('Cash'),
+            'type': 'cash',
+            'company_id': self.env.company.id,
+        })
+        return self.env['pos.payment.method'].create({
+            'name': _('Cash'),
+            'journal_id': cash_journal.id,
+            'company_id': self.env.company.id,
+        })
+
+    def _create_journal_and_payment_methods(self, cash_ref=None):
+        """This should only be called at creation of a new pos.config."""
+
+        journal = self.env['account.journal']._ensure_company_account_journal()
+        payment_methods = self.env['pos.payment.method']
+
+        # create cash payment method per config
+        cash_pm_from_ref = cash_ref and self.env.ref(cash_ref, raise_if_not_found=False)
+        if cash_pm_from_ref:
+            try:
+                cash_pm_from_ref.check_access_rights('read')
+                cash_pm_from_ref.check_access_rule('read')
+                cash_pm = cash_pm_from_ref
+            except AccessError:
+                cash_pm = self._create_cash_payment_method()
+        else:
+            cash_pm = self._create_cash_payment_method()
+
+        if cash_ref and cash_pm != cash_pm_from_ref:
+            self.env['ir.model.data']._update_xmlids([{
+                'xml_id': cash_ref,
+                'record': cash_pm,
+                'noupdate': True,
+            }])
+
+        payment_methods |= cash_pm
+
+        # only create bank and customer account payment methods per company
+        bank_pm = self.env['pos.payment.method'].search([('journal_id.type', '=', 'bank'), ('company_id', '=', self.env.company.id)])
+        if not bank_pm:
+            bank_journal = self.env['account.journal'].search([('type', '=', 'bank'), ('company_id', '=', self.env.company.id)], limit=1)
+            if not bank_journal:
+                raise UserError(_('Ensure that there is an existing bank journal. Check if chart of accounts is installed in your company.'))
+            bank_pm = self.env['pos.payment.method'].create({
+                'name': _('Card'),
+                'journal_id': bank_journal.id,
+                'company_id': self.env.company.id,
+                'sequence': 1,
+            })
+
+        payment_methods |= bank_pm
+
+        pay_later_pm = self.env['pos.payment.method'].search([('journal_id', '=', False), ('company_id', '=', self.env.company.id)])
+        if not pay_later_pm:
+            pay_later_pm = self.env['pos.payment.method'].create({
+                'name': _('Customer Account'),
+                'company_id': self.env.company.id,
+                'split_transactions': True,
+                'sequence': 2,
+            })
+
+        payment_methods |= pay_later_pm
+
+        return journal, payment_methods.ids
+
+    @api.model
+    def _load_furniture_data(self):
+        product_module = self.env['ir.module.module'].search([('name', '=', 'product')])
+        if not product_module.demo:
+            convert.convert_file(self.env, 'product', 'data/product_category_demo.xml', None, noupdate=True, mode='init', kind='data')
+            convert.convert_file(self.env, 'product', 'data/product_attribute_demo.xml', None, noupdate=True, mode='init', kind='data')
+            convert.convert_file(self.env, 'product', 'data/product_demo.xml', None, noupdate=True, mode='init', kind='data')
+
+        convert.convert_file(self.env, 'point_of_sale', 'data/scenarios/furniture_data.xml', None, noupdate=True, mode='init', kind='data')
+
+    @api.model
+    def load_onboarding_clothes_scenario(self):
+        ref_name = 'point_of_sale.pos_config_clothes'
+        if not self.env.ref(ref_name, raise_if_not_found=False):
+            convert.convert_file(self.env, 'point_of_sale', 'data/scenarios/clothes_data.xml', None, noupdate=True, mode='init', kind='data')
+
+        clothes_categories = [
+            self.env.ref('point_of_sale.pos_category_upper').id,
+            self.env.ref('point_of_sale.pos_category_lower').id,
+            self.env.ref('point_of_sale.pos_category_others').id
+        ]
+        journal, payment_methods_ids = self._create_journal_and_payment_methods()
+        config = self.env['pos.config'].create([{
+            'name': _('Clothes Shop'),
+            'company_id': self.env.company.id,
+            'journal_id': journal.id,
+            'payment_method_ids': payment_methods_ids,
+            'limit_categories': True,
+            'iface_available_categ_ids': clothes_categories,
+        }])
+        self.env['ir.model.data']._update_xmlids([{
+            'xml_id': self._get_suffixed_ref_name(ref_name),
+            'record': config,
+            'noupdate': True,
+        }])
+
+    @api.model
+    def load_onboarding_bakery_scenario(self):
+        ref_name = 'point_of_sale.pos_config_bakery'
+        if not self.env.ref(ref_name, raise_if_not_found=False):
+            convert.convert_file(self.env, 'point_of_sale', 'data/scenarios/bakery_data.xml', None, mode='init', noupdate=True, kind='data')
+
+        journal, payment_methods_ids = self._create_journal_and_payment_methods()
+        bakery_categories = [
+            self.env.ref('point_of_sale.pos_category_breads').id,
+            self.env.ref('point_of_sale.pos_category_pastries').id
+        ]
+        config = self.env['pos.config'].create({
+            'name': _('Bakery Shop'),
+            'company_id': self.env.company.id,
+            'journal_id': journal.id,
+            'payment_method_ids': payment_methods_ids,
+            'limit_categories': True,
+            'iface_available_categ_ids': bakery_categories,
+        })
+        self.env['ir.model.data']._update_xmlids([{
+            'xml_id': self._get_suffixed_ref_name(ref_name),
+            'record': config,
+            'noupdate': True,
+        }])
+
+    @api.model
+    def load_onboarding_furniture_scenario(self):
+        ref_name = 'point_of_sale.pos_config_main'
+        if not self.env.ref(ref_name, raise_if_not_found=False):
+            self._load_furniture_data()
+
+        journal, payment_methods_ids = self._create_journal_and_payment_methods('point_of_sale.cash_payment_method_furniture')
+        furniture_categories = [
+            self.env.ref('point_of_sale.pos_category_miscellaneous').id,
+            self.env.ref('point_of_sale.pos_category_desks').id,
+            self.env.ref('point_of_sale.pos_category_chairs').id
+        ]
+        config = self.env['pos.config'].create([{
+            'name': _('Furniture Shop'),
+            'company_id': self.env.company.id,
+            'journal_id': journal.id,
+            'payment_method_ids': payment_methods_ids,
+            'limit_categories': True,
+            'iface_available_categ_ids': furniture_categories,
+        }])
+        self.env['ir.model.data']._update_xmlids([{
+            'xml_id': self._get_suffixed_ref_name(ref_name),
+            'record': config,
+            'noupdate': True,
+        }])
+        if self.env.company.id == self.env.ref('base.main_company').id:
+            existing_session = self.env.ref('point_of_sale.pos_closed_session_2', raise_if_not_found=False)
+            if not existing_session:
+                convert.convert_file(self.env, 'point_of_sale', 'data/orders_demo.xml', None, noupdate=True, mode='init', kind='data')
+
+    def _get_suffixed_ref_name(self, ref_name):
+        """Suffix the given ref_name with the id of the current company if it's not the main company."""
+        main_company = self.env.ref('base.main_company', raise_if_not_found=False)
+        if main_company and self.env.company.id == main_company.id:
+            return ref_name
+        else:
+            return f"{ref_name}_{self.env.company.id}"
+
+    @api.model
+    def get_pos_kanban_view_state(self):
+        has_pos_config = bool(self.env['pos.config'].search_count(
+            self._check_company_domain(self.env.company)
+        ))
+        has_chart_template = bool(self.env.company.chart_template)
+        main_company = self.env.ref('base.main_company', raise_if_not_found=False)
+        return {
+            "has_pos_config": has_pos_config,
+            "has_chart_template": has_chart_template,
+            "is_restaurant_installed": bool(self.env['ir.module.module'].search_count([('name', '=', 'pos_restaurant'), ('state', '=', 'installed')])),
+            "is_main_company": main_company and self.env.company.id == main_company.id or False
+        }
+
+    @api.model
+    def install_pos_restaurant(self):
+        pos_restaurant_module = self.env['ir.module.module'].search([('name', '=', 'pos_restaurant')])
+        pos_restaurant_module.button_immediate_install()
+        return {'installed_with_demo': pos_restaurant_module.demo}

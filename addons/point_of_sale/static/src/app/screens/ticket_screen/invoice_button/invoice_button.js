@@ -1,4 +1,3 @@
-/** @odoo-module **/
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
 import { AlertDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
@@ -55,7 +54,7 @@ export class InvoiceButton extends Component {
             }
         }
     }
-    async onWillInvoiceOrder(order) {
+    async onWillInvoiceOrder(order, partner) {
         return true;
     }
     async _invoiceOrder() {
@@ -74,7 +73,8 @@ export class InvoiceButton extends Component {
 
         // Part 1: Handle missing partner.
         // Write to pos.order the selected partner.
-        if (!order.get_partner()) {
+        let partner = order.get_partner();
+        if (!partner) {
             const _confirmed = await ask(this.dialog, {
                 title: _t("Need customer to invoice"),
                 body: _t("Do you want to open the customer list to select customer?"),
@@ -82,15 +82,15 @@ export class InvoiceButton extends Component {
             if (!_confirmed) {
                 return;
             }
-            const newPartner = await makeAwaitable(this.dialog, PartnerList);
-            if (!newPartner) {
+            partner = await makeAwaitable(this.dialog, PartnerList);
+            if (!partner) {
                 return;
             }
 
-            await this.pos.data.ormWrite("pos.order", [orderId], { partner_id: newPartner.id });
+            await this.pos.data.ormWrite("pos.order", [orderId], { partner_id: partner.id });
         }
 
-        const confirmed = await this.onWillInvoiceOrder(order);
+        const confirmed = await this.onWillInvoiceOrder(order, partner);
         if (!confirmed) {
             return;
         }

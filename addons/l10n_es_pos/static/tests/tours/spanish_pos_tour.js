@@ -1,12 +1,10 @@
-/** @odoo-module */
-
-import * as ProductScreen from "@point_of_sale/../tests/tours/helpers/ProductScreenTourMethods";
-import * as Dialog from "@point_of_sale/../tests/tours/helpers/DialogTourMethods";
-import * as ReceiptScreen from "@point_of_sale/../tests/tours/helpers/ReceiptScreenTourMethods";
-import * as PaymentScreen from "@point_of_sale/../tests/tours/helpers/PaymentScreenTourMethods";
-import * as PartnerList from "@point_of_sale/../tests/tours/helpers/PartnerListTourMethods";
+import * as ProductScreen from "@point_of_sale/../tests/tours/utils/product_screen_util";
+import * as Dialog from "@point_of_sale/../tests/tours/utils/dialog_util";
+import * as ReceiptScreen from "@point_of_sale/../tests/tours/utils/receipt_screen_util";
+import * as PaymentScreen from "@point_of_sale/../tests/tours/utils/payment_screen_util";
+import * as PartnerList from "@point_of_sale/../tests/tours/utils/partner_list_util";
 import { registry } from "@web/core/registry";
-import { checkSimplifiedInvoiceNumber, pay } from "./helpers/receipt_helpers";
+import { checkSimplifiedInvoiceNumber, pay } from "./utils/receipt_util";
 
 const SIMPLIFIED_INVOICE_LIMIT = 1000;
 
@@ -42,7 +40,6 @@ registry.category("web_tour.tours").add("spanish_pos_tour", {
                 content:
                     "verify that the simplified invoice number does not appear on the receipt, because this order is invoiced, so it does not have a simplified invoice number",
                 trigger: ".receipt-screen:not(:has(.simplified-invoice-number))",
-                isCheck: true,
             },
             ReceiptScreen.clickNextOrder(),
 

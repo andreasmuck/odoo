@@ -35,7 +35,7 @@
                 </div>
                 <group name="main_group">
                     <group>
-                        <field name="product_id" context="{'default_detailed_type': 'product', 'default_tracking': 'lot'}" readonly="context.get('set_product_readonly', False)" force_save="1" help="Product this lot/serial number contains. You cannot change it anymore if it has already been moved."/>
+                        <field name="product_id" context="{'default_is_storable': True, 'default_tracking': 'lot'}" readonly="context.get('set_product_readonly', False)" force_save="1" help="Product this lot/serial number contains. You cannot change it anymore if it has already been moved."/>
                         <label for="product_qty" invisible="not display_complete"/>
                         <div class="o_row" invisible="not display_complete">
                             <field name="product_qty"/>
@@ -145,7 +145,7 @@
                           (0, 0, {'view_mode': 'form', 'view_id': ref('view_production_lot_form')})]"/>
         <field name="search_view_id" ref="search_product_lot_filter"/>
         <field name="context">{'search_default_group_by_product': 1, 'display_complete': True}</field>
-        <field name="domain">['|', ('location_id', '=', False), ('location_id.company_id', 'in', allowed_company_ids)]</field>
+        <field name="domain">['|', ('location_id', '=', False), ('location_id.company_id', 'in', allowed_company_ids + [False])]</field>
         <field name="help" type="html">
           <p class="o_view_nocontent_smiling_face">
             Add a lot/serial number
@@ -166,7 +166,7 @@
                           (0, 0, {'view_mode': 'form', 'view_id': ref('view_production_lot_form')})]"/>
         <field name="search_view_id" ref="search_product_lot_filter"/>
         <field name="context">{'search_default_group_by_product': 1, 'display_complete': True, 'default_company_id': allowed_company_ids[0]}</field>
-        <field name="domain">['|', ('location_id', '=', False), ('location_id.company_id', 'in', allowed_company_ids)]</field>
+        <field name="domain">['|', ('location_id', '=', False), ('location_id.company_id', 'in', allowed_company_ids + [False])]</field>
         <field name="help" type="html">
           <p class="o_view_nocontent_smiling_face">
             Add a lot/serial number

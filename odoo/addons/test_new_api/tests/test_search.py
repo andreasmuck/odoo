@@ -272,7 +272,10 @@ class TestSubqueries(TransactionCase):
                 AND "test_new_api_multi__tags"."test_new_api_multi_tag_id" IN (
                     SELECT "test_new_api_multi_tag"."id"
                     FROM "test_new_api_multi_tag"
-                    WHERE ("test_new_api_multi_tag"."name"::text LIKE %s)
+                    WHERE (
+                        ("test_new_api_multi_tag"."name"::text ILIKE %s)
+                        AND ("test_new_api_multi_tag"."name"::text LIKE %s)
+                    )
                 )
             ) AND EXISTS (
                 SELECT 1
@@ -281,7 +284,10 @@ class TestSubqueries(TransactionCase):
                 AND "test_new_api_multi__tags"."test_new_api_multi_tag_id" IN (
                     SELECT "test_new_api_multi_tag"."id"
                     FROM "test_new_api_multi_tag"
-                    WHERE ("test_new_api_multi_tag"."name"::text LIKE %s)
+                    WHERE (
+                        ("test_new_api_multi_tag"."name"::text ILIKE %s)
+                        AND ("test_new_api_multi_tag"."name"::text LIKE %s)
+                    )
                 )
             ))
             ORDER BY "test_new_api_multi"."id"
@@ -302,8 +308,12 @@ class TestSubqueries(TransactionCase):
                 AND "test_new_api_multi__tags"."test_new_api_multi_tag_id" IN (
                     SELECT "test_new_api_multi_tag"."id"
                     FROM "test_new_api_multi_tag"
-                    WHERE (("test_new_api_multi_tag"."name"::text LIKE %s)
-                        OR ("test_new_api_multi_tag"."name"::text LIKE %s)
+                    WHERE (
+                        ("test_new_api_multi_tag"."name"::text ILIKE %s)
+                        AND (
+                            ("test_new_api_multi_tag"."name"::text LIKE %s)
+                            OR ("test_new_api_multi_tag"."name"::text LIKE %s)
+                        )
                     )
                 )
             )
@@ -327,7 +337,10 @@ class TestSubqueries(TransactionCase):
                     AND "test_new_api_multi__tags"."test_new_api_multi_tag_id" IN (
                         SELECT "test_new_api_multi_tag"."id"
                         FROM "test_new_api_multi_tag"
-                        WHERE ("test_new_api_multi_tag"."name"::text LIKE %s)
+                        WHERE (
+                            ("test_new_api_multi_tag"."name"::text ILIKE %s)
+                            AND ("test_new_api_multi_tag"."name"::text LIKE %s)
+                        )
                     )
                 ) AND EXISTS (
                     SELECT 1
@@ -336,8 +349,12 @@ class TestSubqueries(TransactionCase):
                     AND "test_new_api_multi__tags"."test_new_api_multi_tag_id" IN (
                         SELECT "test_new_api_multi_tag"."id"
                         FROM "test_new_api_multi_tag"
-                        WHERE (("test_new_api_multi_tag"."name"::text LIKE %s)
-                            OR ("test_new_api_multi_tag"."name"::text LIKE %s)
+                        WHERE (
+                            ("test_new_api_multi_tag"."name"::text ILIKE %s)
+                            AND (
+                                ("test_new_api_multi_tag"."name"::text LIKE %s)
+                                OR ("test_new_api_multi_tag"."name"::text LIKE %s)
+                            )
                         )
                     )
                 )
@@ -548,7 +565,7 @@ class TestSubqueries(TransactionCase):
                 ("test_new_api_related"."foo_id" IN (
                     SELECT "test_new_api_related_foo"."id"
                     FROM "test_new_api_related_foo"
-                    WHERE "test_new_api_related_foo"."name" IS NULL
+                    WHERE (("test_new_api_related_foo"."name" = %s) OR "test_new_api_related_foo"."name" IS NULL)
                 ))
                 OR "test_new_api_related"."foo_id" IS NULL
             )
@@ -562,7 +579,7 @@ class TestSubqueries(TransactionCase):
             WHERE ("test_new_api_related"."foo_id" IN (
                 SELECT "test_new_api_related_foo"."id"
                 FROM "test_new_api_related_foo"
-                WHERE "test_new_api_related_foo"."name" IS NOT NULL
+                WHERE ("test_new_api_related_foo"."name" != %s)
             ))
             ORDER BY "test_new_api_related"."id"
         """]):
@@ -642,7 +659,7 @@ class TestSubqueries(TransactionCase):
                         ("test_new_api_related_foo"."bar_id" IN (
                             SELECT "test_new_api_related_bar"."id"
                             FROM "test_new_api_related_bar"
-                            WHERE "test_new_api_related_bar"."name" IS NULL
+                            WHERE (("test_new_api_related_bar"."name" = %s) OR "test_new_api_related_bar"."name" IS NULL)
                         ))
                         OR "test_new_api_related_foo"."bar_id" IS NULL
                     )
@@ -662,7 +679,7 @@ class TestSubqueries(TransactionCase):
                 WHERE ("test_new_api_related_foo"."bar_id" IN (
                     SELECT "test_new_api_related_bar"."id"
                     FROM "test_new_api_related_bar"
-                    WHERE "test_new_api_related_bar"."name" IS NOT NULL
+                    WHERE ("test_new_api_related_bar"."name" != %s)
                 ))
             ))
             ORDER BY "test_new_api_related"."id"
@@ -796,8 +813,11 @@ class TestFlushSearch(TransactionCase):
     def test_flush_fields_in_domain(self):
         with self.assertQueries(['''
             UPDATE "test_new_api_city"
-            SET "name" = %s, "write_date" = %s, "write_uid" = %s
-            WHERE id IN %s
+            SET "name" = "__tmp"."name"::VARCHAR,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "name", "write_date", "write_uid")
+            WHERE "test_new_api_city"."id" = "__tmp"."id"
         ''', '''
             SELECT "test_new_api_city"."id"
             FROM "test_new_api_city"
@@ -810,8 +830,11 @@ class TestFlushSearch(TransactionCase):
     def test_flush_fields_in_subdomain(self):
         with self.assertQueries(['''
             UPDATE "test_new_api_city"
-            SET "country_id" = %s, "write_date" = %s, "write_uid" = %s
-            WHERE id IN %s
+            SET "country_id" = "__tmp"."country_id"::int4,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "country_id", "write_date", "write_uid")
+            WHERE "test_new_api_city"."id" = "__tmp"."id"
         ''', '''
             SELECT "test_new_api_city"."id"
             FROM "test_new_api_city"
@@ -827,8 +850,11 @@ class TestFlushSearch(TransactionCase):
 
         with self.assertQueries(['''
             UPDATE "test_new_api_country"
-            SET "name" = %s, "write_date" = %s, "write_uid" = %s
-            WHERE id IN %s
+            SET "name" = "__tmp"."name"::VARCHAR,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "name", "write_date", "write_uid")
+            WHERE "test_new_api_country"."id" = "__tmp"."id"
         ''', '''
             SELECT "test_new_api_city"."id"
             FROM "test_new_api_city"
@@ -847,8 +873,11 @@ class TestFlushSearch(TransactionCase):
 
         with self.assertQueries(['''
             UPDATE "test_new_api_city"
-            SET "country_id" = %s, "write_date" = %s, "write_uid" = %s
-            WHERE id IN %s
+            SET "country_id" = "__tmp"."country_id"::int4,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "country_id", "write_date", "write_uid")
+            WHERE "test_new_api_city"."id" = "__tmp"."id"
         ''', '''
             SELECT "test_new_api_city"."id"
             FROM "test_new_api_city"
@@ -866,8 +895,11 @@ class TestFlushSearch(TransactionCase):
 
         with self.assertQueries(['''
             UPDATE "test_new_api_payment"
-            SET "move_id" = %s, "write_date" = %s, "write_uid" = %s
-            WHERE id IN %s
+            SET "move_id" = "__tmp"."move_id"::int4,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "move_id", "write_date", "write_uid")
+            WHERE "test_new_api_payment"."id" = "__tmp"."id"
         ''', '''
             SELECT "test_new_api_payment"."id"
             FROM "test_new_api_payment"
@@ -881,8 +913,11 @@ class TestFlushSearch(TransactionCase):
 
         with self.assertQueries(['''
             UPDATE "test_new_api_move"
-            SET "tag_repeat" = %s, "write_date" = %s, "write_uid" = %s
-            WHERE id IN %s
+            SET "tag_repeat" = "__tmp"."tag_repeat"::int4,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "tag_repeat", "write_date", "write_uid")
+            WHERE "test_new_api_move"."id" = "__tmp"."id"
         ''', '''
             SELECT "test_new_api_payment"."id"
             FROM "test_new_api_payment"
@@ -905,8 +940,11 @@ class TestFlushSearch(TransactionCase):
 
         with self.assertQueries(['''
             UPDATE "test_new_api_city"
-            SET "name" = %s, "write_date" = %s, "write_uid" = %s
-            WHERE id IN %s
+            SET "name" = "__tmp"."name"::VARCHAR,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "name", "write_date", "write_uid")
+            WHERE "test_new_api_city"."id" = "__tmp"."id"
         ''', '''
             SELECT "test_new_api_city"."id"
             FROM "test_new_api_city"
@@ -919,8 +957,11 @@ class TestFlushSearch(TransactionCase):
     def test_flush_fields_in_order(self):
         with self.assertQueries(['''
             UPDATE "test_new_api_city"
-            SET "name" = %s, "write_date" = %s, "write_uid" = %s
-            WHERE id IN %s
+            SET "name" = "__tmp"."name"::VARCHAR,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "name", "write_date", "write_uid")
+            WHERE "test_new_api_city"."id" = "__tmp"."id"
         ''', '''
             SELECT "test_new_api_city"."id"
             FROM "test_new_api_city"
@@ -933,8 +974,11 @@ class TestFlushSearch(TransactionCase):
         # test indirect fields, when ordering by many2one field
         with self.assertQueries(['''
             UPDATE "test_new_api_country"
-            SET "name" = %s, "write_date" = %s, "write_uid" = %s
-            WHERE id IN %s
+            SET "name" = "__tmp"."name"::VARCHAR,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "name", "write_date", "write_uid")
+            WHERE "test_new_api_country"."id" = "__tmp"."id"
         ''', '''
             SELECT "test_new_api_city"."id"
             FROM "test_new_api_city"
@@ -950,8 +994,11 @@ class TestFlushSearch(TransactionCase):
 
         with self.assertQueries(['''
             UPDATE "test_new_api_city"
-            SET "country_id" = %s, "write_date" = %s, "write_uid" = %s
-            WHERE id IN %s
+            SET "country_id" = "__tmp"."country_id"::int4,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "country_id", "write_date", "write_uid")
+            WHERE "test_new_api_city"."id" = "__tmp"."id"
         ''', '''
             SELECT "test_new_api_city"."id"
             FROM "test_new_api_city"
@@ -978,8 +1025,11 @@ class TestFlushSearch(TransactionCase):
         # except when the field appears in another clause
         with self.assertQueries(['''
             UPDATE "test_new_api_city"
-            SET "name" = %s, "write_date" = %s, "write_uid" = %s
-            WHERE id IN %s
+            SET "name" = "__tmp"."name"::VARCHAR,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "name", "write_date", "write_uid")
+            WHERE "test_new_api_city"."id" = "__tmp"."id"
         ''', '''
             SELECT "test_new_api_city"."id", "test_new_api_city"."name"
             FROM "test_new_api_city"
@@ -991,8 +1041,11 @@ class TestFlushSearch(TransactionCase):
 
         with self.assertQueries(['''
             UPDATE "test_new_api_city"
-            SET "name" = %s, "write_date" = %s, "write_uid" = %s
-            WHERE id IN %s
+            SET "name" = "__tmp"."name"::VARCHAR,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "name", "write_date", "write_uid")
+            WHERE "test_new_api_city"."id" = "__tmp"."id"
         ''', '''
             SELECT "test_new_api_city"."id", "test_new_api_city"."name"
             FROM "test_new_api_city"
@@ -1029,3 +1082,74 @@ class TestFlushSearch(TransactionCase):
         self.env['test_new_api.custom.table_query'].invalidate_model()
         child.quantity = 25
         self.assertEqual(self.env['test_new_api.custom.table_query'].search([]).sum_quantity, 25)
+
+    def test_depends_with_table_query_model_sql(self):
+        parent = self.env['test_new_api.any.parent'].create({'name': 'parent'})
+        child = self.env['test_new_api.any.child'].create({
+            'parent_id': parent.id,
+            'quantity': 10,
+            'tag_ids': [Command.create({'name': 'tag1'})]
+        })
+
+        self.assertEqual(self.env['test_new_api.custom.table_query_sql'].search([]).sum_quantity, 10)
+        # _depends doesn't invalidate the cache of the model, should it ?
+        self.env['test_new_api.custom.table_query_sql'].invalidate_model()
+        child.quantity = 25
+        self.assertEqual(self.env['test_new_api.custom.table_query_sql'].search([]).sum_quantity, 25)
+
+
+class TestDatePartNumber(TransactionCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.person = cls.env["test_new_api.person"].create({"name": "that person", "birthday": "1990-02-09"})
+        cls.lesson = cls.env["test_new_api.lesson"].create({"teacher_id": cls.person.id, "attendee_ids": [(4, cls.person.id)]})
+
+    def test_basic_cases(self):
+        with self.assertQueries(["""
+            SELECT "test_new_api_person"."id"
+            FROM "test_new_api_person"
+            WHERE date_part(%s, "test_new_api_person"."birthday") = %s
+            ORDER BY "test_new_api_person"."id"
+        """]):
+            result = self.env["test_new_api.person"].search([('birthday.month_number', '=', '2')])
+            self.assertEqual(result, self.person)
+
+        with self.assertQueries(["""
+            SELECT "test_new_api_person"."id"
+            FROM "test_new_api_person"
+            WHERE date_part(%s, "test_new_api_person"."birthday") = %s
+            ORDER BY "test_new_api_person"."id"
+        """]):
+            result = self.env["test_new_api.person"].search([('birthday.quarter_number', '=', '1')])
+            self.assertEqual(result, self.person)
+
+        with self.assertQueries(["""
+            SELECT "test_new_api_person"."id"
+            FROM "test_new_api_person"
+            WHERE date_part(%s, "test_new_api_person"."birthday") = %s
+            ORDER BY "test_new_api_person"."id"
+        """]):
+            result = self.env["test_new_api.person"].search([('birthday.iso_week_number', '=', '6')])
+            self.assertEqual(result, self.person)
+
+    def test_many2one(self):
+        result = self.env["test_new_api.lesson"].search([('teacher_id.birthday.month_number', '=', 2)])
+        self.assertEqual(result, self.lesson)
+
+    def test_many2many(self):
+        result = self.env["test_new_api.lesson"].search([('attendee_ids.birthday.month_number', '=', 2)])
+        self.assertEqual(result, self.lesson)
+
+    def test_related_field(self):
+        result = self.env["test_new_api.lesson"].search([('teacher_birthdate.month_number', '=', 2)])
+        self.assertEqual(result, self.lesson)
+
+    def test_inherit(self):
+        account = self.env["test_new_api.person.account"].create({"person_id": self.person.id, "activation_date": "2020-03-09"})
+
+        result = self.env["test_new_api.person.account"].search([('activation_date.quarter_number', '=', 1)])
+        self.assertEqual(result, account)
+
+        result = self.env["test_new_api.person.account"].search([('person_id.birthday.month_number', '=', 2)])
+        self.assertEqual(result, account)

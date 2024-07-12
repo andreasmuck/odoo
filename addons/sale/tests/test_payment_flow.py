@@ -3,7 +3,7 @@
 from unittest.mock import ANY, patch
 
 from odoo.exceptions import AccessError
-from odoo.tests import tagged, JsonRpcException
+from odoo.tests import JsonRpcException, tagged
 from odoo.tools import mute_logger
 
 from odoo.addons.account_payment.tests.common import AccountPaymentCommon
@@ -69,7 +69,7 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
         self.assertEqual(self.sale_order.state, 'draft')
         self.assertEqual(tx_sudo.sale_order_ids.transaction_ids, tx_sudo)
         tx_sudo._set_done()
-        tx_sudo._finalize_post_processing()
+        tx_sudo._post_process()
         self.assertEqual(self.sale_order.state, 'sale')
         self.assertTrue(tx_sudo.payment_id)
         self.assertEqual(tx_sudo.payment_id.state, 'posted')
@@ -123,7 +123,7 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
 
         tx_sudo._set_done()
         with mute_logger('odoo.addons.sale.models.payment_transaction'):
-            tx_sudo._finalize_post_processing()
+            tx_sudo._post_process()
         self.assertEqual(self.sale_order.state, 'draft') # Only a partial amount was paid
 
         # Pay the remaining amount
@@ -193,7 +193,7 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
 
         tx_sudo._set_done()
         with mute_logger('odoo.addons.sale.models.payment_transaction'):
-            tx_sudo._finalize_post_processing()
+            tx_sudo._post_process()
 
         self.assertEqual(self.sale_order.state, 'draft', 'a partial transaction with automatic invoice and invoice_policy = delivery should not validate a quote')
 
@@ -215,7 +215,7 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
             reference='Test Transaction Draft 2',
         )
         tx = self._create_transaction(flow='redirect', sale_order_ids=[self.sale_order.id], state='done')
-        tx._reconcile_after_done()
+        tx._post_process()
 
         self.assertEqual(self.sale_order.state, 'sale')
 
@@ -227,11 +227,11 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
         self.amount = self.sale_order.amount_total
         tx = self._create_transaction(flow='redirect', sale_order_ids=[self.sale_order.id], state='done')
         with mute_logger('odoo.addons.sale.models.payment_transaction'):
-            tx._reconcile_after_done()
+            tx._post_process()
 
         self.assertEqual(self.sale_order.state, 'sale')
         self.assertTrue(tx.invoice_ids)
-        self.assertTrue(self.sale_order.invoice_ids)
+        self.assertTrue(self.sale_order.account_move_ids)
 
     def test_auto_done_and_auto_invoice(self):
         # Set automatic invoice
@@ -243,12 +243,12 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
         self.amount = self.sale_order.amount_total
         tx = self._create_transaction(flow='redirect', sale_order_ids=[self.sale_order.id], state='done')
         with mute_logger('odoo.addons.sale.models.payment_transaction'):
-            tx._reconcile_after_done()
+            tx._post_process()
 
         self.assertEqual(self.sale_order.state, 'sale')
         self.assertTrue(self.sale_order.locked)
         self.assertTrue(tx.invoice_ids)
-        self.assertTrue(self.sale_order.invoice_ids)
+        self.assertTrue(self.sale_order.account_move_ids)
         self.assertTrue(tx.invoice_ids.is_move_sent)
 
     def test_so_partial_payment_no_invoice(self):
@@ -259,11 +259,11 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
         self.amount = self.sale_order.amount_total / 10.
         tx = self._create_transaction(flow='redirect', sale_order_ids=[self.sale_order.id], state='done')
         with mute_logger('odoo.addons.sale.models.payment_transaction'):
-            tx._reconcile_after_done()
+            tx._post_process()
 
         self.assertEqual(self.sale_order.state, 'draft')
         self.assertFalse(tx.invoice_ids)
-        self.assertFalse(self.sale_order.invoice_ids)
+        self.assertFalse(self.sale_order.account_move_ids)
 
     def test_already_confirmed_so_payment(self):
         # Set automatic invoice
@@ -275,10 +275,10 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
         # Create the payment
         self.amount = self.sale_order.amount_total
         tx = self._create_transaction(flow='redirect', sale_order_ids=[self.sale_order.id], state='done')
-        tx._reconcile_after_done()
+        tx._post_process()
 
         self.assertTrue(tx.invoice_ids)
-        self.assertTrue(self.sale_order.invoice_ids)
+        self.assertTrue(self.sale_order.account_move_ids)
 
     def test_invoice_is_final(self):
         """Test that invoice generated from a payment are always final"""
@@ -296,9 +296,74 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
             'odoo.addons.sale.models.sale_order.SaleOrder._create_invoices',
             return_value=self.env['account.move']
         ) as _create_invoices_mock:
-            tx._reconcile_after_done()
+            tx._post_process()
 
         self.assertTrue(_create_invoices_mock.call_args.kwargs['final'])
+
+    def test_linked_transactions_when_invoicing(self):
+        self.provider.support_manual_capture = 'partial'
+        partial_amount = self.sale_order.amount_total - 2
+
+        partial_tx_done = self._create_transaction(
+            flow='direct',
+            amount=partial_amount,
+            sale_order_ids=[self.sale_order.id],
+            state='done',
+            reference='partial_tx_done',
+        )
+        with mute_logger('odoo.addons.sale.models.payment_transaction'):
+            partial_tx_done._post_process()
+        partial_tx_pending = self._create_transaction(
+            flow='direct',
+            amount=2,
+            sale_order_ids=[self.sale_order.id],
+            state='pending',
+            reference='partial_tx_pending',
+        )
+        self.assertTrue(partial_tx_done.payment_id, msg="Account payment should have been created.")
+        msg = "The created account payment shouldn't be reconciled as there are no invoice yet."
+        self.assertFalse(partial_tx_pending.payment_id.is_reconciled, msg=msg)
+
+        # Add some noisy transactions
+        self._create_transaction(
+            flow='direct', sale_order_ids=[self.sale_order.id], state='draft', reference='draft_tx'
+        )
+        self._create_transaction(
+            flow='direct', sale_order_ids=[self.sale_order.id], state='error', reference='error_tx'
+        )
+        self._create_transaction(
+            flow='direct', sale_order_ids=[self.sale_order.id], state='cancel', reference='cncl_tx'
+        )
+
+        msg = "The sale order should be linked to 5 transactions."
+        self.assertEqual(len(self.sale_order.transaction_ids), 5, msg=msg)
+
+        self.sale_order.action_confirm()
+        self.sale_order._create_invoices()
+
+        self.assertEqual(len(self.sale_order.account_move_ids), 1, msg="1 invoice should be created.")
+
+        first_invoice = self.sale_order.account_move_ids
+        linked_txs = first_invoice.transaction_ids
+        msg = "The newly created invoice should be linked to the done and pending transactions."
+        self.assertEqual(len(linked_txs), 2, msg=msg)
+        expected_linked_tx = (partial_tx_done, partial_tx_pending)
+        self.assertTrue(all(tx in expected_linked_tx for tx in linked_txs), msg=msg)
+        msg = "The payment shouldn't be reconciled yet."
+        self.assertFalse(partial_tx_done.payment_id.is_reconciled, msg=msg)
+
+        partial_tx_done._post_process()
+
+        msg = "The payment should now be reconciled."
+        self.assertTrue(partial_tx_done.payment_id.is_reconciled, msg=msg)
+
+        self.sale_order.order_line[0].product_uom_qty += 2
+        self.sale_order._create_invoices()
+
+        second_invoice = self.sale_order.account_move_ids - first_invoice
+        msg = "The newly created invoice should only be linked to the pending transaction."
+        self.assertEqual(len(second_invoice.transaction_ids), 1, msg=msg)
+        self.assertEqual(second_invoice.transaction_ids.state, 'pending', msg=msg)
 
     def test_downpayment_confirm_sale_order_sufficient_amount(self):
         """Paying down payments can confirm an order if amount is enough."""
@@ -313,7 +378,7 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
             state='done',
         )
         with mute_logger('odoo.addons.sale.models.payment_transaction'):
-            tx._reconcile_after_done()
+            tx._post_process()
 
         self.assertTrue(self.sale_order.state == 'sale')
 
@@ -331,7 +396,7 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
             state='done',
         )
         with mute_logger('odoo.addons.sale.models.payment_transaction'):
-            tx._reconcile_after_done()
+            tx._post_process()
 
         self.assertTrue(self.sale_order.state == 'draft')
 
@@ -352,7 +417,7 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
             sale_order_ids=[self.sale_order.id],
             state='done',
         )
-        tx._reconcile_after_done()
+        tx._post_process()
         self.assertTrue(self.sale_order.state == 'draft')
 
         # Order should be confirmed after this payment.
@@ -363,7 +428,7 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
             sale_order_ids=[self.sale_order.id],
             state='done',
         )
-        tx._reconcile_after_done()
+        tx._post_process()
         self.assertTrue(self.sale_order.state == 'sale')
 
     def test_downpayment_automatic_invoice(self):
@@ -382,9 +447,9 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
             state='done')
 
         with mute_logger('odoo.addons.sale.models.payment_transaction'):
-            tx._reconcile_after_done()
+            tx._post_process()
 
-        invoice = self.sale_order.invoice_ids
+        invoice = self.sale_order.account_move_ids
         self.assertTrue(len(invoice) == 1)
         self.assertTrue(invoice.line_ids[0].is_downpayment)
 
@@ -441,3 +506,45 @@ class TestSalePayment(AccountPaymentCommon, SaleCommon, PaymentHttpCommon):
         }
         with self.assertRaises(JsonRpcException, msg='odoo.exceptions.ValidationError'):
             self.make_jsonrpc_request(url, route_kwargs)
+
+    def test_partial_payment_confirm_order(self):
+        """
+        Test that a sale order can be confirmed through partial payments and that
+        correct mails are sent each time.
+        """
+
+        self.amount = self.sale_order.amount_total / 2
+
+        with patch(
+            'odoo.addons.sale.models.sale_order.SaleOrder._send_order_notification_mail',
+        ) as notification_mail_mock:
+            tx_pending = self._create_transaction(
+                flow='direct',
+                sale_order_ids=[self.sale_order.id],
+                state='pending',
+                reference='Test Transaction Draft 1',
+            )
+
+            self.assertEqual(self.sale_order.state, 'draft')
+
+            tx_pending._set_done()
+            tx_pending._post_process()
+
+            self.assertEqual(notification_mail_mock.call_count, 1)
+            notification_mail_mock.assert_called_once_with(
+                self.env.ref('sale.mail_template_sale_payment_executed'))
+            self.assertEqual(self.sale_order.state, 'draft')
+            self.assertEqual(self.sale_order.amount_paid, self.amount)
+
+            tx_done = self._create_transaction(
+                flow='direct',
+                sale_order_ids=[self.sale_order.id],
+                state='done',
+                reference='Test Transaction Draft 2',
+            )
+            tx_done._post_process()
+
+            self.assertEqual(notification_mail_mock.call_count, 2)
+            notification_mail_mock.assert_called_with(
+                self.env.ref('sale.mail_template_sale_confirmation'))
+            self.assertEqual(self.sale_order.state, 'sale')

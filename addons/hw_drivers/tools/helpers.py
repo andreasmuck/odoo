@@ -21,7 +21,7 @@ import contextlib
 import requests
 import secrets
 
-from odoo import _, http, service
+from odoo import _, http, release, service
 from odoo.tools.func import lazy_property
 from odoo.tools.misc import file_path
 
@@ -120,7 +120,7 @@ def check_certificate():
         _logger.info(message)
         return {"status": CertificateStatus.NEED_REFRESH}
     else:
-        message = _('Your certificate %s is valid until %s', cn, cert_end_date)
+        message = _('Your certificate %(certificate)s is valid until %(end_date)s', certificate=cn, end_date=cert_end_date)
         _logger.info(message)
         return {"status": CertificateStatus.OK, "message": message}
 
@@ -232,7 +232,7 @@ def get_certificate_status(is_first=True):
                                               "The HTTPS certificate was generated correctly")
 
 def get_img_name():
-    major, minor = get_version().split('.')
+    major, minor = get_version()[1:].split('.')
     return 'iotboxv%s_%s.zip' % (major, minor)
 
 def get_ip():
@@ -272,11 +272,29 @@ def get_odoo_server_url():
 def get_token():
     return read_file_first_line('token')
 
-def get_version():
+
+def get_commit_hash():
+    return subprocess.run(
+        ['git', '--work-tree=/home/pi/odoo/', '--git-dir=/home/pi/odoo/.git', 'rev-parse', '--short', 'HEAD'],
+        stdout=subprocess.PIPE,
+        check=True,
+    ).stdout.decode('ascii').strip()
+
+
+def get_version(detailed_version=False):
     if platform.system() == 'Linux':
-        return read_file_first_line('/var/odoo/iotbox_version')
+        image_version = read_file_first_line('/var/odoo/iotbox_version')
     elif platform.system() == 'Windows':
-        return 'W23_11'
+        # updated manually when big changes are made to the windows virtual IoT
+        image_version = '23.11'
+
+    version = platform.system()[0] + image_version
+    if detailed_version:
+        # Note: on windows IoT, the `release.version` finish with the build date
+        version += f"-{release.version}"
+        if platform.system() == 'Linux':
+            version += f'#{get_commit_hash()}'
+    return version
 
 def get_wifi_essid():
     wifi_options = []
@@ -341,6 +359,22 @@ def load_certificate():
         start_nginx_server()
     return True
 
+def delete_iot_handlers():
+    """
+    Delete all the drivers and interfaces
+    This is needed to avoid conflicts
+    with the newly downloaded drivers
+    """
+    try:
+        for directory in ['drivers', 'interfaces']:
+            path = file_path(f'hw_drivers/iot_handlers/{directory}')
+            iot_handlers = list_file_by_os(path)
+            for file in iot_handlers:
+                unlink_file(f"odoo/addons/hw_drivers/iot_handlers/{directory}/{file}")
+        _logger.info("Deleted old IoT handlers")
+    except OSError:
+        _logger.exception('Failed to delete old IoT handlers')
+
 def download_iot_handlers(auto=True):
     """
     Get the drivers from the configured Odoo server
@@ -353,6 +387,7 @@ def download_iot_handlers(auto=True):
         try:
             resp = pm.request('POST', server, fields={'mac': get_mac_address(), 'auto': auto}, timeout=8)
             if resp.data:
+                delete_iot_handlers()
                 with writable():
                     drivers_path = ['odoo', 'addons', 'hw_drivers', 'iot_handlers']
                     path = path_file(str(Path().joinpath(*drivers_path)))

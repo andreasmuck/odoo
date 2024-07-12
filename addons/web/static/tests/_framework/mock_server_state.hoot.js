@@ -1,8 +1,21 @@
-import { after, before, createJobScopedGetter } from "@odoo/hoot";
+// ! WARNING: this module cannot depend on modules not ending with ".hoot" (except libs) !
+
+import { after, before, beforeEach, createJobScopedGetter } from "@odoo/hoot";
+
+const { view_info } = odoo.__session_info__ || {};
+delete odoo.__session_info__;
+
+const { Settings } = luxon;
 
 /**
  * @typedef {typeof SERVER_STATE_VALUES} ServerState
  */
+
+const applyDefaults = () => {
+    Object.assign(Settings, DEFAULT_LUXON_SETTINGS);
+
+    notifySubscribers();
+};
 
 const notifySubscribers = () => {
     // Apply new state to all subscribers
@@ -12,10 +25,36 @@ const notifySubscribers = () => {
     }
 };
 
+const DEFAULT_LUXON_SETTINGS = {
+    defaultLocale: Settings.defaultLocale,
+    defaultNumberingSystem: Settings.defaultNumberingSystem,
+    defaultOutputCalendar: Settings.defaultOutputCalendar,
+    defaultZone: Settings.defaultZone,
+    defaultWeekSettings: Settings.defaultWeekSettings,
+};
 const SERVER_STATE_VALUES = {
-    companyId: 1,
-    companyName: "Hermit",
-    debug: false,
+    companies: [
+        {
+            id: 1,
+            name: "Hermit",
+        },
+    ],
+    currencies: [
+        {
+            id: 1,
+            name: "USD",
+            position: "before",
+            symbol: "$",
+        },
+        {
+            id: 2,
+            name: "EUR",
+            position: "after",
+            symbol: "€",
+        },
+    ],
+    db: "test",
+    debug: "",
     groupId: 11,
     lang: "en",
     multiLang: false,
@@ -25,20 +64,38 @@ const SERVER_STATE_VALUES = {
     publicPartnerId: 18,
     publicPartnerName: "Public user",
     publicUserId: 8,
+    serverVersion: [1, 0, 0, "final", 0, ""],
     timezone: "taht",
+    userContext: {},
     userId: 7,
+    view_info,
 };
 
 const getServerStateValues = createJobScopedGetter(
     (previousValues) => ({
-        ...SERVER_STATE_VALUES,
+        ...JSON.parse(JSON.stringify(SERVER_STATE_VALUES)),
         ...previousValues,
     }),
-    notifySubscribers
+    applyDefaults
 );
 
 /** @type {Map<any, (state: ServerState) => any>} */
-const subscriptions = new Map([[odoo, (state) => ({ ...odoo, debug: state.debug })]]);
+const subscriptions = new Map([
+    [
+        odoo,
+        ({ db, debug, serverVersion }) => ({
+            ...odoo,
+            debug,
+            info: {
+                db,
+                server_version: serverVersion.slice(0, 2).join("."),
+                server_version_info: serverVersion,
+                isEnterprise: serverVersion.slice(-1)[0] === "e",
+            },
+            isReady: true,
+        }),
+    ],
+]);
 
 /**
  * @template T
@@ -67,4 +124,4 @@ export const serverState = new Proxy(SERVER_STATE_VALUES, {
     },
 });
 
-before(notifySubscribers);
+beforeEach(applyDefaults, { global: true });

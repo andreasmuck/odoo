@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { Loader } from "@point_of_sale/app/loader/loader";
 import { getTemplate } from "@web/core/templates";
 import { mount, reactive, whenReady } from "@odoo/owl";
@@ -29,6 +27,15 @@ whenReady(() => {
     const app = await mountComponent(Chrome, document.body, {
         name: "Odoo Point of Sale",
         props: { disableLoader: () => (loader.isShown = false) },
+    });
+    window.addEventListener("beforeunload", function (event) {
+        if (!navigator.onLine) {
+            var confirmationMessage = _t(
+                "You are currently offline. Reloading the page may cause you to lose unsaved data."
+            );
+            event.returnValue = confirmationMessage;
+            return confirmationMessage;
+        }
     });
     const classList = document.body.classList;
     if (localization.direction === "rtl") {

@@ -4,7 +4,7 @@
     <record model="ir.actions.server" id="action_view_inventory_tree"> <!-- Menu + python -->
         <field name="name">Inventory</field>
         <field name="model_id" ref="model_stock_quant"/>
-        <field name="path">inventory</field>
+        <field name="path">physical-inventory</field>
         <field name="state">code</field>
         <field name="groups_id" eval="[(4, ref('stock.group_stock_user'))]"/>
         <field name="code">
@@ -21,7 +21,7 @@
                 <field name="product_id"/>
                 <field name="location_id"/>
                 <field name="warehouse_id"/>
-                <field name="storage_category_id" groups="stock.group_stock_storage_categories" />
+                <field name="storage_category_id" groups="stock.group_stock_multi_locations" />
                 <field name="user_id"/>
                 <field name="inventory_date"/>
                 <field name="product_categ_id"/>
@@ -50,6 +50,7 @@
                 </group>
                 <group expand='0' string='Group by...'>
                     <filter string='Product' name="productgroup" context="{'group_by': 'product_id'}"/>
+                    <filter string='Product Category' name="productcategorygroup" context="{'group_by': 'product_categ_id'}"/>
                     <filter string='Location' name="locationgroup" domain="[]" context="{'group_by': 'location_id'}"/>
                     <filter string='Storage Category' name="storagecategorygroup" domain="[]" context="{'group_by': 'storage_category_id'}"/>
                     <filter string='Owner' name="owner" context="{'group_by': 'owner_id'}" groups="stock.group_tracking_owner"/>
@@ -113,12 +114,8 @@
         <field name="arch" type="xml">
             <tree editable="bottom"
                   create="1" edit="1" js_class="inventory_report_list"
-                  sample="1">
+                  sample="1" duplicate="0">
                 <header>
-                    <button name="action_inventory_at_date" string="Inventory at Date" type="object"
-                            invisible="((context.get('inventory_mode') and not context.get('inventory_report_mode')) or context.get('no_at_date'))"
-                            class="btn-primary ms-1"
-                            display="always"/>
                     <button name="action_stock_quant_relocate" string="Relocate" type="object" groups="stock.group_stock_manager" invisible="context.get('hide_location', False)" context="{'action_ref': 'stock.action_view_quants'}"/>
                 </header>
                 <field name="create_date" column_invisible="True"/>
@@ -188,14 +185,6 @@
                 <attribute name="js_class">inventory_report_list</attribute>
                 <attribute name="create">0</attribute>
                 <attribute name="delete">0</attribute>
-            </xpath>
-            <xpath expr="//field[@name='product_id']" position="before">
-                <header>
-                    <button name="action_inventory_at_date" string="Inventory at Date" type="object"
-                        invisible="((context.get('inventory_mode') and not context.get('inventory_report_mode')) or context.get('no_at_date'))"
-                        class="btn-primary ms-1"
-                        display="always"/>
-                </header>
             </xpath>
         </field>
     </record>
@@ -451,10 +440,6 @@ in this location. That leads to a negative stock.
                             invisible="not context.get('inventory_mode') or context.get('inventory_report_mode')"
                             display="always"
                         />
-                    <button name="action_inventory_at_date" string="Inventory at Date" type="object"
-                            invisible="((context.get('inventory_mode') and not context.get('inventory_report_mode')) or context.get('no_at_date'))"
-                            class="btn-primary ms-1"
-                            display="always"/>
                     <button name="stock.action_stock_inventory_adjustement_name" type="action" string="Apply"/>
                     <button name="action_reset" type="object" string="Clear"/>
                     <button name="stock.action_stock_request_count" groups="stock.group_stock_manager" type="action" string="Request a Count"/>
@@ -469,7 +454,7 @@ in this location. That leads to a negative stock.
                 <field name="inventory_quantity_set" column_invisible="True"/>
                 <field name="company_id" column_invisible="True"/>
                 <field name="location_id" domain="[('usage', 'in', ['internal', 'transit'])]" column_invisible="context.get('hide_location', False)" readonly="id" options="{'no_create': True}"/>
-                <field name="storage_category_id" groups="stock.group_stock_storage_categories" column_invisible="context.get('hide_location', False)" options="{'no_create': True}" optional="hidden"/>
+                <field name="storage_category_id" groups="stock.group_stock_multi_locations" column_invisible="context.get('hide_location', False)" options="{'no_create': True}" optional="hidden"/>
                 <field name="cyclic_inventory_frequency" column_invisible="context.get('hide_location', False)" options="{'no_create': True}" optional="hidden"/>
                 <field name="is_favorite" widget="boolean_favorite" nolabel="1" optional="hidden"/>
                 <field name="product_id" readonly="context.get('single_product', False) or id" force_save="1" options="{'no_create': True}"/>
@@ -519,7 +504,7 @@ in this location. That leads to a negative stock.
         <field name="binding_model_id" ref="stock.model_stock_quant"/>
         <field name="binding_view_types">list</field>
         <field name="state">code</field>
-        <field name="groups_id" eval="[(4, ref('stock.group_stock_user'))]"/>
+        <field name="groups_id" eval="[(4, ref('stock.group_stock_manager'))]"/>
         <field name="code">
             action = records.action_set_inventory_quantity_zero()
         </field>

@@ -69,9 +69,10 @@ PortalComposer.include({
      * @private
      */
     _prepareMessageData: function () {
-        return Object.assign(this._super(...arguments) || {}, {
-            'message_id': this.options.default_message_id,
-            'rating_value': this.$input.val()
+        const options = this._super(...arguments);
+        return Object.assign(options || {}, {
+            message_id: this.options.default_message_id,
+            post_data: { ...options.post_data, rating_value: this.$input.val() },
         });
     },
     /**
@@ -131,7 +132,7 @@ PortalComposer.include({
               this.trigger_up('reload_rating_popup_composer', result);
             });
             $modal.modal('hide');
-        });
+        }, () => {});
     },
 
     /**

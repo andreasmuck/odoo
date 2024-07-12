@@ -1,11 +1,10 @@
-import { models } from "@web/../tests/web_test_helpers";
+import { getKwArgs, models } from "@web/../tests/web_test_helpers";
 import { patch } from "@web/core/utils/patch";
-import { parseModelParams } from "../mail_mock_server";
 
 patch(models.ServerModel.prototype, {
     /**
      * @override
-     * @type {typeof import("@web/../tests/_framework/mock_server/mock_model").Model["prototype"]["get_views"]}
+     * @type {typeof models.ServerModel["prototype"]["get_views"]}
      */
     get_views() {
         const result = super.get_views(...arguments);
@@ -27,7 +26,7 @@ export class Base extends models.ServerModel {
      * @param {Object} record
      */
     _mail_track(trackedFieldNamesToField, initialTrackedFieldValues, record) {
-        const kwargs = parseModelParams(
+        const kwargs = getKwArgs(
             arguments,
             "trackedFieldNamesToField",
             "initialTrackedFieldValues",
@@ -45,6 +44,9 @@ export class Base extends models.ServerModel {
         for (const fname in trackedFieldNamesToField) {
             const initialValue = initialTrackedFieldValues[fname];
             const newValue = record[fname];
+            if (!initialValue && !newValue) {
+                continue;
+            }
             if (initialValue !== newValue) {
                 const tracking = MailTrackingValue._create_tracking_values(
                     initialValue,

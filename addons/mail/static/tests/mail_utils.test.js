@@ -10,6 +10,7 @@ import {
     start,
     startServer,
 } from "./mail_test_helpers";
+import { useSequential } from "@mail/utils/common/hooks";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -79,8 +80,8 @@ test("addLink: utility function and special entities", () => {
 test("addLink: linkify inside text node (1 occurrence)", async () => {
     const content = "<p>some text https://somelink.com</p>";
     const linkified = parseAndTransform(content, addLink);
-    expect(linkified.startsWith("<p>some text <a")).toBeTruthy();
-    expect(linkified.endsWith("</a></p>")).toBeTruthy();
+    expect(linkified.startsWith("<p>some text <a")).toBe(true);
+    expect(linkified.endsWith("</a></p>")).toBe(true);
 
     // linkify may add some attributes. Since we do not care of their exact
     // stringified representation, we continue deeper assertion with query
@@ -120,7 +121,7 @@ test("url", async () => {
     // see: https://www.ietf.org/rfc/rfc1738.txt
     const messageBody = "https://odoo.com?test=~^|`{}[]#";
     await insertText(".o-mail-Composer-input", messageBody);
-    await click("button:enabled:contains(Send)");
+    await click("button[aria-label='Send']:enabled");
     await contains(`.o-mail-Message a:contains(${messageBody})`);
 });
 
@@ -131,7 +132,7 @@ test("url with comma at the end", async () => {
     await openDiscuss(channelId);
     const messageBody = "Go to https://odoo.com, it's great!";
     await insertText(".o-mail-Composer-input", messageBody);
-    await click("button:enabled:contains(Send)");
+    await click("button[aria-label='Send']:enabled");
     await contains(".o-mail-Message a:contains(https://odoo.com)");
     await contains(`.o-mail-Message-content:contains(${messageBody}`);
 });
@@ -143,7 +144,7 @@ test("url with dot at the end", async () => {
     await openDiscuss(channelId);
     const messageBody = "Go to https://odoo.com. It's great!";
     await insertText(".o-mail-Composer-input", messageBody);
-    await click("button:enabled:contains(Send)");
+    await click("button[aria-label='Send']:enabled");
     await contains(".o-mail-Message a:contains(https://odoo.com)");
     await contains(`.o-mail-Message-content:contains(${messageBody})`);
 });
@@ -155,7 +156,7 @@ test("url with semicolon at the end", async () => {
     await openDiscuss(channelId);
     const messageBody = "Go to https://odoo.com; it's great!";
     await insertText(".o-mail-Composer-input", messageBody);
-    await click("button:enabled:contains(Send)");
+    await click("button[aria-label='Send']:enabled");
     await contains(".o-mail-Message a:contains(https://odoo.com)");
     await contains(`.o-mail-Message-content:contains(${messageBody})`);
 });
@@ -167,7 +168,7 @@ test("url with ellipsis at the end", async () => {
     await openDiscuss(channelId);
     const messageBody = "Go to https://odoo.com... it's great!";
     await insertText(".o-mail-Composer-input", messageBody);
-    await click("button:enabled:contains(Send)");
+    await click("button[aria-label='Send']:enabled");
     await contains(".o-mail-Message a:contains(https://odoo.com)");
     await contains(`.o-mail-Message-content:contains(${messageBody})`);
 });
@@ -179,8 +180,24 @@ test("url with number in subdomain", async () => {
     await openDiscuss(channelId);
     const messageBody = "https://www.45017478-master-all.runbot134.odoo.com/web";
     await insertText(".o-mail-Composer-input", messageBody);
-    await click("button:enabled:contains(Send)");
+    await click("button[aria-label='Send']:enabled");
     await contains(
         ".o-mail-Message a:contains(https://www.45017478-master-all.runbot134.odoo.com/web)"
     );
+});
+
+test("isSequential doesn't execute intermediate call.", async () => {
+    const sequential = useSequential();
+    let index = 0;
+    const sequence = () => {
+        index++;
+        const i = index;
+        return sequential(async () => {
+            expect.step(i.toString());
+            return new Promise((r) => setTimeout(() => r(i), 1));
+        });
+    };
+    const result = await Promise.all([sequence(), sequence(), sequence(), sequence(), sequence()]);
+    expect(result).toEqual([1, undefined, undefined, undefined, 5]);
+    expect.verifySteps(["1", "5"]);
 });

@@ -265,6 +265,10 @@ input[type="checkbox"]:checked {
     color: var(--text-report-string);
 }
 
+.hoot-undefined {
+    color: var(--muted);
+}
+
 .hoot-key {
     color: var(--text-report-key);
 }
@@ -617,6 +621,9 @@ input[type="checkbox"]:checked {
 .font-extrabold {
     font-weight: 800;
 }
+.italic {
+    font-style: italic;
+}
 
 /* Grid */
 
@@ -883,6 +890,9 @@ input[type="checkbox"]:checked {
 .max-h-5 {
     max-height: 1.25rem;
 }
+.max-h-48 {
+    max-height: 12rem;
+}
 .max-h-full {
     max-height: 100%;
 }
@@ -1015,6 +1025,9 @@ input[type="checkbox"]:checked {
 .ms-4 {
     margin-inline-start: 1rem;
 }
+.ms-auto {
+    margin-inline-start: auto;
+}
 
 .me-0 {
     margin-inline-end: 0;
@@ -1030,6 +1043,9 @@ input[type="checkbox"]:checked {
 }
 .me-4 {
     margin-inline-end: 1rem;
+}
+.me-auto {
+    margin-inline-end: auto;
 }
 
 .mt-0 {

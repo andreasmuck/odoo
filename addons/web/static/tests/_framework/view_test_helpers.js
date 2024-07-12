@@ -1,4 +1,6 @@
-import { waitFor } from "@odoo/hoot-dom";
+import { after, expect, getFixture } from "@odoo/hoot";
+import { click, formatXml, queryAll, queryAllTexts, waitFor } from "@odoo/hoot-dom";
+import { animationFrame } from "@odoo/hoot-mock";
 import { Component, useSubEnv, xml } from "@odoo/owl";
 import { Dialog } from "@web/core/dialog/dialog";
 import { MainComponentsContainer } from "@web/core/main_components_container";
@@ -29,73 +31,13 @@ import { MockServer } from "./mock_server/mock_server";
  *  text?: string;
  * }} SelectorOptions
  *
+ * @typedef {import("@odoo/hoot-dom").FormatXmlOptions} FormatXmlOptions
  * @typedef {import("./mock_server/mock_model").ViewType} ViewType
  */
 
 //-----------------------------------------------------------------------------
 // Internals
 //-----------------------------------------------------------------------------
-
-/**
- *
- * @param {string} base
- * @param {SelectorOptions} [params]
- */
-const buildSelector = (base, params) => {
-    let selector = base;
-    params ||= {};
-    if (params.id) {
-        selector += `#${params.id}`;
-    }
-    if (params.class) {
-        selector += `.${params.class}`;
-    }
-    if (params.modifier) {
-        selector += `:${params.modifier}`;
-    }
-    if (params.text) {
-        selector += `:contains(${params.text})`;
-    }
-    if (params.index) {
-        selector += `:eq(${params.index})`;
-    }
-    if (params.target) {
-        selector += ` ${params.target}`;
-    }
-    return selector;
-};
-
-/**
- * @param {MountViewParams} params
- * @returns {typeof View.props}
- */
-export const parseViewProps = (params) => {
-    const viewProps = { ...params };
-
-    // View & search view arch
-    if (
-        "arch" in params ||
-        "searchViewArch" in params ||
-        "searchViewId" in params ||
-        "viewId" in params
-    ) {
-        viewProps.viewId ||= 123_456_789;
-        viewProps.searchViewId ||= 987_654_321;
-        registerDefaultView(viewProps.resModel, viewProps.viewId, viewProps.type, viewProps.arch);
-        registerDefaultView(
-            viewProps.resModel,
-            viewProps.searchViewId,
-            "search",
-            viewProps.searchViewArch
-        );
-    }
-
-    delete viewProps.arch;
-    delete viewProps.config;
-    delete viewProps.searchViewArch;
-
-    return viewProps;
-};
 
 /**
  *
@@ -116,6 +58,7 @@ class ViewDialog extends Component {
     static props = {
         viewEnv: Object,
         viewProps: Object,
+        close: Function,
     };
 
     static template = xml`
@@ -134,6 +77,35 @@ class ViewDialog extends Component {
 //-----------------------------------------------------------------------------
 
 /**
+ *
+ * @param {string} base
+ * @param {SelectorOptions} [params]
+ */
+export function buildSelector(base, params) {
+    let selector = base;
+    params ||= {};
+    if (params.id) {
+        selector += `#${params.id}`;
+    }
+    if (params.class) {
+        selector += `.${params.class}`;
+    }
+    if (params.modifier) {
+        selector += `:${params.modifier}`;
+    }
+    if (params.text) {
+        selector += `:contains(${params.text})`;
+    }
+    if ("index" in params) {
+        selector += `:eq(${params.index})`;
+    }
+    if (params.target) {
+        selector += ` ${params.target}`;
+    }
+    return selector;
+}
+
+/**
  * @param {SelectorOptions} [options]
  */
 export async function clickButton(options) {
@@ -148,10 +120,34 @@ export async function clickCancel(options) {
 }
 
 /**
+ * @param {string} fieldName
  * @param {SelectorOptions} [options]
  */
-export async function clickKanbanCard(options) {
-    await contains(buildSelector(`.o_kanban_record`, options)).click();
+export async function clickFieldDropdown(fieldName, options) {
+    await contains(buildSelector(`[name='${fieldName}'] .dropdown input`, options)).click();
+}
+
+/**
+ * @param {string} fieldName
+ * @param {string} itemContent
+ * @param {SelectorOptions} [options]
+ */
+export async function clickFieldDropdownItem(fieldName, itemContent, options) {
+    const dropdowns = queryAll(
+        buildSelector(`[name='${fieldName}'] .dropdown .dropdown-menu`, options)
+    );
+    if (dropdowns.length === 0) {
+        throw new Error(`No dropdown found for field ${fieldName}`);
+    } else if (dropdowns.length > 1) {
+        throw new Error(`Found ${dropdowns.length} dropdowns for field ${fieldName}`);
+    }
+    const dropdownItems = queryAll(buildSelector("li", options), { root: dropdowns[0] });
+    const indexToClick = queryAllTexts(dropdownItems).indexOf(itemContent);
+    if (indexToClick === -1) {
+        throw new Error(`The element '${itemContent}' does not exist in the dropdown`);
+    }
+    click(dropdownItems[indexToClick]);
+    await animationFrame();
 }
 
 /**
@@ -176,18 +172,26 @@ export async function clickViewButton(options) {
 }
 
 /**
+ * @param {string} value
+ */
+export function expectMarkup(value) {
+    return {
+        /**
+         * @param {string} expected
+         * @param {FormatXmlOptions} [options]
+         */
+        toBe(expected, options) {
+            expect(formatXml(value, options)).toBe(formatXml(expected, options));
+        },
+    };
+}
+
+/**
  * @param {string} name
  * @param {SelectorOptions} options
  */
 export function fieldInput(name, options) {
     return contains(buildSelector(`.o_field_widget[name='${name}'] input`, options));
-}
-
-/**
- * @param {SelectorOptions} options
- */
-export function kanbanCard(options) {
-    return contains(buildSelector(`.o_kanban_record`, options));
 }
 
 /**
@@ -211,11 +215,66 @@ export async function mountViewInDialog(params) {
 
 /**
  * @param {MountViewParams} params
+ * @param {HTMLElement} [target]
  */
-export async function mountView(params) {
+export async function mountView(params, target = null) {
+    const actionManagerEl = document.createElement("div");
+    actionManagerEl.classList.add("o_action_manager");
+    (target ?? getFixture()).append(actionManagerEl);
+    after(() => actionManagerEl.remove());
     const config = { ...getDefaultConfig(), ...params.config };
     return mountWithCleanup(View, {
         env: params.env || getMockEnv() || (await makeMockEnv({ config })),
         props: parseViewProps(params),
+        target: actionManagerEl,
     });
+}
+
+/**
+ * @param {MountViewParams} params
+ * @returns {typeof View.props}
+ */
+export function parseViewProps(params) {
+    let className = "o_action";
+    if (params.className) {
+        className += " " + params.className;
+    }
+
+    const viewProps = { ...params, className };
+
+    // View & search view arch
+    if (
+        "arch" in params ||
+        "searchViewArch" in params ||
+        "searchViewId" in params ||
+        "viewId" in params
+    ) {
+        viewProps.viewId ||= 123_456_789;
+        viewProps.searchViewId ||= 987_654_321;
+        registerDefaultView(viewProps.resModel, viewProps.viewId, viewProps.type, viewProps.arch);
+        registerDefaultView(
+            viewProps.resModel,
+            viewProps.searchViewId,
+            "search",
+            viewProps.searchViewArch
+        );
+    }
+
+    delete viewProps.arch;
+    delete viewProps.config;
+    delete viewProps.searchViewArch;
+
+    return viewProps;
+}
+
+/**
+ * Open a field dropdown and click on the item which matches the
+ * given content
+ * @param {string} fieldName
+ * @param {string} itemContent
+ * @param {SelectorOptions} [options]
+ */
+export async function selectFieldDropdownItem(fieldName, itemContent, options) {
+    await clickFieldDropdown(fieldName, options);
+    await clickFieldDropdownItem(fieldName, itemContent);
 }

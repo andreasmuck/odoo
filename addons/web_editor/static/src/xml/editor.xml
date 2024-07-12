@@ -6,7 +6,7 @@
 
     <!-- Editor toolbar -->
     <t t-name="web_editor.toolbar">
-        <div id="toolbar" class="oe-toolbar oe-floating">
+        <div id="toolbar" class="oe-toolbar oe-floating d-print-none">
             <div t-if="props.showStyle" id="style" t-attf-class="btn-group {{ props.dropDirection }}">
                 <button type="button" class="btn dropdown-toggle"
                     data-bs-toggle="dropdown" data-bs-original-title="Text style" tabindex="-1" aria-expanded="false">
@@ -96,7 +96,7 @@
                         </div>
                     </div>
                 </div>
-                <div id="removeFormat" data-call="removeFormat" title="Remove format" class="btn fa fa-eraser fa-fw"></div>
+                <div id="removeFormat" data-call="removeFormat" title="Remove format" class="btn fa fa-eraser fa-fw" t-att-class="{ 'd-none': !props.showRemoveFormat }"></div>
             </t>
             <t t-else="">
                 <div id="decoration" class="btn-group">
@@ -104,7 +104,7 @@
                     <div id="italic" data-call="italic" title="Toggle italic" class="btn fa fa-italic fa-fw"></div>
                     <div id="underline" data-call="underline" title="Toggle underline" class="btn fa fa-underline fa-fw"></div>
                     <div id="strikethrough" data-call="strikeThrough" title="Toggle strikethrough" class="btn fa fa-strikethrough fa-fw"></div>
-                    <div id="removeFormat" data-call="removeFormat" title="Remove format" class="btn fa fa-eraser fa-fw"></div>
+                    <div id="removeFormat" data-call="removeFormat" title="Remove format" class="btn fa fa-eraser fa-fw" t-att-class="{ 'd-none': !props.showRemoveFormat }"></div>
                 </div>
 
                 <div t-if="props.showColors" id="colorInputButtonGroup" class="btn-group">
@@ -207,8 +207,16 @@
 
             <div t-if="props.showLink" id="link" class="btn-group">
                 <div id="media-insert" title="Insert media" class="fa fa-file-image-o fa-fw btn editor-ignore"></div>
+                <!--
+                Unlink button is visually last but thanks through the order-1
+                class. Indeed the create-link button needs to be last in the DOM
+                for the border-radius to be right when unlink is not shown, e.g.
+                in website.
+                TODO this should be done another way (split web_editor/website
+                to review).
+                -->
+                <div id="unlink" data-call="unlink" title="Remove link" class="fa fa-unlink fa-fw btn order-1"></div>
                 <div id="create-link" title="Insert or edit link" class="fa fa-link fa-fw btn editor-ignore"></div>
-                <div id="unlink" data-call="unlink" title="Remove link" class="fa fa-unlink fa-fw btn"></div>
                 <a id="media-description" href="#" title="Edit media description" class="btn editor-ignore">Description</a>
             </div>
 

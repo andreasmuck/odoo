@@ -7,48 +7,57 @@
     'summary': 'Sell your products online',
     'website': 'https://www.odoo.com/app/ecommerce',
     'version': '1.1',
-    'depends': ['website', 'sale', 'website_payment', 'website_mail', 'portal_rating', 'digest', 'delivery'],
+    'depends': [
+        'website', 'sale', 'website_payment', 'website_mail', 'portal_rating', 'digest', 'delivery'
+    ],
     'data': [
+        # Security
         'security/ir.model.access.csv',
         'security/ir_rules.xml',
         'security/res_groups.xml',
 
+        # Record data
         'data/data.xml',
         'data/mail_template_data.xml',
         'data/product_snippet_template_data.xml',
         'data/digest_data.xml',
         'data/ir_cron_data.xml',
 
+        # Reports
         'report/sale_report_views.xml',
 
+        # QWeb templates
+        'views/delivery_form_templates.xml',
+        'views/templates.xml',
+
+        # Model views.
         'views/account_move_views.xml',
         'views/crm_team_views.xml',
         'views/delivery_carrier_views.xml',
         'views/digest_views.xml',
         'views/product_attribute_views.xml',
-        'views/product_configurator.xml',
         'views/product_document_views.xml',
         'views/product_image_views.xml',
         'views/product_pricelist_views.xml',
+        'views/product_product_add.xml',
         'views/product_public_category_views.xml',
         'views/product_ribbon_views.xml',
         'views/product_tag_views.xml',
         'views/product_views.xml',
+        'views/res_config_settings_views.xml',
         'views/sale_order_views.xml',
-        'views/templates.xml',
+        'views/website_base_unit_views.xml',
+        'views/website_pages_views.xml',
+        'views/website_sale_menus.xml',
+        'views/website_sale_visitor_views.xml',
+        'views/variant_templates.xml',
+        'views/website_views.xml',
+
+        # Website snippets
         'views/snippets/snippets.xml',
         'views/snippets/s_add_to_cart.xml',
         'views/snippets/s_dynamic_snippet_products.xml',
         'views/snippets/s_popup.xml',
-        'views/res_config_settings_views.xml',
-        'views/website_sale_visitor_views.xml',
-        'views/website_base_unit_views.xml',
-        'views/product_product_add.xml',
-        'views/website_views.xml',
-        'views/website_pages_views.xml',
-        'views/website_sale_delivery_templates.xml',
-        'views/website_sale_menus.xml',
-        'views/variant_templates.xml',
     ],
     'demo': [
         'data/demo.xml',
@@ -66,9 +75,7 @@
             'website/static/lib/multirange/multirange_custom.scss',
             'sale/static/src/scss/sale_portal.scss',
 
-            'website_sale/static/src/js/sale_product_configurator_modal.js',
             'website_sale/static/src/scss/product_configurator.scss',
-            'website_sale/static/src/scss/website_sale_options.scss',
 
             'website_sale/static/src/js/address.js',
             'website_sale/static/src/js/cart.js',
@@ -93,8 +100,6 @@
             'website_sale/static/src/js/components/website_sale_image_viewer.js',
             'website_sale/static/src/xml/website_sale_reorder_modal.xml',
             'website_sale/static/src/js/website_sale_reorder.js',
-            'website_sale/static/src/js/website_sale_delivery.js',
-            'website_sale/static/src/scss/product_configurator.scss',
             'website_sale/static/src/js/notification/add_to_cart_notification/add_to_cart_notification.js',
             'website_sale/static/src/js/notification/add_to_cart_notification/add_to_cart_notification.xml',
             'website_sale/static/src/js/notification/cart_notification/cart_notification.js',
@@ -102,6 +107,20 @@
             'website_sale/static/src/js/notification/warning_notification/warning_notification.js',
             'website_sale/static/src/js/notification/warning_notification/warning_notification.xml',
             'website_sale/static/src/js/notification/notification_service.js',
+            'sale/static/src/js/badge_extra_price/*',
+            'sale/static/src/js/product/*',
+            'sale/static/src/js/product_configurator_dialog/*',
+            'sale/static/src/js/product_list/*',
+            'sale/static/src/js/product_template_attribute_line/*',
+            'website_sale/static/src/js/product/*',
+            'website_sale/static/src/js/product_configurator_dialog/*',
+            'website_sale/static/src/js/product_list/*',
+            'website_sale/static/src/js/product_template_attribute_line/*',
+
+            # Location selector components are defined in `delivery` to share the codebase with the
+            # backend.
+            'delivery/static/src/js/location_selector/**/*',
+            'website_sale/static/src/js/location_selector/**/*',
         ],
         'web._assets_primary_variables': [
             'website_sale/static/src/scss/primary_variables.scss',
@@ -129,6 +148,7 @@
         ],
         'web.assets_tests': [
             'website_sale/static/tests/**/*',
+            'website_sale/static/src/js/tours/product_configurator_tour_utils.js',
         ],
     },
     'license': 'LGPL-3',

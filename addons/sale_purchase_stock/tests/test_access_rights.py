@@ -40,7 +40,7 @@ class TestAccessRights(TestCommonSalePurchaseNoChart):
 
         product = self.env['product.product'].create({
             'name': 'SuperProduct',
-            'type': 'product',
+            'is_storable': True,
             'seller_ids': [(6, 0, seller.ids)],
             'route_ids': [(6, 0, (mto_route + buy_route).ids)]
         })
@@ -55,7 +55,7 @@ class TestAccessRights(TestCommonSalePurchaseNoChart):
             'product_uom_qty': 1,
             'product_uom': product.uom_id.id,
             'price_unit': product.list_price,
-            'tax_id': False,
+            'tax_ids': False,
             'order_id': so.id,
         }, {
             'name': 'Super Section',

@@ -180,6 +180,22 @@
                             <setting id="total_amount_words" help="Display the total amount of an invoice in letters">
                                 <field name="display_invoice_amount_total_words"/>
                             </setting>
+                            <setting id="display_invoice_tax_company_currency" help="Taxes are also displayed in local currency on invoices">
+                                <field name="display_invoice_tax_company_currency"/>
+                            </setting>
+                        </block>
+                        <block title="Units of Measure">
+                            <setting id="account_uom" help="Sell and purchase products in different units of measure">
+                                <field name="group_uom"/>
+                                <div class="content-group" invisible="not group_uom">
+                                    <button
+                                        name="%(uom.product_uom_categ_form_action)d"
+                                        icon="oi-arrow-right"
+                                        type="action"
+                                        string="Units of Measure"
+                                        class="btn-link"/>
+                                </div>
+                            </setting>
                         </block>
                         <block title="Customer Payments" id="pay_invoice_online_setting_container">
                             <setting help="Let your customers pay their invoices online"
@@ -234,7 +250,7 @@
 
                         <t groups="account.group_account_user">
                             <block title="Default Accounts" id="default_accounts">
-                                <setting invisible="not group_multi_currency" string="Post Exchange difference entries in:">
+                                <setting invisible="not group_multi_currency" string="Exchange difference entries:">
                                     <div class="content-group">
                                         <div class="row mt8">
                                             <label for="currency_exchange_journal_id" class="col-lg-4 o_light_label" string="Journal" />
@@ -250,7 +266,7 @@
                                         </div>
                                     </div>
                                 </setting>
-                                <setting id="post_bank_transactions_and_payments_setting" string="Post bank transactions and payments in:">
+                                <setting id="post_bank_transactions_and_payments_setting" string="Bank transactions and payments:">
                                     <div class="content-group">
                                         <div class="row mt8">
                                             <label for="account_journal_suspense_account_id" class="col-lg-5 o_light_label"/>
@@ -270,20 +286,20 @@
                                         </div>
                                     </div>
                                 </setting>
-                                <setting string="Separate discount accounts on invoices"
+                                <setting string="Invoice line discounts:"
                                          title="If empty, the discount will be discounted directly on the income/expense account. If set, discount on invoices will be realized in separate accounts.">
                                     <div class="content-group">
                                         <div class="row mt8">
                                             <label for="account_discount_expense_allocation_id" class="col-lg-5 o_light_label" string="Customer Invoices"/>
-                                            <field name="account_discount_expense_allocation_id" placeholder="Same Account"/>
+                                            <field name="account_discount_expense_allocation_id" placeholder="Same Account as product"/>
                                         </div>
                                         <div class="row mt8">
                                             <label for="account_discount_income_allocation_id" class="col-lg-5 o_light_label" string="Vendor Bills"/>
-                                            <field name="account_discount_income_allocation_id" placeholder="Same Account"/>
+                                            <field name="account_discount_income_allocation_id" placeholder="Same Account as product"/>
                                         </div>
                                     </div>
                                 </setting>
-                                <setting string="Post discounts in:">
+                                <setting string="Early payment discounts:">
                                     <div class="content-group">
                                         <div class="row mt8">
                                             <label for="account_journal_early_pay_discount_gain_account_id" class="col-lg-5 o_light_label"/>
@@ -326,7 +342,7 @@
                                 </setting>
                             </block>
                         </t>
-                        <block title="Analytics" id="analytic">
+                        <block title="Analytics" id="analytic" groups="account.group_account_user">
                             <setting id="track_costs_revenues" title="Allows you to use the analytic accounting." groups="account.group_account_user" help="Track costs &amp; revenues by project, department, etc"
                                 documentation="/applications/finance/accounting/others/analytic_accounting.html">
                                 <field name="group_analytic_accounting"/>
@@ -335,7 +351,7 @@
                                 documentation="/applications/finance/accounting/others/adviser/budget.html">
                                 <field name="module_account_budget" widget="upgrade_boolean"/>
                             </setting>
-                            <setting id="monitor_product_margins" string="Margin Analysis" help="Monitor your product margins from invoices">
+                            <setting id="monitor_product_margins" string="Margin Analysis" help="Monitor your product margins from invoices" groups="account.group_account_user">
                                 <field name="module_product_margin"/>
                             </setting>
                         </block>
@@ -353,7 +369,7 @@
                                 </div>
                             </div>
                         </block>
-                        <block title="Storno Accounting" id="storno">
+                        <block title="Storno Accounting" id="storno" groups="account.group_account_user">
                             <setting id="enable_storno_accounting" company_dependent="1" help="Use Storno accounting" title="Allows you to use Storno accounting.">
                                 <field name="account_storno"/>
                             </setting>
@@ -367,6 +383,11 @@
                             </div>
                             <setting company_dependent="1">
                                 <field name="quick_edit_mode" placeholder="Disabled"/>
+                            </setting>
+                        </block>
+                        <block title="Audit Trail" name="audit_trail_setting_container">
+                            <setting string="Audit Trail" company_dependent="1" help="Activate Audit Trail">
+                                <field name="check_account_audit_trail"/>
                             </setting>
                         </block>
                     </app>

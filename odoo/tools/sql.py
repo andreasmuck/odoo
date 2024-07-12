@@ -2,7 +2,6 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 # pylint: disable=sql-injection
 from __future__ import annotations
-from typing import TYPE_CHECKING
 
 import enum
 import json
@@ -10,6 +9,7 @@ import logging
 import re
 from binascii import crc32
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from odoo.fields import Field
@@ -18,6 +18,18 @@ if TYPE_CHECKING:
 import psycopg2
 
 from .misc import named_to_positional_printf
+
+__all__ = [
+    "SQL",
+    "create_index",
+    "create_unique_index",
+    "drop_view_if_exists",
+    "escape_psql",
+    "index_exists",
+    "make_identifier",
+    "make_index_name",
+    "reverse_order",
+]
 
 _schema = logging.getLogger('odoo.schema')
 
@@ -133,7 +145,7 @@ class SQL:
         return bool(self.__code)
 
     def __eq__(self, other):
-        return self.code == other.code and self.params == other.params
+        return isinstance(other, SQL) and self.code == other.code and self.params == other.params
 
     def __iter__(self):
         """ Yields ``self.code`` and ``self.params``. This was introduced for
@@ -570,7 +582,7 @@ def drop_view_if_exists(cr, viewname):
 
 
 def escape_psql(to_escape):
-    return to_escape.replace('\\', r'\\').replace('%', '\%').replace('_', '\_')
+    return to_escape.replace('\\', r'\\').replace('%', r'\%').replace('_', r'\_')
 
 
 def pg_varchar(size=0):

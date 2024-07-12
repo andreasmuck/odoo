@@ -32,7 +32,6 @@
         'views/project_update_templates.xml',
         'views/project_project_stage_views.xml',
         'wizard/project_share_wizard_views.xml',
-        'views/project_collaborator_views.xml',
         'views/project_task_type_views.xml',
         'views/project_project_views.xml',
         'views/project_task_views.xml',
@@ -66,6 +65,7 @@
     'assets': {
         'web.assets_backend': [
             'project/static/src/css/project.css',
+            'project/static/src/core/web/**/*',
             'project/static/src/utils/**/*',
             'project/static/src/components/**/*',
             'project/static/src/views/**/*',
@@ -74,15 +74,27 @@
             'project/static/src/scss/project_form.scss',
             'project/static/src/scss/project_widgets.scss',
             'project/static/src/xml/**/*',
+            ('remove', 'project/static/src/views/project_task_graph/**'),
+            ('remove', 'project/static/src/views/burndown_chart/**'),
+        ],
+        'web.assets_backend_lazy': [
+            'project/static/src/views/project_task_graph/**',
+            'project/static/src/views/burndown_chart/**',
         ],
         'web.assets_frontend': [
             'project/static/src/scss/portal_rating.scss',
             'project/static/src/scss/project_sharing_frontend.scss',
             'project/static/src/js/portal_rating.js',
         ],
+        'web.assets_unit_tests': [
+            'project/static/src/project_sharing/components/portal_file_input/portal_file_input.js',
+            'project/static/tests/project_models.js',
+            'project/static/tests/**/*.test.js',
+        ],
         'web.qunit_suite_tests': [
             'project/static/src/project_sharing/components/portal_file_input/portal_file_input.js',
-            'project/static/tests/**/*.js',
+            'project/static/tests/legacy/**/*.js',
+            'project/static/tests/tours/**/*',
         ],
         'web.assets_tests': [
             'project/static/tests/tours/**/*',
@@ -93,6 +105,9 @@
 
             'web/static/src/scss/pre_variables.scss',
             'web/static/lib/bootstrap/scss/_variables.scss',
+            'web/static/lib/bootstrap/scss/_variables-dark.scss',
+            'web/static/lib/bootstrap/scss/_maps.scss',
+            ('include', 'web._assets_bootstrap_backend'),
 
             'web/static/src/libs/fontawesome/css/font-awesome.css',
             'web/static/lib/odoo_ui_icons/*',
@@ -115,10 +130,19 @@
             'web/static/lib/owl/odoo_module.js',
             'web/static/lib/jquery/jquery.js',
             'web/static/lib/popper/popper.js',
+            'web/static/lib/bootstrap/js/dist/util/index.js',
             'web/static/lib/bootstrap/js/dist/dom/data.js',
             'web/static/lib/bootstrap/js/dist/dom/event-handler.js',
             'web/static/lib/bootstrap/js/dist/dom/manipulator.js',
             'web/static/lib/bootstrap/js/dist/dom/selector-engine.js',
+            'web/static/lib/bootstrap/js/dist/util/config.js',
+            'web/static/lib/bootstrap/js/dist/util/component-functions.js',
+            'web/static/lib/bootstrap/js/dist/util/backdrop.js',
+            'web/static/lib/bootstrap/js/dist/util/focustrap.js',
+            'web/static/lib/bootstrap/js/dist/util/sanitizer.js',
+            'web/static/lib/bootstrap/js/dist/util/scrollbar.js',
+            'web/static/lib/bootstrap/js/dist/util/swipe.js',
+            'web/static/lib/bootstrap/js/dist/util/template-factory.js',
             'web/static/lib/bootstrap/js/dist/base-component.js',
             'web/static/lib/bootstrap/js/dist/alert.js',
             'web/static/lib/bootstrap/js/dist/button.js',
@@ -135,7 +159,6 @@
             'web/static/lib/select2/select2.js',
             'web/static/src/legacy/js/libs/bootstrap.js',
             'web/static/src/legacy/js/libs/jquery.js',
-            ('include', 'web._assets_bootstrap_backend'),
 
             'base/static/src/css/modules.css',
 
@@ -191,6 +214,7 @@
 
             'mail/static/src/scss/variables/*.scss',
             'mail/static/src/chatter/web/form_renderer.scss',
+            'mail/static/src/views/fields/**/*',
 
             'project/static/src/components/project_task_name_with_subtask_count_char_field/*',
             'project/static/src/components/project_task_state_selection/*',

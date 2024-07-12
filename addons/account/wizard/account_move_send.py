@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from collections import defaultdict
 from markupsafe import Markup
 from werkzeug.urls import url_encode
 
@@ -10,6 +11,10 @@ from odoo.tools.misc import get_lang
 class AccountMoveSend(models.TransientModel):
     _name = 'account.move.send'
     _description = "Account Move Send"
+
+    @api.model
+    def _get_default_pdf_template_id(self):
+        return self.env.ref('account.account_invoices')
 
     company_id = fields.Many2one(comodel_name='res.company', compute='_compute_company_id', store=True)
     move_ids = fields.Many2many(comodel_name='account.move')
@@ -41,13 +46,20 @@ class AccountMoveSend(models.TransientModel):
         readonly=False,
     )
     display_mail_composer = fields.Boolean(compute='_compute_send_mail_extra_fields')
-    send_mail_warning_message = fields.Json(compute='_compute_send_mail_extra_fields')
+    warnings = fields.Json(compute='_compute_warnings')
     send_mail_readonly = fields.Boolean(compute='_compute_send_mail_extra_fields')
     mail_template_id = fields.Many2one(
         comodel_name='mail.template',
-        string="Use template",
+        string="Email template",
         domain="[('model', '=', 'account.move')]",
     )
+    pdf_template_id = fields.Many2one(
+        comodel_name='ir.actions.report',
+        string="Invoice template:",
+        domain="[('is_invoice_report', '=', True)]",
+        default=_get_default_pdf_template_id,
+    )
+    show_pdf_template_menu = fields.Boolean(compute='_compute_show_pdf_template_menu')
     mail_lang = fields.Char(
         string="Lang",
         compute='_compute_mail_lang',
@@ -77,7 +89,6 @@ class AccountMoveSend(models.TransientModel):
         store=True,
         readonly=False,
     )
-    sequence_gap_warning = fields.Boolean(compute='_compute_sequence_gap_warning')
 
     @api.model
     def default_get(self, fields_list):
@@ -123,10 +134,12 @@ class AccountMoveSend(models.TransientModel):
     def _get_default_mail_partner_ids(self, move, mail_template, mail_lang):
         partners = self.env['res.partner'].with_company(move.company_id)
         if mail_template.email_to:
-            for mail_data in tools.email_split(mail_template.email_to):
+            email_to = self._get_mail_default_field_value_from_template(mail_template, mail_lang, move, 'email_to')
+            for mail_data in tools.email_split(email_to):
                 partners |= partners.find_or_create(mail_data)
         if mail_template.email_cc:
-            for mail_data in tools.email_split(mail_template.email_cc):
+            email_cc = self._get_mail_default_field_value_from_template(mail_template, mail_lang, move, 'email_cc')
+            for mail_data in tools.email_split(email_cc):
                 partners |= partners.find_or_create(mail_data)
         if mail_template.partner_to:
             partner_to = self._get_mail_default_field_value_from_template(mail_template, mail_lang, move, 'partner_to')
@@ -147,6 +160,7 @@ class AccountMoveSend(models.TransientModel):
             'sp_user_id': self.env.user.id,
             'download': self.checkbox_download,
             'send_mail': self.checkbox_send_mail,
+            'pdf_report_id': self.pdf_template_id.id,
         }
 
     @api.model
@@ -228,6 +242,13 @@ class AccountMoveSend(models.TransientModel):
     # -------------------------------------------------------------------------
 
     @api.depends('move_ids')
+    def _compute_show_pdf_template_menu(self):
+        available_templates_count = self.env['ir.actions.report'].search_count([('is_invoice_report', '=', True)], limit=2)
+        for wizard in self:
+            # show pdf template menu if there are more than 1 template available and there is at least one move that needs a pdf
+            wizard.show_pdf_template_menu = available_templates_count > 1 and any(self._need_invoice_document(move) for move in wizard.move_ids)
+
+    @api.depends('move_ids')
     def _compute_company_id(self):
         for wizard in self:
             if len(wizard.move_ids.company_id) > 1:
@@ -265,17 +286,27 @@ class AccountMoveSend(models.TransientModel):
             wizard.display_mail_composer = wizard.mode == 'invoice_single'
             invoices_without_mail_data = wizard.move_ids.filtered(lambda x: not x.partner_id.email)
             wizard.send_mail_readonly = invoices_without_mail_data == wizard.move_ids
-            if not (invoices_without_mail_data and wizard.checkbox_send_mail or wizard.send_mail_readonly):
-                wizard.send_mail_warning_message = False
-            else:
-                partners = invoices_without_mail_data.partner_id
-                wizard.send_mail_warning_message = {
-                    **(wizard.send_mail_warning_message or {}),
-                    'partner_missing_email': {
-                        'message': _("Partner(s) should have an email address."),
-                        'action_text': _("View Partner(s)"),
-                        'action': partners._get_records_action(name=_("Check Partner(s)"))
-                    }}
+
+    @api.depends('move_ids', 'checkbox_send_mail', 'send_mail_readonly')
+    def _compute_warnings(self):
+        for wizard in self:
+            warnings = {}
+
+            partners_without_mail = wizard.move_ids.filtered(lambda x: not x.partner_id.email).partner_id
+            if wizard.send_mail_readonly or (wizard.checkbox_send_mail and partners_without_mail):
+                warnings['account_missing_email'] = {
+                    'message': _("Partner(s) should have an email address."),
+                    'action_text': _("View Partner(s)"),
+                    'action': partners_without_mail._get_records_action(name=_("Check Partner(s) Email(s)"))
+                }
+
+            restricted_journals = wizard.move_ids.journal_id.filtered(lambda j: j.restrict_mode_hash_table)
+            if restricted_journals and not wizard.move_ids.check_move_sequence_chain():
+                warnings['account_sequence_gap'] = {
+                    'message': _("Sending these invoices will create a gap in the sequence."),
+                }
+
+            wizard.warnings = warnings
 
     @api.depends('mail_template_id')
     def _compute_mail_lang(self):
@@ -289,7 +320,7 @@ class AccountMoveSend(models.TransientModel):
     def _compute_mail_partner_ids(self):
         for wizard in self:
             if wizard.mode == 'invoice_single' and wizard.mail_template_id:
-                wizard.mail_partner_ids = self._get_default_mail_partner_ids(self.move_ids, wizard.mail_template_id, wizard.mail_lang)
+                wizard.mail_partner_ids = self._get_default_mail_partner_ids(wizard.move_ids, wizard.mail_template_id, wizard.mail_lang)
             else:
                 wizard.mail_partner_ids = None
 
@@ -308,21 +339,11 @@ class AccountMoveSend(models.TransientModel):
             if wizard.mode == 'invoice_single':
                 manual_attachments_data = [x for x in wizard.mail_attachments_widget or [] if x.get('manual')]
                 wizard.mail_attachments_widget = (
-                        self._get_default_mail_attachments_widget(wizard.move_ids, wizard.mail_template_id)
+                        wizard._get_default_mail_attachments_widget(wizard.move_ids, wizard.mail_template_id)
                         + manual_attachments_data
                 )
             else:
                 wizard.mail_attachments_widget = []
-
-    @api.depends('move_ids')
-    def _compute_sequence_gap_warning(self):
-        for wizard in self:
-            moves = wizard.move_ids
-            restricted_journals = moves.mapped('journal_id').filtered(lambda j: j.restrict_mode_hash_table)
-            if restricted_journals:
-                wizard.sequence_gap_warning = not moves.check_move_sequence_chain()
-            else:
-                wizard.sequence_gap_warning = False
 
     @api.model
     def _format_error_text(self, error):
@@ -378,24 +399,31 @@ class AccountMoveSend(models.TransientModel):
         return
 
     @api.model
-    def _prepare_invoice_pdf_report(self, invoice, invoice_data):
+    def _prepare_invoice_pdf_report(self, invoices_data):
         """ Prepare the pdf report for the invoice passed as parameter.
         :param invoice:         An account.move record.
         :param invoice_data:    The collected data for the invoice so far.
         """
-        if invoice.invoice_pdf_report_id:
-            return
 
-        content, _report_format = self.env['ir.actions.report']._render('account.account_invoices', invoice.ids)
+        grouped_invoices_by_report = defaultdict(dict)
+        for invoice, invoice_data in invoices_data.items():
+            grouped_invoices_by_report[invoice_data['pdf_report_id']][invoice] = invoice_data
 
-        invoice_data['pdf_attachment_values'] = {
-            'raw': content,
-            'name': invoice._get_invoice_report_filename(),
-            'mimetype': 'application/pdf',
-            'res_model': invoice._name,
-            'res_id': invoice.id,
-            'res_field': 'invoice_pdf_report_file', # Binary field
-        }
+        for pdf_report_id, group_invoices_data in grouped_invoices_by_report.items():
+            ids = [inv.id for inv in group_invoices_data]
+
+            pdf_report = self.env['ir.actions.report'].browse(pdf_report_id)
+            content, _report_type = self.env['ir.actions.report']._pre_render_qweb_pdf(pdf_report.report_name, res_ids=ids)
+
+            for invoice, invoice_data in group_invoices_data.items():
+                invoice_data['pdf_attachment_values'] = {
+                    'name': invoice._get_invoice_report_filename(),
+                    'raw': content[invoice.id],
+                    'mimetype': 'application/pdf',
+                    'res_model': invoice._name,
+                    'res_id': invoice.id,
+                    'res_field': 'invoice_pdf_report_file',  # Binary field
+                }
 
     @api.model
     def _prepare_invoice_proforma_pdf_report(self, invoice, invoice_data):
@@ -403,10 +431,11 @@ class AccountMoveSend(models.TransientModel):
         :param invoice:         An account.move record.
         :param invoice_data:    The collected data for the invoice so far.
         """
-        content, _report_format = self.env['ir.actions.report']._render('account.account_invoices', invoice.ids, data={'proforma': True})
+        pdf_report = self.env['ir.actions.report'].browse(invoice_data['pdf_report_id'])
+        content, _report_format = self.env['ir.actions.report']._render(pdf_report.report_name, invoice.ids, data={'proforma': True})
 
         invoice_data['proforma_pdf_attachment_values'] = {
-            'raw': content,
+            'raw': content[invoice.id],
             'name': invoice._get_invoice_proforma_pdf_report_filename(),
             'mimetype': 'application/pdf',
             'res_model': invoice._name,
@@ -423,16 +452,21 @@ class AccountMoveSend(models.TransientModel):
         return
 
     @api.model
-    def _link_invoice_documents(self, invoice, invoice_data):
+    def _link_invoice_documents(self, invoices_data):
         """ Create the attachments containing the pdf/electronic documents for the invoice passed as parameter.
         :param invoice:         An account.move record.
         :param invoice_data:    The collected data for the invoice so far.
         """
         # create an attachment that will become 'invoice_pdf_report_file'
         # note: Binary is used for security reason
-        invoice.message_main_attachment_id = self.env['ir.attachment'].create(invoice_data['pdf_attachment_values'])
-        invoice.invalidate_recordset(fnames=['invoice_pdf_report_id', 'invoice_pdf_report_file'])
-        invoice.is_move_sent = True
+        attachment_to_create = [invoice_data['pdf_attachment_values'] for invoice_data in invoices_data.values()]
+        attachments = self.env['ir.attachment'].create(attachment_to_create)
+        res_id_to_attachment = {attachment.res_id: attachment for attachment in attachments}
+
+        for invoice, invoice_date in invoices_data.items():
+            invoice.message_main_attachment_id = res_id_to_attachment[invoice.id]
+            invoice.invalidate_recordset(fnames=['invoice_pdf_report_id', 'invoice_pdf_report_file'])
+            invoice.is_move_sent = True
 
     @api.model
     def _hook_if_errors(self, moves_data, from_cron=False, allow_fallback_pdf=False):
@@ -484,6 +518,8 @@ class AccountMoveSend(models.TransientModel):
             )
 
         # Prevent duplicated attachments linked to the invoice.
+        new_message.attachment_ids.invalidate_recordset(['res_id', 'res_model'], flush=False)
+        self.env.cr.execute("UPDATE ir_attachment SET res_id = NULL WHERE id IN %s", [tuple(new_message.attachment_ids.ids)])
         new_message.attachment_ids.write({
             'res_model': new_message._name,
             'res_id': new_message.id,
@@ -593,9 +629,27 @@ class AccountMoveSend(models.TransientModel):
             for invoice, invoice_data in invoices_data.items()
             if not invoice_data.get('error') or invoice_data.get('error_but_continue')
         }
+
+        # Use batch to avoid memory error
+        batch_size = self.env['ir.config_parameter'].sudo().get_param('account.pdf_generation_batch', '80')
+        batches = []
+        pdf_to_generate = {}
+        for invoice, invoice_data in invoices_data_pdf.items():
+            if self._need_invoice_document(invoice) and not invoice_data.get('error') and not invoice.invoice_pdf_report_id:
+                pdf_to_generate[invoice] = invoice_data
+
+                if (len(pdf_to_generate) > int(batch_size)):
+                    batches.append(pdf_to_generate)
+                    pdf_to_generate = {}
+
+        if pdf_to_generate:
+            batches.append(pdf_to_generate)
+
+        for batch in batches:
+            self._prepare_invoice_pdf_report(batch)
+
         for invoice, invoice_data in invoices_data_pdf.items():
             if self._need_invoice_document(invoice) and not invoice_data.get('error'):
-                self._prepare_invoice_pdf_report(invoice, invoice_data)
                 self._hook_invoice_document_after_pdf_report_render(invoice, invoice_data)
 
         # Cleanup the error if we don't want to block the regular pdf generation.
@@ -618,9 +672,12 @@ class AccountMoveSend(models.TransientModel):
             self._call_web_service_after_invoice_pdf_render(invoices_data_web_service)
 
         # Create and link the generated documents to the invoice if the web-service didn't failed.
-        for invoice, invoice_data in invoices_data_web_service.items():
-            if self._need_invoice_document(invoice) and (not invoice_data.get('error') or allow_fallback_pdf):
-                self._link_invoice_documents(invoice, invoice_data)
+        invoices_to_link = {
+            invoice: invoice_data
+            for invoice, invoice_data in invoices_data_web_service.items()
+            if self._need_invoice_document(invoice) and (not invoice_data.get('error') or allow_fallback_pdf)
+        }
+        self._link_invoice_documents(invoices_to_link)
 
     @api.model
     def _generate_invoice_fallback_documents(self, invoices_data):

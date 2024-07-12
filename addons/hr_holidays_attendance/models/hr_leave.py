@@ -13,7 +13,7 @@ class HRLeave(models.Model):
     _inherit = 'hr.leave'
 
     overtime_id = fields.Many2one('hr.attendance.overtime', string='Extra Hours')
-    employee_overtime = fields.Float(related='employee_id.total_overtime')
+    employee_overtime = fields.Float(related='employee_id.total_overtime', groups='base.group_user')
     overtime_deductible = fields.Boolean(compute='_compute_overtime_deductible')
 
     @api.depends('holiday_status_id')
@@ -42,7 +42,7 @@ class HRLeave(models.Model):
             employee = leave.employee_id
             duration = leave.number_of_hours
             overtime_duration = leave.overtime_id.sudo().duration
-            if overtime_duration != duration:
+            if overtime_duration != -1 * duration:
                 if duration > employee.total_overtime - overtime_duration:
                     raise ValidationError(_('The employee does not have enough extra hours to extend this leave.'))
                 leave.overtime_id.sudo().duration = -1 * duration

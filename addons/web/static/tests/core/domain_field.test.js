@@ -1,5 +1,5 @@
 import { expect, getFixture, test } from "@odoo/hoot";
-import { queryAllTexts, queryFirst, queryLast, scroll } from "@odoo/hoot-dom";
+import { queryAllTexts, scroll } from "@odoo/hoot-dom";
 import { Deferred, animationFrame, mockDate } from "@odoo/hoot-mock";
 import { getPickerCell } from "@web/../tests/core/datetime/datetime_test_helpers";
 import { SELECTORS } from "@web/../tests/core/domain_selector/domain_selector_helpers";
@@ -32,7 +32,7 @@ import {
 
 import { WebClient } from "@web/webclient/webclient";
 
-export class PartnerType extends models.Model {
+class PartnerType extends models.Model {
     name = fields.Char({ string: "Partner Type" });
     color = fields.Integer({ string: "Color index" });
 
@@ -106,7 +106,7 @@ test("basic domain field usage is ok", async function () {
             <form>
                 <sheet>
                     <group>
-                        <field name="foo" widget="domain" options="{'model': 'partnertype'}" />
+                        <field name="foo" widget="domain" options="{'model': 'partner.type'}" />
                     </group>
                 </sheet>
             </form>`,
@@ -128,9 +128,9 @@ test("basic domain field usage is ok", async function () {
     expect(".o_model_field_selector_popover").toHaveCount(1);
     expect(".o_model_field_selector_popover_search input").toHaveCount(1);
 
-    // The popover should contain the list of partnertype fields and so
+    // The popover should contain the list of partner.type fields and so
     // there should be the "Color index" field
-    expect(queryFirst(".o_model_field_selector_popover_item_name")).toHaveText("Color index");
+    expect(".o_model_field_selector_popover_item_name:first").toHaveText("Color index");
 
     // Clicking on this field should close the popover, then changing the
     // associated value should reveal one matched record
@@ -213,12 +213,12 @@ test("domain field is correctly reset on every view change", async function () {
     expect(".o_model_field_selector_popover_item").toHaveCount(7, {
         message: "field selector popover should contain only one non-default field",
     });
-    expect(queryLast(".o_model_field_selector_popover_item")).toHaveText("Product Team", {
+    expect(".o_model_field_selector_popover_item:last").toHaveText("Product Team", {
         message: "field selector popover should contain 'Product Team' field",
     });
 
-    // Now change the value of the "bar" field to "partnertype"
-    await contains(".o_field_widget[name='bar'] input").edit("partnertype");
+    // Now change the value of the "bar" field to "partner.type"
+    await contains(".o_field_widget[name='bar'] input").edit("partner.type");
 
     // Refocusing the field selector input should open the popover again
     await contains(".o_model_field_selector").click();
@@ -226,11 +226,11 @@ test("domain field is correctly reset on every view change", async function () {
         message: "field selector popover should be visible",
     });
 
-    // Now the list of fields should be the ones of the "partnertype" model
+    // Now the list of fields should be the ones of the "partner.type" model
     expect(".o_model_field_selector_popover_item").toHaveCount(6, {
         message: "field selector popover should contain two non-default fields",
     });
-    expect(queryFirst(".o_model_field_selector_popover_item")).toHaveText("Color index", {
+    expect(".o_model_field_selector_popover_item:first").toHaveText("Color index", {
         message: "field selector popover should contain 'Color index' field",
     });
 });
@@ -277,9 +277,10 @@ test("domain field: handle false domain as []", async function () {
         },
     ];
 
-    onRpc("search_count", (_, { args }) => {
+    onRpc("search_count", ({ args }) => {
         expect(args[0]).toEqual([], { message: "should send a valid domain" });
     });
+
     await mountView({
         type: "form",
         resModel: "partner",
@@ -313,7 +314,7 @@ test.tags("desktop")("basic domain field: show the selection", async function ()
             <form>
                 <sheet>
                     <group>
-                        <field name="foo" widget="domain" options="{'model': 'partnertype'}" />
+                        <field name="foo" widget="domain" options="{'model': 'partner.type'}" />
                     </group>
                 </sheet>
             </form>`,
@@ -350,7 +351,7 @@ test.tags("desktop")("field context is propagated when opening selection", async
         resId: 1,
         arch: `
             <form>
-                <field name="foo" widget="domain" options="{'model': 'partnertype'}" context="{'tree_view_ref': 3}"/>
+                <field name="foo" widget="domain" options="{'model': 'partner.type'}" context="{'tree_view_ref': 3}"/>
             </form>`,
     });
 
@@ -380,12 +381,8 @@ test("domain field: manually edit domain with textarea", async function () {
         search: `<search />`,
     };
 
-    onRpc("search_count", (_, { args }) => {
-        expect.step(JSON.stringify(args[0]));
-    });
-    onRpc("/web/domain/validate", () => {
-        return true;
-    });
+    onRpc("search_count", ({ args }) => expect.step(args[0]));
+    onRpc("/web/domain/validate", () => true);
     await mountWithCleanup(WebClient);
     await getService("action").doAction({
         name: "test",
@@ -394,19 +391,19 @@ test("domain field: manually edit domain with textarea", async function () {
         type: "ir.actions.act_window",
         views: [[false, "form"]],
     });
-    expect(["[]"]).toVerifySteps();
+    expect.verifySteps([[]]);
 
     expect(".o_domain_show_selection_button").toHaveText("2 record(s)");
 
     await contains(SELECTORS.debugArea).edit("[['id', '<', 40]]");
     // the count should not be re-computed when editing with the textarea
     expect(".o_domain_show_selection_button").toHaveText("2 record(s)");
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     await contains(".o_form_button_save").click();
     await animationFrame();
     expect(".o_domain_show_selection_button").toHaveText("1 record(s)");
-    expect(['[["id","<",40]]']).toVerifySteps();
+    expect.verifySteps([[["id", "<", 40]]]);
 });
 
 test("domain field: manually set an invalid domain with textarea", async function () {
@@ -434,14 +431,15 @@ test("domain field: manually set an invalid domain with textarea", async functio
         return JSON.stringify(params.domain) === '[["abc","=",1]]';
     });
 
-    onRpc((_, { method, args }) => {
+    onRpc(({ args, method }) => {
         if (method === "search_count") {
-            expect.step(JSON.stringify(args[0]));
+            expect.step(args[0]);
         }
         if (method === "write") {
             throw new Error("should not save");
         }
     });
+
     await mountWithCleanup(WebClient);
     await getService("action").doAction({
         name: "test",
@@ -451,7 +449,7 @@ test("domain field: manually set an invalid domain with textarea", async functio
         views: [[false, "form"]],
     });
 
-    expect(["[]"]).toVerifySteps();
+    expect.verifySteps([[]]);
 
     expect(".o_domain_show_selection_button").toHaveText("2 record(s)");
 
@@ -459,11 +457,11 @@ test("domain field: manually set an invalid domain with textarea", async functio
     await animationFrame();
     // the count should not be re-computed when editing with the textarea
     expect(".o_domain_show_selection_button").toHaveText("2 record(s)");
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     await contains(SELECTORS.debugArea).edit("[['abc']]");
     await animationFrame();
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     await contains(".o_form_button_save").click();
     expect(".o_field_domain").toHaveClass("o_field_invalid", {
@@ -472,7 +470,7 @@ test("domain field: manually set an invalid domain with textarea", async functio
     expect(".o_form_view .o_form_editable").toHaveCount(1, {
         message: "the view is still in edit mode",
     });
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 });
 
 test("domain field: reload count by clicking on the refresh button", async function () {
@@ -496,9 +494,7 @@ test("domain field: reload count by clicking on the refresh button", async funct
     };
 
     onRpc("/web/domain/validate", () => true);
-    onRpc("search_count", (_, { args }) => {
-        expect.step(JSON.stringify(args[0]));
-    });
+    onRpc("search_count", ({ args }) => expect.step(args[0]));
     await mountWithCleanup(WebClient);
     await getService("action").doAction({
         name: "test",
@@ -508,7 +504,7 @@ test("domain field: reload count by clicking on the refresh button", async funct
         views: [[false, "form"]],
     });
 
-    expect(["[]"]).toVerifySteps();
+    expect.verifySteps([[]]);
 
     expect(".o_domain_show_selection_button").toHaveText("2 record(s)");
 
@@ -519,7 +515,7 @@ test("domain field: reload count by clicking on the refresh button", async funct
     // click on the refresh button
     await contains(".o_refresh_count").click();
     expect(".o_domain_show_selection_button").toHaveText("1 record(s)");
-    expect(['[["id","<",40]]']).toVerifySteps();
+    expect.verifySteps([[["id", "<", 40]]]);
 });
 
 test("domain field: does not wait for the count to render", async function () {
@@ -532,9 +528,8 @@ test("domain field: does not wait for the count to render", async function () {
     ];
 
     const def = new Deferred();
-    onRpc("search_count", async () => {
-        await def;
-    });
+    onRpc("search_count", () => def);
+
     await mountView({
         type: "form",
         resModel: "partner",
@@ -580,7 +575,7 @@ test("domain field: edit domain with dynamic content", async function () {
         search: `<search />`,
     };
 
-    onRpc("web_save", (_, { args }) => {
+    onRpc("web_save", ({ args }) => {
         expect(args[1].foo).toBe(rawDomain);
     });
     onRpc("/web/domain/validate", () => true);
@@ -624,9 +619,8 @@ test("domain field: edit through selector (dynamic content)", async function () 
         search: `<search />`,
     };
 
-    onRpc((route, { method }) => {
-        expect.step(method || route);
-    });
+    onRpc(({ method }) => expect.step(method));
+
     await mountWithCleanup(WebClient);
     await getService("action").doAction({
         name: "test",
@@ -636,14 +630,14 @@ test("domain field: edit through selector (dynamic content)", async function () 
         views: [[false, "form"]],
     });
 
-    expect(["get_views", "web_read", "search_count", "fields_get"]).toVerifySteps();
+    expect.verifySteps(["get_views", "web_read", "search_count", "fields_get"]);
 
     expect(SELECTORS.debugArea).toHaveValue(rawDomain);
 
     await clearNotSupported();
     rawDomain = `[("date", ">=", "2020-09-05")]`;
     expect(".o_datetime_input").toHaveCount(1, { message: "there should be a datepicker" });
-    expect(["search_count"]).toVerifySteps();
+    expect.verifySteps(["search_count"]);
 
     // Open and close the datepicker
     await contains(".o_datetime_input").click();
@@ -651,24 +645,24 @@ test("domain field: edit through selector (dynamic content)", async function () 
     scroll(getFixture(), { top: 10 });
     expect(".o_datetime_picker").toHaveCount(1);
     expect(SELECTORS.debugArea).toHaveValue(rawDomain);
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     // Manually input a date
     rawDomain = `[("date", ">=", "2020-09-09")]`;
     await contains(".o_datetime_input").edit("09/09/2020");
-    expect(["search_count"]).toVerifySteps();
+    expect.verifySteps(["search_count"]);
     expect(SELECTORS.debugArea).toHaveValue(rawDomain);
 
     // Save
     await contains(".o_form_button_save").click();
-    expect(["web_save", "search_count"]).toVerifySteps();
+    expect.verifySteps(["web_save", "search_count"]);
     expect(SELECTORS.debugArea).toHaveValue(rawDomain);
 });
 
 test("domain field without model", async function () {
     Partner._fields.model_name = fields.Char({ string: "Model name" });
 
-    onRpc("search_count", (_, { model }) => {
+    onRpc("search_count", ({ model }) => {
         expect.step(model);
     });
     await mountView({
@@ -684,12 +678,12 @@ test("domain field without model", async function () {
     expect('.o_field_widget[name="name"]').toHaveText("Select a model to add a filter.", {
         message: "should contain an error message saying the model is missing",
     });
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     await contains(".o_field_widget[name=model_name] input").edit("partner");
     await animationFrame();
     expect('.o_field_widget[name="name"] .o_field_domain_panel').toHaveText("3 record(s)");
-    expect(["partner"]).toVerifySteps();
+    expect.verifySteps(["partner"]);
 });
 
 test.tags("desktop")("domain field in kanban view", async function () {
@@ -708,8 +702,8 @@ test.tags("desktop")("domain field in kanban view", async function () {
                 <field name="bar" />
                 <templates>
                     <t t-name="kanban-box">
-                        <div class="oe_kanban_global_click">
-                            <field name="foo" widget="domain" options="{'model': 'partnertype'}" />
+                        <div>
+                            <field name="foo" widget="domain" options="{'model': 'partner.type'}" />
                         </div>
                     </t>
                 </templates>
@@ -719,7 +713,7 @@ test.tags("desktop")("domain field in kanban view", async function () {
         },
     });
 
-    expect(queryFirst(".o_read_mode")).toHaveText("Match all records");
+    expect(".o_read_mode:first").toHaveText("Match all records");
 
     await contains(".o_domain_show_selection_button").click();
     expect(".o_dialog .o_list_view").toHaveCount(1, {
@@ -727,9 +721,7 @@ test.tags("desktop")("domain field in kanban view", async function () {
     });
 
     await contains(".o_domain_selector").click();
-    expect(["open record 1"]).toVerifySteps({
-        message: "record should not open when clicked on the 'N record(s)' button",
-    });
+    expect.verifySteps(["open record 1"]);
 });
 
 test("domain field with 'inDialog' options", async function () {
@@ -781,11 +773,7 @@ test("edit domain button is available even while loading records count", async f
     serverState.debug = true;
     const searchCountDeffered = new Deferred();
     onRpc("/web/domain/validate", () => true);
-    onRpc(async (route) => {
-        if (route === "/web/dataset/call_kw/partner/search_count") {
-            await searchCountDeffered;
-        }
-    });
+    onRpc("search_count", () => searchCountDeffered);
     await mountView({
         type: "form",
         resModel: "partner",
@@ -823,7 +811,7 @@ test("debug input editing sets the field as dirty even without a focus out", asy
     await contains(SELECTORS.debugArea).edit("[['id', '=', False]]", { confirm: false });
     expect(".o_form_button_save").toHaveCount(1);
     await contains(".o_form_button_save").click();
-    expect(["validate domain"]).toVerifySteps();
+    expect.verifySteps(["validate domain"]);
 });
 
 test("debug input corrections don't need a focus out to be saved", async function () {
@@ -872,7 +860,7 @@ test("quick check on save if domain has been edited via the debug input", async 
     await contains(SELECTORS.debugArea).edit("[['id', '!=', False]]");
     await contains("button.o_form_button_save").click();
     await animationFrame();
-    expect(["validate model", "validate model"]).toVerifySteps();
+    expect.verifySteps(["validate model", "validate model"]);
     expect(".o_domain_show_selection_button").toHaveText("4 record(s)");
 });
 test("domain field can be foldable", async function () {
@@ -886,7 +874,7 @@ test("domain field can be foldable", async function () {
             <form>
                 <sheet>
                     <group>
-                        <field name="foo" widget="domain" options="{'model': 'partnertype', 'foldable': true}" />
+                        <field name="foo" widget="domain" options="{'model': 'partner.type', 'foldable': true}" />
                     </group>
                 </sheet>
             </form>`,
@@ -912,9 +900,9 @@ test("domain field can be foldable", async function () {
     expect(".o_model_field_selector_popover").toHaveCount(1);
     expect(".o_model_field_selector_popover_search input").toHaveCount(1);
 
-    // The popover should contain the list of partnertype fields and so
+    // The popover should contain the list of partner.type fields and so
     // there should be the "Color index" field
-    expect(queryFirst(".o_model_field_selector_popover_item_name")).toHaveText("Color index");
+    expect(".o_model_field_selector_popover_item_name:first").toHaveText("Color index");
 
     // Clicking on this field should close the popover, then changing the
     // associated value should reveal one matched record
@@ -949,7 +937,7 @@ test("add condition in empty foldable domain", async function () {
             <form>
                 <sheet>
                     <group>
-                        <field name="foo" widget="domain" options="{'model': 'partnertype', 'foldable': true}" />
+                        <field name="foo" widget="domain" options="{'model': 'partner.type', 'foldable': true}" />
                     </group>
                 </sheet>
             </form>`,
@@ -985,7 +973,7 @@ test("foldable domain field unfolds and hides caret when domain is invalid", asy
             <form>
                 <sheet>
                     <group>
-                        <field name="foo" widget="domain" options="{'model': 'partnertype', 'foldable': true}" />
+                        <field name="foo" widget="domain" options="{'model': 'partner.type', 'foldable': true}" />
                     </group>
                 </sheet>
             </form>`,
@@ -994,7 +982,7 @@ test("foldable domain field unfolds and hides caret when domain is invalid", asy
     expect(".fa-caret-down").toHaveCount(0);
     expect(".o_domain_selector_row").toHaveText("This domain is not supported.\nReset domain");
     await contains(".o_domain_selector_row button").click();
-    expect(queryFirst(".o_field_domain span")).toHaveText("Match all records");
+    expect(".o_field_domain span:first").toHaveText("Match all records");
 });
 
 test("folded domain field with any operator", async function () {

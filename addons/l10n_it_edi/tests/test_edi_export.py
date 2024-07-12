@@ -1,6 +1,7 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from odoo import Command
+from odoo.exceptions import UserError
 from odoo.tests import tagged
 from odoo.addons.l10n_it_edi.tests.common import TestItEdi
 
@@ -230,7 +231,7 @@ class TestItEdiExport(TestItEdi):
                 }),
             ],
         })
-        self.assertEqual(['partner_address_missing'], list(invoice._l10n_it_edi_export_data_check().keys()))
+        self.assertEqual(['l10n_it_edi_partner_address_missing'], list(invoice._l10n_it_edi_export_data_check().keys()))
 
     def test_invoice_non_domestic_simplified(self):
         invoice = self.env['account.move'].with_company(self.company).create({
@@ -246,7 +247,7 @@ class TestItEdiExport(TestItEdi):
                 }),
             ],
         })
-        self.assertEqual(['partner_address_missing'], list(invoice._l10n_it_edi_export_data_check().keys()))
+        self.assertEqual(['l10n_it_edi_partner_address_missing'], list(invoice._l10n_it_edi_export_data_check().keys()))
 
     def test_invoice_zero_percent_taxes(self):
         tax_zero_percent_hundred_percent_repartition = self.env['account.tax'].with_company(self.company).create({
@@ -320,11 +321,6 @@ class TestItEdiExport(TestItEdi):
                     'price_unit': -100.0,
                     'tax_ids': [Command.set(self.default_tax.ids)],
                 }),
-                Command.create({
-                    'name': 'negative_line_different_tax',
-                    'price_unit': -50.0,
-                    'tax_ids': [Command.set(tax_10.ids)],
-                    }),
             ],
         })
         invoice.action_post()
@@ -338,3 +334,33 @@ class TestItEdiExport(TestItEdi):
 
         with self.subTest('credit note'):
             self._assert_export_invoice(credit_note, 'credit_note_negative_price.xml')
+
+        invoice = self.env['account.move'].with_company(self.company).create({
+            'move_type': 'out_invoice',
+            'invoice_date': '2022-03-24',
+            'invoice_date_due': '2022-03-24',
+            'partner_id': self.italian_partner_a.id,
+            'partner_bank_id': self.test_bank.id,
+            'invoice_line_ids': [
+                Command.create({
+                    'name': 'standard_line',
+                    'price_unit': 800.40,
+                    'tax_ids': [Command.set(self.default_tax.ids)],
+                }),
+                Command.create({
+                    'name': 'negative_line',
+                    'price_unit': -100.0,
+                    'tax_ids': [Command.set(self.default_tax.ids)],
+                }),
+                # This negative line can't be dispatched, rejeted.
+                Command.create({
+                    'name': 'negative_line_different_tax',
+                    'price_unit': -50.0,
+                    'tax_ids': [Command.set(tax_10.ids)],
+                    }),
+            ],
+        })
+        invoice.action_post()
+
+        with self.assertRaises(UserError, msg="You have negative lines that we can't dispatch on others. They need to have the same tax."):
+            self._assert_export_invoice(invoice, 'invoice_negative_price.xml')

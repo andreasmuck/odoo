@@ -20,7 +20,7 @@ class TestFifoPrice(ValuationReconciliationTestCommon):
         product_cable_management_box = self.env['product.product'].create({
             'default_code': 'FIFO',
             'name': 'FIFO Ice Cream',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': self.stock_account_product_categ.id,
             'list_price': 100.0,
             'standard_price': 70.0,
@@ -210,7 +210,7 @@ class TestFifoPrice(ValuationReconciliationTestCommon):
         product_fifo_negative = self.env['product.product'].create({
             'default_code': 'NEG',
             'name': 'FIFO Negative',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': self.stock_account_product_categ.id,
             'list_price': 100.0,
             'standard_price': 70.0,
@@ -327,7 +327,7 @@ class TestFifoPrice(ValuationReconciliationTestCommon):
 
         super_product = self.env['product.product'].create({
             'name': 'Super Product',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': self.stock_account_product_categ.id,
             'standard_price': 0.035,
         })
@@ -343,7 +343,7 @@ class TestFifoPrice(ValuationReconciliationTestCommon):
                 'product_uom': super_product.uom_id.id,
                 'price_unit': super_product.standard_price,
                 'date_planned': time.strftime('%Y-%m-%d'),
-                'taxes_id': [(4, tax.id)],
+                'tax_ids': [(4, tax.id)],
             })],
         })
 

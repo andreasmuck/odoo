@@ -69,19 +69,23 @@ class IrUiView(models.Model):
 
         try:
             value = converter.from_html(Model, Model._fields[field], el)
-        except ValueError:
-            raise ValidationError(_("Invalid field value for %s: %s", Model._fields[field].string, el.text_content().strip()))
+            if value is not None:
+                # TODO: batch writes?
+                record = Model.browse(int(el.get('data-oe-id')))
+                if not self.env.context.get('lang') and self.get_default_lang_code():
+                    record.with_context(lang=self.get_default_lang_code()).write({field: value})
+                else:
+                    record.write({field: value})
 
-        if value is not None:
-            # TODO: batch writes?
-            record = Model.browse(int(el.get('data-oe-id')))
-            if not self.env.context.get('lang') and self.get_default_lang_code():
-                record.with_context(lang=self.get_default_lang_code()).write({field: value})
-            else:
-                record.write({field: value})
+                if callable(Model._fields[field].translate):
+                    self._copy_custom_snippet_translations(record, field)
 
-            if callable(Model._fields[field].translate):
-                self._copy_custom_snippet_translations(record, field)
+        except (ValueError, TypeError):
+            raise ValidationError(_(
+                "Invalid field value for %(field_name)s: %(value)s",
+                field_name=Model._fields[field].string,
+                value=el.text_content().strip(),
+            ))
 
     def save_oe_structure(self, el):
         self.ensure_one()
@@ -480,10 +484,7 @@ class IrUiView(models.Model):
             'type': 'qweb',
             'arch': """
                 <data inherit_id="%s">
-                    <xpath expr="//div[@id='snippet_custom']" position="attributes">
-                        <attribute name="class" remove="d-none" separator=" "/>
-                    </xpath>
-                    <xpath expr="//div[@id='snippet_custom_body']" position="inside">
+                    <xpath expr="//snippets[@id='snippet_custom']" position="inside">
                         <t t-snippet="%s" t-thumbnail="%s"/>
                     </xpath>
                 </data>

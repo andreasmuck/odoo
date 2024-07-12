@@ -1,14 +1,14 @@
+import { expect, test } from "@odoo/hoot";
+import { click, queryAllTexts } from "@odoo/hoot-dom";
 import {
     clickSave,
     defineModels,
+    defineParams,
     fields,
-    makeMockServer,
     models,
     mountView,
     onRpc,
 } from "@web/../tests/web_test_helpers";
-import { test, expect } from "@odoo/hoot";
-import { queryAllTexts, click } from "@odoo/hoot-dom";
 
 class Partner extends models.Model {
     sun = fields.Boolean({ string: "Sun" });
@@ -37,19 +37,17 @@ defineModels([Partner]);
 
 test("simple week recurrence widget", async () => {
     expect.assertions(13);
-    await makeMockServer({ lang_parameters: { week_start: 1 } });
+    defineParams({ lang_parameters: { week_start: 1 } });
     let writeCall = 0;
-    onRpc((route, { method, args }) => {
-        if (method === "web_save") {
-            writeCall++;
-            if (writeCall === 1) {
-                expect(args[1].sun).toBeTruthy();
-            }
-            if (writeCall === 2) {
-                expect(args[1].sun).not.toBeTruthy();
-                expect(args[1].mon).toBeTruthy();
-                expect(args[1].tue).toBeTruthy();
-            }
+    onRpc("web_save", ({ args }) => {
+        writeCall++;
+        if (writeCall === 1) {
+            expect(args[1].sun).toBe(true);
+        }
+        if (writeCall === 2) {
+            expect(args[1].sun).not.toBe(true);
+            expect(args[1].mon).toBe(true);
+            expect(args[1].tue).toBe(true);
         }
     });
 
@@ -103,7 +101,7 @@ test("simple week recurrence widget", async () => {
 });
 
 test("week recurrence widget readonly modifiers", async () => {
-    await makeMockServer({ lang_parameters: { week_start: 1 } });
+    defineParams({ lang_parameters: { week_start: 1 } });
     await mountView({
         type: "form",
         resModel: "partner",
@@ -121,7 +119,7 @@ test("week recurrence widget readonly modifiers", async () => {
 });
 
 test("week recurrence widget show week start as per language configuration", async () => {
-    await makeMockServer({ lang_parameters: { week_start: 5 } });
+    defineParams({ lang_parameters: { week_start: 5 } });
     await mountView({
         type: "form",
         resModel: "partner",

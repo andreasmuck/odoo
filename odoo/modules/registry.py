@@ -25,12 +25,13 @@ from odoo.modules.db import FunctionStatus
 from .. import SUPERUSER_ID
 from odoo.sql_db import TestCursor
 from odoo.tools import (
-    config, existing_tables, lazy_classproperty,
-    lazy_property, sql, Collector, OrderedSet, SQL,
-    format_frame
+    config, lazy_classproperty,
+    lazy_property, sql, OrderedSet, SQL,
+    remove_accents,
 )
 from odoo.tools.func import locked
 from odoo.tools.lru import LRU
+from odoo.tools.misc import Collector, format_frame
 
 _logger = logging.getLogger(__name__)
 _schema = logging.getLogger('odoo.schema')
@@ -43,6 +44,7 @@ _REGISTRY_CACHES = {
     'routing': 1024,  # 2 entries per website
     'routing.rewrites': 8192,  # url_rewrite entries
     'templates.cached_values': 2048, # arbitrary
+    'groups': 1,  # contains all res.groups
 }
 
 # cache invalidation dependencies, as follows:
@@ -52,6 +54,7 @@ _CACHES_BY_KEY = {
     'assets': ('assets', 'templates.cached_values'),
     'templates': ('templates', 'templates.cached_values'),
     'routing': ('routing', 'routing.rewrites', 'templates.cached_values'),
+    'groups': ('groups', 'templates', 'templates.cached_values'),  # The processing of groups is saved in the view
 }
 
 def _unaccent(x):
@@ -135,6 +138,7 @@ class Registry(Mapping):
         registry.ready = True
         registry.registry_invalidated = bool(update_module)
         registry.new = registry.init = registry.registries = None
+        registry.signal_changes()
 
         _logger.info("Registry loaded in %.3fs", time.time() - t0)
         return registry
@@ -194,6 +198,7 @@ class Registry(Mapping):
             self.has_trigram = odoo.modules.db.has_trigram(cr)
 
         self.unaccent = _unaccent if self.has_unaccent else lambda x: x
+        self.unaccent_python = remove_accents if self.has_unaccent else lambda x: x
 
     @classmethod
     @locked
@@ -721,7 +726,7 @@ class Registry(Mapping):
             for name, model in env.registry.items()
             if not model._abstract and model._table_query is None
         }
-        missing_tables = set(table2model).difference(existing_tables(cr, table2model))
+        missing_tables = set(table2model).difference(sql.existing_tables(cr, table2model))
 
         if missing_tables:
             missing = {table2model[table] for table in missing_tables}
@@ -732,7 +737,7 @@ class Registry(Mapping):
                 env[name].init()
             env.flush_all()
             # check again, and log errors if tables are still missing
-            missing_tables = set(table2model).difference(existing_tables(cr, table2model))
+            missing_tables = set(table2model).difference(sql.existing_tables(cr, table2model))
             for table in missing_tables:
                 _logger.error("Model %s has no table.", table2model[table])
 
@@ -880,13 +885,8 @@ class Registry(Mapping):
 
     def signal_changes(self):
         """ Notifies other processes if registry or cache has been invalidated. """
-        if self.in_test_mode():
-            if self.registry_invalidated:
-                self.registry_sequence += 1
-            for cache_name in self.cache_invalidated or ():
-                self.cache_sequences[cache_name] += 1
-            self.registry_invalidated = False
-            self.cache_invalidated.clear()
+        if not self.ready:
+            _logger.warning('Calling signal_changes when registry is not ready is not suported')
             return
 
         if self.registry_invalidated:

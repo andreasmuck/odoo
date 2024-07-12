@@ -2,8 +2,8 @@
 
 import ast
 from dateutil.relativedelta import relativedelta
-
-from odoo import api, fields, models, SUPERUSER_ID, _
+from odoo.exceptions import ValidationError
+from odoo import api, fields, models, _
 from odoo.exceptions import UserError
 from odoo.osv import expression
 
@@ -190,7 +190,9 @@ class MaintenanceEquipment(models.Model):
         """ Read group customization in order to display all the categories in
             the kanban view, even if they are empty.
         """
-        category_ids = categories._search([], order=categories._order, access_rights_uid=SUPERUSER_ID)
+        # bypass ir.model.access checks, but search with ir.rules
+        search_domain = self.env['ir.rule']._compute_domain(categories._name)
+        category_ids = categories.sudo()._search(search_domain, order=categories._order)
         return categories.browse(category_ids)
 
 
@@ -277,6 +279,12 @@ class MaintenanceRequest(models.Model):
         # self.write({'active': True, 'stage_id': first_stage_obj.id})
         self.write({'archive': False, 'stage_id': first_stage_obj.id})
 
+    @api.constrains('repeat_interval')
+    def _check_repeat_interval(self):
+        for record in self:
+            if record.repeat_interval < 1:
+                raise ValidationError("Repeat Interval cannot be less than 1.")
+
     @api.depends('company_id', 'equipment_id')
     def _compute_maintenance_team_id(self):
         for request in self:
@@ -361,7 +369,7 @@ class MaintenanceRequest(models.Model):
                 date_deadline=date_dl,
                 new_user_id=request.user_id.id or request.owner_user_id.id or self.env.uid)
             if not updated:
-                note = self._get_activity_note()
+                note = request._get_activity_note()
                 request.activity_schedule(
                     'maintenance.mail_act_maintenance_request',
                     fields.Datetime.from_string(request.schedule_date).date(),
@@ -377,7 +385,7 @@ class MaintenanceRequest(models.Model):
         """ Read group customization in order to display all the stages in the
             kanban view, even if they are empty
         """
-        stage_ids = stages._search([], order=stages._order, access_rights_uid=SUPERUSER_ID)
+        stage_ids = stages.sudo()._search([], order=stages._order)
         return stages.browse(stage_ids)
 
 

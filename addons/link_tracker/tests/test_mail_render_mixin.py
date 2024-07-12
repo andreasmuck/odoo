@@ -5,7 +5,8 @@ import re
 from markupsafe import Markup
 
 from odoo.tests import common, tagged
-from odoo.tools import TEXT_URL_REGEX, mute_logger
+from odoo.tools import mute_logger
+from odoo.tools.mail import TEXT_URL_REGEX
 
 
 @tagged('-at_install', 'post_install')
@@ -40,6 +41,7 @@ class TestMailRenderMixin(common.HttpCase):
             '<a href="#"></a>',
             '<a href="mailto:afunemail@somewhere.com">email label</a>',
             '<a href="https://www.odoo.com?test=%20+3&amp;this=that">THERE > there</a>',
+            '<a >Without href</a>'
         ]
 
         self.env["mail.render.mixin"]._shorten_links("".join(test_links), {})
@@ -67,6 +69,7 @@ class TestMailRenderMixin(common.HttpCase):
         trackers_to_fail = [
             [("url", "=", "https://test_542152qsdqsd.com"), ("label", "ilike", "_")],
             [("url", "ilike", "%mailto:afunemail@somewhere.com")],
+            [("label", '=', 'Without href')]
         ]
 
         for tracker_to_find in trackers_to_find:

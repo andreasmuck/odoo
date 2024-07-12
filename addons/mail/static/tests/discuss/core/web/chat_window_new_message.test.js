@@ -1,10 +1,5 @@
-import { describe, expect, test } from "@odoo/hoot";
+import { describe, test } from "@odoo/hoot";
 
-import {
-    CHAT_WINDOW_END_GAP_WIDTH,
-    CHAT_WINDOW_INBETWEEN_WIDTH,
-    CHAT_WINDOW_WIDTH,
-} from "@mail/core/common/chat_window_service";
 import {
     click,
     contains,
@@ -13,7 +8,7 @@ import {
     patchUiSize,
     start,
     startServer,
-} from "../../../mail_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
 import { Command, serverState } from "@web/../tests/web_test_helpers";
 
 describe.current.tags("desktop");
@@ -29,7 +24,7 @@ test("basic rendering", async () => {
     await contains(".o-mail-ChatWindow-header .o-mail-ChatWindow-command", { count: 2 });
     await contains(".o-mail-ChatWindow-header .o-mail-ChatWindow-command[title='Fold']");
     await contains(
-        ".o-mail-ChatWindow-header .o-mail-ChatWindow-command[title='Close Chat Window']"
+        ".o-mail-ChatWindow-header .o-mail-ChatWindow-command[title*='Close Chat Window']"
     );
     await contains("span", { text: "To :" });
     await contains(".o-discuss-ChannelSelector");
@@ -46,7 +41,7 @@ test("close", async () => {
     await start();
     await click(".o_menu_systray i[aria-label='Messages']");
     await click("button", { text: "New Message" });
-    await click(".o-mail-ChatWindow-command[title='Close Chat Window']");
+    await click(".o-mail-ChatWindow-command[title*='Close Chat Window']");
     await contains(".o-mail-ChatWindow", { count: 0 });
 });
 
@@ -57,11 +52,10 @@ test("fold", async () => {
     await contains(".o-discuss-ChannelSelector");
     await click(".o-mail-ChatWindow-command[title='Fold']");
     await contains(".o-mail-ChatWindow .o-discuss-ChannelSelector", { count: 0 });
-    await click(".o-mail-ChatWindow-command[title='Open']");
-    await contains(".o-discuss-ChannelSelector");
+    await contains(".o-mail-ChatWindow", { count: 0 });
 });
 
-test('open chat from "new message" chat window should open chat in place of this "new message" chat window', async () => {
+test('open chat from "new message" chat window should open new chat', async () => {
     const pyEnv = await startServer();
     const partnerId = pyEnv["res.partner"].create({ name: "Partner 131" });
     pyEnv["res.users"].create({ partner_id: partnerId });
@@ -80,18 +74,13 @@ test('open chat from "new message" chat window should open chat in place of this
         },
     ]);
     patchUiSize({ width: 1920 });
-    expect(
-        CHAT_WINDOW_END_GAP_WIDTH * 2 + CHAT_WINDOW_WIDTH * 3 + CHAT_WINDOW_INBETWEEN_WIDTH * 2
-    ).toBeLessThan(1920, {
-        message: "should have enough space to open 3 chat windows simultaneously",
-    });
     await start();
     // open "new message" chat window
     await click(".o_menu_systray i[aria-label='Messages']");
     await contains(".o-mail-ChatWindow", { text: "channel-1" });
     await click("button", { text: "New Message" });
     await contains(".o-mail-ChatWindow", { count: 2 });
-    await contains(":nth-child(2 of .o-mail-ChatWindow)", { text: "New message" });
+    await contains(":nth-child(1 of .o-mail-ChatWindow)", { text: "New message" });
     await contains(".o-mail-ChatWindow .o-discuss-ChannelSelector");
     // open channel-2
     await click(".o_menu_systray i[aria-label='Messages']");
@@ -102,7 +91,7 @@ test('open chat from "new message" chat window should open chat in place of this
     await insertText(".o-discuss-ChannelSelector input", "131");
     await click(".o-discuss-ChannelSelector-suggestion a", { text: "Partner 131" });
     await contains(".o-mail-ChatWindow", { count: 0, text: "New message" });
-    await contains(":nth-child(2 of .o-mail-ChatWindow)", { text: "Partner 131" });
+    await contains(":nth-child(1 of .o-mail-ChatWindow)", { text: "Partner 131" });
 });
 
 test("new message chat window should close on selecting the user if chat with the user is already open", async () => {
@@ -140,7 +129,7 @@ test("new message autocomplete should automatically select first result", async 
     await contains(".o-discuss-ChannelSelector-suggestion a.o-mail-NavigableList-active");
 });
 
-test('open chat from "new message" chat window should unfold existing window', async () => {
+test('open chat from "new message" should open chat window', async () => {
     const pyEnv = await startServer();
     const partnerId = pyEnv["res.partner"].create({ name: "John" });
     pyEnv["res.users"].create({ partner_id: partnerId });

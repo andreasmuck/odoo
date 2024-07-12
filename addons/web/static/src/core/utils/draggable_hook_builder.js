@@ -1,4 +1,5 @@
 import { clamp } from "@web/core/utils/numbers";
+import { omit } from "@web/core/utils/objects";
 import { closestScrollableX, closestScrollableY } from "@web/core/utils/scrolling";
 import { setRecurringAnimationFrame } from "@web/core/utils/timing";
 import { browser } from "../browser/browser";
@@ -56,6 +57,7 @@ import { hasTouch, isBrowserFirefox, isIOS } from "../browser/feature_detection"
  * @property {DOMRect | null} [current.scrollParentXRect]
  * @property {HTMLElement | null} [current.scrollParentY]
  * @property {DOMRect | null} [current.scrollParentYRect]
+ * @property {"left"|"right"|"top"|"bottom"|null} [scrollingEdge]
  * @property {number} [timeout]
  * @property {Position} [initialPosition]
  * @property {Position} [offset={ x: 0, y: 0 }]
@@ -64,6 +66,7 @@ import { hasTouch, isBrowserFirefox, isIOS } from "../browser/feature_detection"
  * @property {boolean} [enabled=true]
  * @property {number} [speed=10]
  * @property {number} [threshold=20]
+ * @property {"horizontal"|"vertical"} [direction]
  *
  * @typedef Position
  * @property {number} x
@@ -105,7 +108,7 @@ const DEFAULT_DEFAULT_PARAMS = {
     },
     delay: 0,
     tolerance: 10,
-    touch_delay: 300,
+    touchDelay: 300,
 };
 const LEFT_CLICK = 0;
 const MANDATORY_PARAMS = ["ref"];
@@ -435,6 +438,7 @@ export function makeDraggableHook(hookParams) {
      * @returns {Error}
      */
     const makeError = (reason) => new Error(`Error in hook ${hookName}: ${reason}.`);
+    let preventClick = false;
 
     return {
         [hookName](params) {
@@ -483,7 +487,7 @@ export function makeDraggableHook(hookParams) {
                 return (
                     !ctx.tolerance ||
                     Math.hypot(pointer.x - initialPosition.x, pointer.y - initialPosition.y) >=
-                    ctx.tolerance
+                        ctx.tolerance
                 );
             };
 
@@ -492,6 +496,7 @@ export function makeDraggableHook(hookParams) {
              */
             const dragStart = () => {
                 state.dragging = true;
+                state.willDrag = false;
 
                 // Compute scrollable parent
                 [ctx.current.scrollParentX, ctx.current.scrollParentY] = getScrollParents(
@@ -552,6 +557,7 @@ export function makeDraggableHook(hookParams) {
              */
             const dragEnd = (target, inErrorState) => {
                 if (state.dragging) {
+                    preventClick = true;
                     if (!inErrorState) {
                         if (target) {
                             callBuildHandler("onDrop", { target });
@@ -569,39 +575,55 @@ export function makeDraggableHook(hookParams) {
              */
             const handleEdgeScrolling = (deltaTime) => {
                 updateRects();
-                const eRect = ctx.current.elementRect;
+                const { x: pointerX, y: pointerY } = ctx.pointer;
                 const xRect = ctx.current.scrollParentXRect;
                 const yRect = ctx.current.scrollParentYRect;
 
-                const { speed, threshold } = ctx.edgeScrolling;
+                const { direction, speed, threshold } = ctx.edgeScrolling;
                 const correctedSpeed = (speed / 16) * deltaTime;
 
                 const diff = {};
-
+                ctx.current.scrollingEdge = null;
                 if (xRect) {
                     const maxWidth = xRect.x + xRect.width;
-                    if (eRect.x - xRect.x < threshold) {
-                        diff.x = [eRect.x - xRect.x, -1];
-                    } else if (maxWidth - eRect.x - eRect.width < threshold) {
-                        diff.x = [maxWidth - eRect.x - eRect.width, 1];
+                    if (pointerX - xRect.x < threshold) {
+                        diff.x = [pointerX - xRect.x, -1];
+                        ctx.current.scrollingEdge = "left";
+                    } else if (maxWidth - pointerX < threshold) {
+                        diff.x = [maxWidth - pointerX, 1];
+                        ctx.current.scrollingEdge = "right";
                     }
                 }
                 if (yRect) {
                     const maxHeight = yRect.y + yRect.height;
-                    if (eRect.y - yRect.y < threshold) {
-                        diff.y = [eRect.y - yRect.y, -1];
-                    } else if (maxHeight - eRect.y - eRect.height < threshold) {
-                        diff.y = [maxHeight - eRect.y - eRect.height, 1];
+                    if (pointerY - yRect.y < threshold) {
+                        diff.y = [pointerY - yRect.y, -1];
+                        ctx.current.scrollingEdge = "top";
+                    } else if (maxHeight - pointerY < threshold) {
+                        diff.y = [maxHeight - pointerY, 1];
+                        ctx.current.scrollingEdge = "bottom";
                     }
                 }
 
                 const diffToScroll = ([delta, sign]) =>
-                    (1 - clamp(delta, 0, threshold) / threshold) * correctedSpeed * sign;
-                if (diff.y) {
+                    (1 - Math.max(delta, 0) / threshold) * correctedSpeed * sign;
+                if ((!direction || direction === "vertical") && diff.y) {
                     ctx.current.scrollParentY.scrollBy({ top: diffToScroll(diff.y) });
                 }
-                if (diff.x) {
+                if ((!direction || direction === "horizontal") && diff.x) {
                     ctx.current.scrollParentX.scrollBy({ left: diffToScroll(diff.x) });
+                }
+                callBuildHandler("onDrag");
+            };
+
+            /**
+             * Global (= ref) "click" event handler.
+             * Used to prevent click events after dragEnd
+             * @param {PointerEvent} ev
+             */
+            const onClick = (ev) => {
+                if (preventClick) {
+                    safePrevent(ev, { stop: true });
                 }
             };
 
@@ -633,9 +655,10 @@ export function makeDraggableHook(hookParams) {
              * @param {PointerEvent} ev
              */
             const onPointerDown = (ev) => {
+                preventClick = false;
                 updatePointerPosition(ev);
 
-                const initiationDelay = ev.pointerType === "touch" ? ctx.touch_delay : ctx.delay;
+                const initiationDelay = ev.pointerType === "touch" ? ctx.touchDelay : ctx.delay;
 
                 // A drag sequence can still be in progress if the pointerup occurred
                 // outside of the window.
@@ -679,7 +702,7 @@ export function makeDraggableHook(hookParams) {
                             // On Firefox mobile, long-touch events trigger an unpreventable
                             // context menu to appear. To prevent this, all linkes are removed
                             // from the dragged elements during the drag sequence.
-                            const links = [...currentTarget.querySelectorAll("[href")];
+                            const links = [...currentTarget.querySelectorAll("[href]")];
                             if (currentTarget.hasAttribute("href")) {
                                 links.unshift(currentTarget);
                             }
@@ -781,6 +804,19 @@ export function makeDraggableHook(hookParams) {
                 const { container, element, scrollParentX, scrollParentY } = current;
                 // Container rect
                 current.containerRect = dom.getRect(container, { adjust: true });
+                // If the scrolling element is within an iframe and the draggable
+                // element is outside this iframe, the offsets must be computed taking
+                // into account the iframe.
+                let iframeOffsetX = 0;
+                let iframeOffsetY = 0;
+                const iframeEl = container.ownerDocument.defaultView.frameElement;
+                if (iframeEl && !iframeEl.contentDocument.contains(element)) {
+                    const { x, y } = dom.getRect(iframeEl);
+                    iframeOffsetX = x;
+                    iframeOffsetY = y;
+                    current.containerRect.x += iframeOffsetX;
+                    current.containerRect.y += iframeOffsetY;
+                }
                 // Adjust container rect according to its overflowing size
                 current.containerRect.width = container.scrollWidth;
                 current.containerRect.height = container.scrollHeight;
@@ -791,6 +827,8 @@ export function makeDraggableHook(hookParams) {
                     // Adjust container rect according to scrollParents
                     if (scrollParentX) {
                         current.scrollParentXRect = dom.getRect(scrollParentX, { adjust: true });
+                        current.scrollParentXRect.x += iframeOffsetX;
+                        current.scrollParentXRect.y += iframeOffsetY;
                         const right = Math.min(
                             current.containerRect.left + container.scrollWidth,
                             current.scrollParentXRect.right
@@ -803,6 +841,8 @@ export function makeDraggableHook(hookParams) {
                     }
                     if (scrollParentY) {
                         current.scrollParentYRect = dom.getRect(scrollParentY, { adjust: true });
+                        current.scrollParentYRect.x += iframeOffsetX;
+                        current.scrollParentYRect.y += iframeOffsetY;
                         const bottom = Math.min(
                             current.containerRect.top + container.scrollHeight,
                             current.scrollParentYRect.bottom
@@ -827,6 +867,7 @@ export function makeDraggableHook(hookParams) {
                 ctx.current.container = ctx.ref.el;
 
                 cleanup.add(() => (ctx.current = {}));
+                state.willDrag = true;
 
                 callBuildHandler("onWillStartDrag");
 
@@ -891,6 +932,9 @@ export function makeDraggableHook(hookParams) {
                 get dragging() {
                     return state.dragging;
                 },
+                get willDrag() {
+                    return state.willDrag;
+                },
                 // Current context
                 current: {},
             };
@@ -898,7 +942,15 @@ export function makeDraggableHook(hookParams) {
             // Effect depending on the params to update them.
             setupHooks.setup(
                 (...deps) => {
-                    const actualParams = { ...defaultParams, ...Object.fromEntries(deps) };
+                    const params = Object.fromEntries(deps);
+                    const actualParams = { ...defaultParams, ...omit(params, "edgeScrolling") };
+                    if (params.edgeScrolling) {
+                        actualParams.edgeScrolling = {
+                            ...actualParams.edgeScrolling,
+                            ...params.edgeScrolling,
+                        };
+                    }
+
                     if (!ctx.ref.el) {
                         return;
                     }
@@ -933,7 +985,7 @@ export function makeDraggableHook(hookParams) {
 
                     // Delay & tolerance
                     ctx.delay = actualParams.delay;
-                    ctx.touch_delay = actualParams.delay || actualParams.touch_delay;
+                    ctx.touchDelay = actualParams.delay || actualParams.touchDelay;
                     ctx.tolerance = actualParams.tolerance;
 
                     callBuildHandler("onComputeParams", { params: actualParams });
@@ -955,6 +1007,7 @@ export function makeDraggableHook(hookParams) {
                         const { addListener } = makeDOMHelpers({ add });
                         const event = useMouseEvents ? "mousedown" : "pointerdown";
                         addListener(el, event, onPointerDown, { noAddedStyle: true });
+                        addListener(el, "click", onClick);
                         if (hasTouch()) {
                             addListener(el, "contextmenu", safePrevent);
                             // Adds a non-passive listener on touchstart: this allows
@@ -963,7 +1016,7 @@ export function makeDraggableHook(hookParams) {
                             // be fired. Note that we DO NOT want to prevent touchstart
                             // events since they're responsible of the native swipe
                             // scrolling.
-                            addListener(el, "touchstart", () => { }, {
+                            addListener(el, "touchstart", () => {}, {
                                 passive: false,
                                 noAddedStyle: true,
                             });
@@ -981,9 +1034,11 @@ export function makeDraggableHook(hookParams) {
             };
             // Other global event listeners.
             const throttledOnPointerMove = setupHooks.throttle(onPointerMove);
-            addWindowListener(useMouseEvents ? "mousemove" : "pointermove", throttledOnPointerMove, {
-                passive: false,
-            });
+            addWindowListener(
+                useMouseEvents ? "mousemove" : "pointermove",
+                throttledOnPointerMove,
+                { passive: false }
+            );
             addWindowListener(useMouseEvents ? "mouseup" : "pointerup", onPointerUp);
             addWindowListener("pointercancel", onPointerCancel);
             addWindowListener("keydown", onKeyDown, { capture: true });

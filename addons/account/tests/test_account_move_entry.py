@@ -12,8 +12,11 @@ from collections import defaultdict
 class TestAccountMove(AccountTestInvoicingCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
+
+        cls.company_data_2 = cls.setup_other_company()
+        cls.other_currency = cls.setup_other_currency('HRK')
 
         tax_repartition_line = cls.company_data['default_tax_sale'].refund_repartition_line_ids\
             .filtered(lambda line: line.repartition_type == 'tax')
@@ -61,6 +64,11 @@ class TestAccountMove(AccountTestInvoicingCommon):
             'debit': 0.0,
             'credit': 500.0,
         }
+
+    @classmethod
+    def default_env_context(cls):
+        # OVERRIDE
+        return {}
 
     def test_out_invoice_auto_post_at_date(self):
         # Create auto-posted (but not recurring) entry
@@ -122,7 +130,7 @@ class TestAccountMove(AccountTestInvoicingCommon):
 
         # The currency set on the account is not the same as the one set on the company.
         # It should raise an error.
-        custom_account.currency_id = self.currency_data['currency']
+        custom_account.currency_id = self.other_currency
 
         with self.assertRaises(UserError), self.cr.savepoint():
             self.test_move.line_ids[0].account_id = custom_account
@@ -136,7 +144,7 @@ class TestAccountMove(AccountTestInvoicingCommon):
     def test_fiscal_position_multicompany(self):
         """A move is assigned a fiscal position that matches its own company."""
         company1 = self.company_data["company"]
-        company2 = self.company_data_2["company"]
+        company2 = self._create_company(name='company2')
         partner = self.env['res.partner'].create({'name': 'Belouga'})
         fpos1 = self.env["account.fiscal.position"].create(
             {
@@ -170,49 +178,9 @@ class TestAccountMove(AccountTestInvoicingCommon):
         # Editing the reference should be allowed.
         self.test_move.ref = 'whatever'
 
-        # Try to edit a line into a locked fiscal year.
-        with self.assertRaises(UserError), self.cr.savepoint():
-            self.test_move.write({
-                'line_ids': [
-                    (1, lines[0].id, {'credit': lines[0].credit + 100.0}),
-                    (1, lines[2].id, {'debit': lines[2].debit + 100.0}),
-                ],
-            })
-
         # Try to edit the account of a line.
         with self.assertRaises(UserError), self.cr.savepoint():
             self.test_move.line_ids[0].write({'account_id': self.test_move.line_ids[0].account_id.copy().id})
-
-        # Try to edit a line.
-        with self.assertRaises(UserError), self.cr.savepoint():
-            self.test_move.write({
-                'line_ids': [
-                    (1, lines[0].id, {'credit': lines[0].credit + 100.0}),
-                    (1, lines[3].id, {'debit': lines[3].debit + 100.0}),
-                ],
-            })
-
-        # Try to add a new tax on a line.
-        with self.assertRaises(UserError), self.cr.savepoint():
-            self.test_move.write({
-                'line_ids': [
-                    (1, lines[2].id, {'tax_ids': [(6, 0, self.company_data['default_tax_purchase'].ids)]}),
-                ],
-            })
-
-        # Try to create a new line.
-        with self.assertRaises(UserError), self.cr.savepoint():
-            self.test_move.write({
-                'line_ids': [
-                    (1, lines[0].id, {'credit': lines[0].credit + 100.0}),
-                    (0, None, {
-                        'name': 'revenue line 1',
-                        'account_id': self.company_data['default_account_revenue'].id,
-                        'debit': 100.0,
-                        'credit': 0.0,
-                    }),
-                ],
-            })
 
         # You can't remove the journal entry from a locked period.
         with self.assertRaises(UserError), self.cr.savepoint():
@@ -259,70 +227,8 @@ class TestAccountMove(AccountTestInvoicingCommon):
         # lines[3] = 'revenue line 2'
         lines = self.test_move.line_ids.sorted('debit')
 
-        # Try to edit a line not affecting the taxes.
-        self.test_move.write({
-            'line_ids': [
-                (1, lines[0].id, {'credit': lines[0].credit + 100.0}),
-                (1, lines[2].id, {'debit': lines[2].debit + 100.0}),
-            ],
-        })
-
         # Try to edit the account of a line.
         self.test_move.line_ids[0].write({'account_id': self.test_move.line_ids[0].account_id.copy().id})
-
-        # Try to edit a line having some taxes.
-        with self.assertRaises(UserError), self.cr.savepoint():
-            self.test_move.write({
-                'line_ids': [
-                    (1, lines[0].id, {'credit': lines[0].credit + 100.0}),
-                    (1, lines[3].id, {'debit': lines[3].debit + 100.0}),
-                ],
-            })
-
-        # Try to add a new tax on a line.
-        with self.assertRaises(UserError), self.cr.savepoint():
-            self.test_move.write({
-                'line_ids': [
-                    (1, lines[2].id, {'tax_ids': [(6, 0, self.company_data['default_tax_purchase'].ids)]}),
-                ],
-            })
-
-        # Try to edit a tax line.
-        with self.assertRaises(UserError), self.cr.savepoint():
-            self.test_move.write({
-                'line_ids': [
-                    (1, lines[0].id, {'credit': lines[0].credit + 100.0}),
-                    (1, lines[1].id, {'debit': lines[1].debit + 100.0}),
-                ],
-            })
-
-        # Try to create a line not affecting the taxes.
-        self.test_move.write({
-            'line_ids': [
-                (1, lines[0].id, {'credit': lines[0].credit + 100.0}),
-                (0, None, {
-                    'name': 'revenue line 1',
-                    'account_id': self.company_data['default_account_revenue'].id,
-                    'debit': 100.0,
-                    'credit': 0.0,
-                }),
-            ],
-        })
-
-        # Try to create a line affecting the taxes.
-        with self.assertRaises(UserError), self.cr.savepoint():
-            self.test_move.write({
-                'line_ids': [
-                    (1, lines[0].id, {'credit': lines[0].credit + 100.0}),
-                    (0, None, {
-                        'name': 'revenue line 2',
-                        'account_id': self.company_data['default_account_revenue'].id,
-                        'debit': 100.0,
-                        'credit': 0.0,
-                        'tax_ids': [(6, 0, self.company_data['default_tax_sale'].ids)],
-                    }),
-                ],
-            })
 
         # You can't remove the journal entry from a locked period.
         with self.assertRaises(UserError), self.cr.savepoint():
@@ -393,26 +299,19 @@ class TestAccountMove(AccountTestInvoicingCommon):
 
         (lines[0] + lines[2]).reconcile()
 
-        # You can't write something impacting the reconciliation on an already reconciled line.
-        with self.assertRaises(UserError), self.cr.savepoint():
-            draft_moves[0].write({
-                'line_ids': [
-                    (1, lines[1].id, {'credit': lines[1].credit + 100.0}),
-                    (1, lines[2].id, {'debit': lines[2].debit + 100.0}),
-                ]
-            })
-
-        # The write must not raise anything because the rounding of the monetary field should ignore such tiny amount.
-        draft_moves[0].write({
-            'line_ids': [
-                (1, lines[1].id, {'credit': lines[1].credit + 0.0000001}),
-                (1, lines[2].id, {'debit': lines[2].debit + 0.0000001}),
-            ]
-        })
-
         # You can't unlink an already reconciled line.
         with self.assertRaises(UserError), self.cr.savepoint():
             draft_moves.unlink()
+
+    def test_modify_posted_move_readonly_fields(self):
+        self.test_move.action_post()
+
+        readonly_fields = ('invoice_line_ids', 'line_ids', 'invoice_date', 'date', 'partner_id', 'partner_bank_id',
+                           'invoice_payment_term_id', 'currency_id', 'fiscal_position_id', 'invoice_cash_rounding_id')
+        for field in readonly_fields:
+            with self.assertRaisesRegex(UserError, "You cannot modify the following readonly fields on a posted move"), \
+                    self.cr.savepoint():
+                self.test_move.write({field: False})
 
     def test_add_followers_on_post(self):
         # Add some existing partners, some from another company
@@ -446,14 +345,14 @@ class TestAccountMove(AccountTestInvoicingCommon):
         with move_form.line_ids.new() as line_form:
             line_form.name = 'debit_line'
             line_form.account_id = self.company_data['default_account_revenue']
-            line_form.currency_id = self.currency_data['currency']
+            line_form.currency_id = self.other_currency
             line_form.amount_currency = 1200.0
 
         # New line that should get 400.0 as credit.
         with move_form.line_ids.new() as line_form:
             line_form.name = 'credit_line'
             line_form.account_id = self.company_data['default_account_revenue']
-            line_form.currency_id = self.currency_data['currency']
+            line_form.currency_id = self.other_currency
             line_form.amount_currency = -1200.0
         move = move_form.save()
 
@@ -461,13 +360,13 @@ class TestAccountMove(AccountTestInvoicingCommon):
             move.line_ids.sorted('debit'),
             [
                 {
-                    'currency_id': self.currency_data['currency'].id,
+                    'currency_id': self.other_currency.id,
                     'amount_currency': -1200.0,
                     'debit': 0.0,
                     'credit': 400.0,
                 },
                 {
-                    'currency_id': self.currency_data['currency'].id,
+                    'currency_id': self.other_currency.id,
                     'amount_currency': 1200.0,
                     'debit': 400.0,
                     'credit': 0.0,
@@ -483,13 +382,13 @@ class TestAccountMove(AccountTestInvoicingCommon):
             move.line_ids.sorted('debit'),
             [
                 {
-                    'currency_id': self.currency_data['currency'].id,
+                    'currency_id': self.other_currency.id,
                     'amount_currency': -1200.0,
                     'debit': 0.0,
                     'credit': 600.0,
                 },
                 {
-                    'currency_id': self.currency_data['currency'].id,
+                    'currency_id': self.other_currency.id,
                     'amount_currency': 1200.0,
                     'debit': 600.0,
                     'credit': 0.0,
@@ -507,13 +406,13 @@ class TestAccountMove(AccountTestInvoicingCommon):
             move.line_ids.sorted('debit'),
             [
                 {
-                    'currency_id': self.currency_data['currency'].id,
+                    'currency_id': self.other_currency.id,
                     'amount_currency': -1200.0,
                     'debit': 0.0,
                     'credit': 200.0,
                 },
                 {
-                    'currency_id': self.currency_data['currency'].id,
+                    'currency_id': self.other_currency.id,
                     'amount_currency': 1200.0,
                     'debit': 200.0,
                     'credit': 0.0,
@@ -592,7 +491,7 @@ class TestAccountMove(AccountTestInvoicingCommon):
             'move_type': 'entry',
             'partner_id': self.partner_a.id,
             'date': fields.Date.from_string('2019-01-01'),
-            'currency_id': self.currency_data['currency'].id,
+            'currency_id': self.other_currency.id,
             'line_ids': [
                 (0, None, self.entry_line_vals_1),
                 (0, None, self.entry_line_vals_2),
@@ -887,7 +786,7 @@ class TestAccountMove(AccountTestInvoicingCommon):
                     Command.create({
                         'name': "line1",
                         'account_id': self.company_data['default_account_receivable'].id,
-                        'currency_id': self.currency_data['currency'].id,
+                        'currency_id': self.other_currency.id,
                         'balance': 400.0,
                         'amount_currency': 1200.0,
                     }),
@@ -904,7 +803,7 @@ class TestAccountMove(AccountTestInvoicingCommon):
                     Command.create({
                         'name': "line1",
                         'account_id': self.company_data['default_account_receivable'].id,
-                        'currency_id': self.currency_data['currency'].id,
+                        'currency_id': self.other_currency.id,
                         'balance': -600.0,
                         'amount_currency': -1200.0,
                     }),
@@ -1063,6 +962,48 @@ class TestAccountMove(AccountTestInvoicingCommon):
             move_form.journal_id, journal = journal, move_form.journal_id
             self.assertEqual(move_form.name, 'AJ/2021/10/0001')
 
+    def test_change_journal_posted_before(self):
+        """ Changes to a move posted before can only de done if move name is '/' or empty (False) """
+        journal = self.env['account.journal'].create({
+            'name': 'awesome journal',
+            'type': 'general',
+            'code': 'AJ',
+        })
+        self.test_move.action_post()
+        self.test_move.button_draft()  # move has posted_before == True
+        self.assertEqual(self.test_move.journal_id, self.company_data['default_journal_misc'])
+        self.assertEqual(self.test_move.name, 'MISC/2016/01/0001')
+        with self.assertRaisesRegex(UserError, 'You cannot edit the journal of an account move if it has been posted once, unless the name is removed or set to "/". This might create a gap in the sequence.'):
+            self.test_move.write({'journal_id': False})
+        # Once move name in draft is changed to '/', changing the journal is allowed
+        self.test_move.name = '/'
+        self.test_move.journal_id = journal
+        self.assertEqual(self.test_move.name, 'AJ/2016/01/0001')
+        self.assertEqual(self.test_move.journal_id, journal)
+
+    def test_change_journal_sequence_number(self):
+        """ Changes to an account move with a sequence number assigned can only de done
+        if the move name is '/' or empty (False)
+        """
+        journal = self.env['account.journal'].create({
+            'name': 'awesome journal',
+            'type': 'general',
+            'code': 'AJ',
+        })
+        # Post move with sequence number 1 and create new move with sequence number 2
+        self.test_move.action_post()
+        test_move_2 = self.test_move.copy({'name': 'TEST/2016/01/0002', 'date': '2016-01-01'})
+        self.assertEqual(test_move_2.sequence_number, 2)
+        self.assertEqual(test_move_2.journal_id, self.company_data['default_journal_misc'])
+        with self.assertRaisesRegex(UserError, 'You cannot edit the journal of an account move with a sequence number assigned, unless the name is removed or set to "/". This might create a gap in the sequence.'):
+            test_move_2.write({'journal_id': False})
+        # Once move name in draft is changed to '/', changing the journal is allowed
+        test_move_2.write({'name': '/', 'journal_id': journal.id})
+        test_move_2.action_post()
+        # Sequence number is updated for the new journal
+        self.assertEqual(test_move_2.sequence_number, 1)
+        self.assertEqual(test_move_2.journal_id, journal)
+
     def test_manually_modifying_taxes(self):
         """Manually modifying taxes on a move should not automatically recompute them"""
         move = self.env['account.move'].create({
@@ -1203,3 +1144,26 @@ class TestAccountMove(AccountTestInvoicingCommon):
             for (balance, cumulated_balance), read_result in zip(expected, read_results):
                 self.assertAlmostEqual(balance, read_result['balance'])
                 self.assertAlmostEqual(cumulated_balance, read_result['cumulated_balance'])
+
+    def test_move_line_rounding(self):
+        """Whatever arguments we give to the creation of an account move,
+        in every case the amounts should be properly rounded to the currency's precision.
+        In other words, we don't fall victim of the limitation introduced by 9d87d15db6dd40
+
+        Here the rounding should be done according to company_currency_id, which is a related
+        on move_id.company_id.currency_id.
+        In principle, it should not be necessary to add it to the create values,
+        since it is supposed to be computed by the ORM...
+        """
+        move = self.env['account.move'].create({
+            'line_ids': [
+                (0, 0, {'debit': 100.0 / 3, 'account_id': self.company_data['default_account_revenue'].id}),
+                (0, 0, {'credit': 100.0 / 3, 'account_id': self.company_data['default_account_revenue'].id}),
+            ],
+        })
+
+        self.assertEqual(
+            [(33.33, 0.0), (0.0, 33.33)],
+            move.line_ids.mapped(lambda x: (x.debit, x.credit)),
+            "Quantities should have been rounded according to the currency."
+        )

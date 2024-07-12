@@ -24,7 +24,7 @@ class HolidaysAllocation(models.Model):
 
     overtime_deductible = fields.Boolean(compute='_compute_overtime_deductible')
     overtime_id = fields.Many2one('hr.attendance.overtime', string='Extra Hours', groups='hr_holidays.group_hr_holidays_user')
-    employee_overtime = fields.Float(related='employee_id.total_overtime')
+    employee_overtime = fields.Float(related='employee_id.total_overtime', groups='base.group_user')
     hr_attendance_overtime = fields.Boolean(related='employee_company_id.hr_attendance_overtime')
 
     @api.depends('holiday_status_id')
@@ -36,7 +36,7 @@ class HolidaysAllocation(models.Model):
     def create(self, vals_list):
         res = super().create(vals_list)
         for allocation in res:
-            if allocation.overtime_deductible and allocation.holiday_type == 'employee':
+            if allocation.overtime_deductible:
                 duration = allocation.number_of_hours_display
                 if duration > allocation.employee_id.total_overtime:
                     raise ValidationError(_('The employee does not have enough overtime hours to request this leave.'))
@@ -57,7 +57,7 @@ class HolidaysAllocation(models.Model):
             employee = allocation.employee_id
             duration = allocation.number_of_hours_display
             overtime_duration = allocation.overtime_id.sudo().duration
-            if overtime_duration != duration:
+            if overtime_duration != -1 * duration:
                 if duration > employee.total_overtime - overtime_duration:
                     raise ValidationError(_('The employee does not have enough extra hours to extend this allocation.'))
                 allocation.overtime_id.sudo().duration = -1 * duration

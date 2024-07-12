@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+from odoo import Command
 from odoo.tests import Form
 from odoo.tests import common
 from odoo.exceptions import ValidationError
@@ -19,7 +20,7 @@ class TestMrpByProduct(common.TransactionCase):
         def create_product(name, route_ids=[]):
             return cls.env['product.product'].create({
                 'name': name,
-                'type': 'product',
+                'is_storable': True,
                 'route_ids': route_ids})
 
         # Create product A, B, C.
@@ -37,7 +38,7 @@ class TestMrpByProduct(common.TransactionCase):
             })
         cls.produced_serial = cls.env['product.product'].create({
             'name': 'Produced Serial',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'serial',
         })
         cls.sn_1 = cls.env['stock.lot'].create({
@@ -318,6 +319,7 @@ class TestMrpByProduct(common.TransactionCase):
             'location_in_id': self.stock_location.id,
             'location_out_id': self.stock_location.id,
             'storage_category_id': stor_category.id,
+            'sublocation': 'closest_location',
         })
         self.env['stock.putaway.rule'].create({
             'product_id': self.product_a.id,
@@ -357,10 +359,10 @@ class TestMrpByProduct(common.TransactionCase):
         # Create product
         self.product_d = self.env['product.product'].create({
                 'name': 'Product D',
-                'type': 'product'})
+                'is_storable': True})
         self.product_e = self.env['product.product'].create({
                 'name': 'Product E',
-                'type': 'product'})
+                'is_storable': True})
 
         # Create byproduct
         byproduct_1 = self.env['stock.move'].create({
@@ -473,3 +475,66 @@ class TestMrpByProduct(common.TransactionCase):
         mo.button_mark_done()
         self.assertEqual(len(mo.move_byproduct_ids.move_line_ids), 2)
         self.assertEqual(mo.move_byproduct_ids.product_id, mo.move_byproduct_ids.move_line_ids.product_id)
+
+    def test_byproduct_qty_update(self):
+        """
+        Test that byproduct quantity is updated to the quantity set on the Mo when the Mo is marked as done.ee
+        """
+        self.bom_byproduct.byproduct_ids.product_qty = 0.0
+        self.warehouse.manufacture_steps = 'pbm_sam'
+        mo = self.env["mrp.production"].create({
+            'product_id': self.product_a.id,
+            'product_qty': 1.0,
+            'bom_id': self.bom_byproduct.id,
+        })
+        mo.action_confirm()
+        mo.move_byproduct_ids.quantity = 1.0
+        mo.button_mark_done()
+        self.assertEqual(mo.state, 'done')
+        picking = mo.picking_ids.filtered(lambda p: p.location_dest_id == self.warehouse.lot_stock_id)
+        self.assertEqual(picking.state, 'assigned')
+        byproduct_move = picking.move_ids.filtered(lambda m: m.product_id == self.bom_byproduct.byproduct_ids.product_id)
+        self.assertEqual(byproduct_move.product_qty, 1.0)
+
+    def test_byproducts_bom_document(self):
+        self.env.user.groups_id += self.env.ref('mrp.group_mrp_byproducts')
+        doc_product_bom = self.env['product.document'].create({
+            'name': 'doc_product_bom',
+            'attached_on_mrp': 'bom',
+            'res_id': self.product_a.id,
+            'res_model': 'product.product',
+        })
+
+        # ensures that the archived docs are not taken into account
+        self.env['product.document'].create({
+            'name': 'doc_product_bom_archived',
+            'active': False,
+            'attached_on_mrp': 'bom',
+            'res_id': self.product_a.id,
+            'res_model': 'product.product',
+        })
+
+        doc_template_bom = self.env['product.document'].create({
+            'name': 'doc_template_bom',
+            'attached_on_mrp': 'bom',
+            'res_id': self.product_a.product_tmpl_id.id,
+            'res_model': 'product.template',
+        })
+
+        attachments = doc_template_bom.ir_attachment_id + doc_product_bom.ir_attachment_id
+
+        bom = self.env['mrp.bom'].create({
+            'product_tmpl_id': self.product_b.product_tmpl_id.id,
+            'product_uom_id': self.product_b.product_tmpl_id.uom_id.id,
+            'product_qty': 1.0,
+            'type': 'normal',
+            'byproduct_ids': [
+                Command.create({
+                    'product_id': self.product_a.id,
+                    'product_qty': 1
+                }),
+            ]
+        })
+
+        # the two docs linked to the byproduct should be in the chatter
+        self.assertEqual(bom._get_extra_attachments(), attachments)

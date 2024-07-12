@@ -29,7 +29,7 @@ from odoo.exceptions import AccessDenied, AccessError, MissingError
 from odoo.http import request, Response, ROUTING_KEYS, Stream
 from odoo.modules.registry import Registry
 from odoo.service import security
-from odoo.tools import get_lang, submap
+from odoo.tools.misc import get_lang, submap
 from odoo.tools.translate import code_translations
 
 _logger = logging.getLogger(__name__)
@@ -153,7 +153,10 @@ class IrHttp(models.AbstractModel):
     @classmethod
     def _authenticate(cls, endpoint):
         auth = 'none' if http.is_cors_preflight(request, endpoint) else endpoint.routing['auth']
+        cls._authenticate_explicit(auth)
 
+    @classmethod
+    def _authenticate_explicit(cls, auth):
         try:
             if request.session.uid is not None:
                 if not security.check_session(request.session, request.env):
@@ -208,7 +211,7 @@ class IrHttp(models.AbstractModel):
                 args[key].check_access_rule('read')
             except (odoo.exceptions.AccessError, odoo.exceptions.MissingError) as e:
                 # custom behavior in case a record is not accessible / has been removed
-                if handle_error := rule.endpoint.original_routing.get('handle_params_access_error'):
+                if handle_error := rule.endpoint.routing.get('handle_params_access_error'):
                     if response := handle_error(e):
                         werkzeug.exceptions.abort(response)
                 if isinstance(e, odoo.exceptions.MissingError):
@@ -239,7 +242,7 @@ class IrHttp(models.AbstractModel):
         model = request.env['ir.attachment']
         attach = model.sudo()._get_serve_attachment(request.httprequest.path)
         if attach and (attach.store_fname or attach.db_datas):
-            return Stream.from_attachment(attach).get_response()
+            return attach._to_http_stream().get_response()
 
     @classmethod
     def _redirect(cls, location, code=303):
@@ -270,9 +273,9 @@ class IrHttp(models.AbstractModel):
 
     @api.autovacuum
     def _gc_sessions(self):
-        ICP = self.env["ir.config_parameter"]
-        max_lifetime = int(ICP.get_param('sessions.max_inactivity_seconds', http.SESSION_LIFETIME))
-        http.root.session_store.vacuum(max_lifetime=max_lifetime)
+        if os.getenv("ODOO_SKIP_GC_SESSIONS"):
+            return
+        http.root.session_store.vacuum(max_lifetime=http.get_session_max_inactivity(self.env))
 
     @api.model
     def get_translations_for_webclient(self, modules, lang):

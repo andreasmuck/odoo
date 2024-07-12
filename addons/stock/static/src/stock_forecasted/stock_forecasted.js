@@ -11,6 +11,7 @@ import { ForecastedDetails } from "./forecasted_details";
 import { ForecastedHeader } from "./forecasted_header";
 import { ForecastedWarehouseFilter } from "./forecasted_warehouse_filter";
 import { Component, onWillStart, useState } from "@odoo/owl";
+import { standardActionServiceProps } from "@web/webclient/actions/action_service";
 
 export class StockForecasted extends Component {
     static template = "stock.Forecasted";
@@ -22,11 +23,7 @@ export class StockForecasted extends Component {
         View,
         ForecastedDetails,
     };
-    static props = {
-        action: Object,
-        actionId: { type: Number, optional: true },
-        className: { type: String, optional: true },
-    };
+    static props = { ...standardActionServiceProps };
     setup() {
         this.orm = useService("orm");
         this.action = useService("action");
@@ -50,7 +47,7 @@ export class StockForecasted extends Component {
         this.reportModelName = `stock.forecasted_product_${isTemplate ? "template" : "product"}`;
         this.warehouses.splice(0, this.warehouses.length);
         this.warehouses.push(...await this.orm.searchRead('stock.warehouse', [],['id', 'name', 'code']));
-        if (!this.context.warehouse) {
+        if (!this.context.warehouse_id) {
             this.updateWarehouse(this.warehouses[0].id);
         }
         const reportValues = await this.orm.call(this.reportModelName, "get_report_values", [], {
@@ -77,12 +74,13 @@ export class StockForecasted extends Component {
                     this.resModel = originalContextAction.active_model;
                 }
             }
+            this.context.active_model = this.resModel;
         }
     }
 
     async updateWarehouse(id) {
-        const hasPreviousValue = this.context.warehouse !== undefined;
-        this.context.warehouse = id;
+        const hasPreviousValue = this.context.warehouse_id !== undefined;
+        this.context.warehouse_id = id;
         if (hasPreviousValue) {
             await this.reloadReport();
         }
@@ -90,6 +88,7 @@ export class StockForecasted extends Component {
 
     async reloadReport() {
         const actionRequest = {
+            id: this.props.action.id,
             type: "ir.actions.client",
             tag: "stock_forecasted",
             context: this.context,
@@ -102,7 +101,7 @@ export class StockForecasted extends Component {
     get graphDomain() {
         const domain = [
             ["state", "=", "forecast"],
-            ["warehouse_id", "=", this.context.warehouse],
+            ["warehouse_id", "=", this.context.warehouse_id],
         ];
         if (this.resModel === "product.template") {
             domain.push(["product_tmpl_id", "=", this.productId]);

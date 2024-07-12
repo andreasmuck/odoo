@@ -6,6 +6,8 @@ from . import ir_http
 from . import res_partner_bank
 from . import account_account_tag
 from . import account_account
+from . import account_order_line_mixin
+from . import account_order_mixin
 from . import account_journal
 from . import account_tax
 from . import account_reconcile_model
@@ -36,9 +38,11 @@ from . import res_users
 from . import ir_attachment
 from . import ir_actions_report
 from . import ir_module
+from . import ir_ui_menu
+from . import mail_message
+from . import mail_tracking_value
 from . import res_currency
 from . import account_report
-from . import onboarding_onboarding
 from . import onboarding_onboarding_step
 from . import template_generic_coa
 from . import uom_uom

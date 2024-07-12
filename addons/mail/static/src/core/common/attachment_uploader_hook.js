@@ -10,18 +10,18 @@ function dataUrlToBlob(data, type) {
 }
 
 export class AttachmentUploader {
-    constructor(thread, { composer, onFileUploaded } = {}) {
+    constructor(thread, { composer } = {}) {
         this.attachmentUploadService = useService("mail.attachment_upload");
-        Object.assign(this, { thread, composer, onFileUploaded });
+        Object.assign(this, { thread, composer });
     }
 
-    uploadData({ data, name, type }) {
+    uploadData({ data, name, type }, options) {
         const file = new File([dataUrlToBlob(data, type)], name, { type });
-        return this.uploadFile(file);
+        return this.uploadFile(file, options);
     }
 
     async uploadFile(file, options) {
-        return this.attachmentUploadService.uploadFile(this, file, options);
+        return this.attachmentUploadService.upload(this.thread, this.composer, file, options);
     }
 
     async unlink(attachment) {

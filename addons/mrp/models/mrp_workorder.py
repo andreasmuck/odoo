@@ -6,7 +6,7 @@ from dateutil.relativedelta import relativedelta
 from collections import defaultdict
 import json
 
-from odoo import api, fields, models, _, SUPERUSER_ID
+from odoo import api, fields, models, _
 from odoo.exceptions import UserError, ValidationError
 from odoo.tools import float_compare, float_round, format_datetime
 
@@ -19,7 +19,9 @@ class MrpWorkorder(models.Model):
     def _read_group_workcenter_id(self, workcenters, domain):
         workcenter_ids = self.env.context.get('default_workcenter_id')
         if not workcenter_ids:
-            workcenter_ids = workcenters._search([], order=workcenters._order, access_rights_uid=SUPERUSER_ID)
+            # bypass ir.model.access checks, but search with ir.rules
+            search_domain = self.env['ir.rule']._compute_domain(workcenters._name)
+            workcenter_ids = workcenters.sudo()._search(search_domain, order=workcenters._order)
         return workcenters.browse(workcenter_ids)
 
     name = fields.Char(
@@ -33,7 +35,7 @@ class MrpWorkorder(models.Model):
     product_id = fields.Many2one(related='production_id.product_id', readonly=True, store=True, check_company=True)
     product_tracking = fields.Selection(related="product_id.tracking")
     product_uom_id = fields.Many2one('uom.uom', 'Unit of Measure', required=True, readonly=True)
-    production_id = fields.Many2one('mrp.production', 'Manufacturing Order', required=True, check_company=True, readonly=True)
+    production_id = fields.Many2one('mrp.production', 'Manufacturing Order', required=True, check_company=True, readonly=True, index='btree')
     production_availability = fields.Selection(
         string='Stock Availability', readonly=True,
         related='production_id.reservation_state', store=True) # Technical: used in views and domains only
@@ -262,7 +264,7 @@ class MrpWorkorder(models.Model):
 
     @api.constrains('blocked_by_workorder_ids')
     def _check_no_cyclic_dependencies(self):
-        if not self._check_m2m_recursion('blocked_by_workorder_ids'):
+        if self._has_cycle('blocked_by_workorder_ids'):
             raise ValidationError(_("You cannot create cyclic dependency."))
 
     @api.depends('production_id.name')
@@ -436,6 +438,9 @@ class MrpWorkorder(models.Model):
                     if workorder.state in ('progress', 'done', 'cancel'):
                         raise UserError(_('You cannot change the workcenter of a work order that is in progress or done.'))
                     workorder.leave_id.resource_id = self.env['mrp.workcenter'].browse(values['workcenter_id']).resource_id
+                    workorder.duration_expected = workorder._get_duration_expected()
+                    if workorder.date_start:
+                        workorder.date_finished = workorder._calculate_date_finished()
         if 'date_start' in values or 'date_finished' in values:
             for workorder in self:
                 date_start = fields.Datetime.to_datetime(values.get('date_start', workorder.date_start))
@@ -549,38 +554,35 @@ class MrpWorkorder(models.Model):
         return total
 
     @api.model
-    def gantt_unavailability(self, start_date, end_date, scale, group_bys=None, rows=None):
+    def get_gantt_data(self, domain, groupby, read_specification, limit=None, offset=0, unavailability_fields=[], progress_bar_fields=None, start_date=None, stop_date=None, scale=None):
+        gantt_data = super().get_gantt_data(domain, groupby, read_specification, limit=limit, offset=offset, unavailability_fields=unavailability_fields, progress_bar_fields=progress_bar_fields, start_date=start_date, stop_date=stop_date, scale=scale)
+        if 'workcenter_id' not in gantt_data['unavailabilities']:
+            workcenter_ids = set()
+            if groupby and 'workcenter_id' in groupby:
+                for group in gantt_data['groups']:
+                    res_id = group['workcenter_id'][0] if group['workcenter_id'] else False
+                    workcenter_ids.add(res_id)
+            else:
+                for record in gantt_data['records']:
+                    res_id = record['workcenter_id']['id'] if record.get('workcenter_id') else False
+                    workcenter_ids.add(res_id)
+            start, stop = fields.Datetime.from_string(start_date), fields.Datetime.from_string(stop_date)
+            gantt_data['unavailabilities']['workcenter_id'] = self._gantt_unavailability('workcenter_id', workcenter_ids, start, stop, scale)
+        return gantt_data
+
+    @api.model
+    def _gantt_unavailability(self, field, res_ids, start, stop, scale):
         """Get unavailabilities data to display in the Gantt view."""
-        workcenter_ids = set()
+        if field != 'workcenter_id':
+            return super()._gantt_unavailability(field, res_ids, start, stop, scale)
 
-        def traverse_inplace(func, row, **kargs):
-            res = func(row, **kargs)
-            if res:
-                kargs.update(res)
-            for row in row.get('rows'):
-                traverse_inplace(func, row, **kargs)
+        workcenters = self.env['mrp.workcenter'].browse(res_ids)
+        unavailability_mapping = workcenters._get_unavailability_intervals(start, stop)
 
-        def search_workcenter_ids(row):
-            if row.get('groupedBy') and row.get('groupedBy')[0] == 'workcenter_id' and row.get('resId'):
-                workcenter_ids.add(row.get('resId'))
-
-        for row in rows:
-            traverse_inplace(search_workcenter_ids, row)
-        start_datetime = fields.Datetime.to_datetime(start_date)
-        end_datetime = fields.Datetime.to_datetime(end_date)
-        workcenters = self.env['mrp.workcenter'].browse(workcenter_ids)
-        unavailability_mapping = workcenters._get_unavailability_intervals(start_datetime, end_datetime)
-
-        def add_unavailability(row, workcenter_id=None):
-            if row.get('groupedBy') and row.get('groupedBy')[0] == 'workcenter_id' and row.get('resId'):
-                workcenter_id = row.get('resId')
-            if workcenter_id:
-                row['unavailabilities'] = [{'start': interval[0], 'stop': interval[1]} for interval in unavailability_mapping[workcenter_id]]
-                return {'workcenter_id': workcenter_id}
-
-        for row in rows:
-            traverse_inplace(add_unavailability, row)
-        return rows
+        result = {}
+        for workcenter in workcenters:
+            result[workcenter.id] = [{'start': interval[0], 'stop': interval[1]} for interval in unavailability_mapping[workcenter.id]]
+        return result
 
     def button_start(self):
         if any(wo.working_state == 'blocked' for wo in self):
@@ -750,7 +752,7 @@ class MrpWorkorder(models.Model):
         cycle_number = float_round(qty_production / capacity, precision_digits=0, rounding_method='UP')
         if alternative_workcenter:
             # TODO : find a better alternative : the settings of workcenter can change
-            duration_expected_working = (self.duration_expected - self.workcenter_id.time_start - self.workcenter_id.time_stop) * self.workcenter_id.time_efficiency / (100.0 * cycle_number)
+            duration_expected_working = (self.duration_expected - self.workcenter_id._get_expected_duration(self.product_id)) * self.workcenter_id.time_efficiency / (100.0 * cycle_number)
             if duration_expected_working < 0:
                 duration_expected_working = 0
             capacity = alternative_workcenter._get_capacity(self.product_id)
@@ -885,7 +887,7 @@ class MrpWorkorder(models.Model):
                 wo.duration_percent = 100
 
     def _compute_expected_operation_cost(self):
-        return (self.duration_expected / 60.0) * self.workcenter_id.costs_hour
+        return (self.duration_expected / 60.0) * (self.costs_hour or self.workcenter_id.costs_hour)
 
     def _compute_current_operation_cost(self):
-        return (self.get_duration() / 60.0) * self.workcenter_id.costs_hour
+        return (self.get_duration() / 60.0) * (self.costs_hour or self.workcenter_id.costs_hour)

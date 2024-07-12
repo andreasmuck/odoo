@@ -169,22 +169,6 @@ class AccountMove(models.Model):
                                         grouping_key to aggregate tax values together. The returned dictionary is added
                                         to each tax details in order to retrieve the full grouping_key later.
 
-        :param compute_mode:            Optional parameter to specify the method used to allocate the tax line amounts
-                                        among the invoice lines:
-                                        'tax_details' (the default) uses the AccountMove._get_query_tax_details method.
-                                        'compute_all' uses the AccountTax._compute_all method.
-
-                                        The 'tax_details' method takes the tax line balance and allocates it among the
-                                        invoice lines to which that tax applies, proportionately to the invoice lines'
-                                        base amounts. This always ensures that the sum of the tax amounts equals the
-                                        tax line's balance, which, depending on the constraints of a particular
-                                        localization, can be more appropriate when 'Round Globally' is set.
-
-                                        The 'compute_all' method returns, for each invoice line, the exact tax amounts
-                                        corresponding to the taxes applied to the invoice line. Depending on the
-                                        constraints of the particular localization, this can be more appropriate when
-                                        'Round per Line' is set.
-
         :return:                        The full tax details for the current invoice and for each invoice line
                                         separately. The returned dictionary is the following:
 
@@ -264,7 +248,8 @@ class AccountMove(models.Model):
 
         self.env['account.edi.document'].create(edi_document_vals_list)
         posted.edi_document_ids._process_documents_no_web_services()
-        self.env.ref('account_edi.ir_cron_edi_network')._trigger()
+        if not self.env.context.get('skip_account_edi_cron_trigger'):
+            self.env.ref('account_edi.ir_cron_edi_network')._trigger()
         return posted
 
     def button_cancel(self):
@@ -338,10 +323,10 @@ class AccountMove(models.Model):
         return self._get_edi_document(edi_format).sudo().attachment_id
 
     # this override is to make sure that the main attachment is not the edi xml otherwise the attachment viewer will not work correctly
-    def _message_set_main_attachment_id(self, attachment_ids):
-        if self.message_main_attachment_id and len(attachment_ids) > 1 and self.message_main_attachment_id in self.edi_document_ids.attachment_id:
-            self.message_main_attachment_id = self.env['ir.attachment']
-        super()._message_set_main_attachment_id(attachment_ids)
+    def _message_set_main_attachment_id(self, attachments, force=False, filter_xml=True):
+        if not force and len(attachments) > 1 and self.message_main_attachment_id in self.edi_document_ids.attachment_id:
+            force = True
+        super()._message_set_main_attachment_id(attachments, force=force, filter_xml=filter_xml)
 
     ####################################################
     # Business operations

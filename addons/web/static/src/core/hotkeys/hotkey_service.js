@@ -18,8 +18,10 @@ import { getVisibleElements } from "../utils/ui";
  *  adds a restricted operating area for this hotkey
  * @property {() => boolean} [isAvailable]
  *  adds a validation before calling the hotkey registration's callback
- *  @property {() => HTMLElement} [withOverlay]
+ * @property {() => HTMLElement} [withOverlay]
  *  provides the element on which the overlay should be displayed
+ *  Please note that if provided the hotkey will only work with
+ *  the overlay access key, similarly to all [data-hotkey] DOM attributes.
  *
  * @typedef {HotkeyOptions & {
  *  hotkey: string,
@@ -58,6 +60,10 @@ export function getActiveHotkey(ev) {
         // Chrome may trigger incomplete keydown events under certain circumstances.
         // E.g. when using browser built-in autocomplete on an input.
         // See https://stackoverflow.com/questions/59534586/google-chrome-fires-keydown-event-when-form-autocomplete
+        return "";
+    }
+    if (ev.isComposing) {
+        // This case happens with an IME for example: we let it handle all key events.
         return "";
     }
     const hotkey = [];

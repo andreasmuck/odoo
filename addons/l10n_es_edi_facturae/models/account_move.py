@@ -130,7 +130,7 @@ class AccountMove(models.Model):
 
     def _l10n_es_edi_facturae_get_refunded_invoices(self):
         self.env['account.partial.reconcile'].flush_model()
-        invoices_refunded_mapping = {invoice.id: invoice.reversed_entry_id for invoice in self}
+        invoices_refunded_mapping = {invoice.id: invoice.reversed_entry_id.id for invoice in self}
 
         queries = []
         for source_field, counterpart_field in (('debit', 'credit'), ('credit', 'debit')):
@@ -161,6 +161,11 @@ class AccountMove(models.Model):
     def _l10n_es_edi_facturae_get_corrective_data(self):
         self.ensure_one()
         if self.move_type.endswith('refund'):
+            if not self.reversed_entry_id:
+                raise UserError(_("The credit note/refund appears to have been issued manually. For the purpose of "
+                                  "generating a Facturae document, it's necessary that the credit note/refund is created "
+                                  "directly from the associated invoice/bill."))
+
             refunded_invoice = self.env['account.move'].browse(self._l10n_es_edi_facturae_get_refunded_invoices()[self.id])
             tax_period = refunded_invoice._l10n_es_edi_facturae_get_tax_period()
 
@@ -272,9 +277,7 @@ class AccountMove(models.Model):
             price_before_discount = sum(to_update['price_subtotal'] for _dummy, to_update in tax_before_discount['base_lines_to_update'])
             discount = max(0., (price_before_discount - line.price_subtotal))
             surcharge = abs(min(0., (price_before_discount - line.price_subtotal)))
-            totals['total_gross_amount'] += price_before_discount
-            totals['total_general_discounts'] += discount
-            totals['total_general_surcharges'] += surcharge
+            totals['total_gross_amount'] += line.price_subtotal
             base_line = self.env['account.tax']._convert_to_tax_base_line_dict(
                 line, partner=line.partner_id, currency=line.currency_id, product=line.product_id, taxes=line.tax_ids,
                 price_unit=line.price_unit, quantity=line.quantity, discount=line.discount, account=line.account_id,
@@ -292,18 +295,20 @@ class AccountMove(models.Model):
             totals['total_taxes_withheld'] += sum((abs(tax["tax_amount"]) for tax in taxes_withheld_computed))
 
             invoice_line_values.update({
-                'ItemDescription': line.name,
+                'FileReference': self.ref[:20] if self.ref else False,
+                'FileDate': fields.Date.context_today(self),
+                'ItemDescription': line.product_id.display_name or line.name,
                 'Quantity': line.quantity,
                 'UnitOfMeasure': line.product_uom_id.l10n_es_edi_facturae_uom_code,
                 'UnitPriceWithoutTax': line.currency_id.round(price_before_discount / line.quantity if line.quantity else 0.),
                 'TotalCost': price_before_discount,
                 'DiscountsAndRebates': [{
-                    'DiscountReason': '',
+                    'DiscountReason': '/',
                     'DiscountRate': f'{line.discount:.2f}',
                     'DiscountAmount': discount
                 }, ] if discount != 0. else [],
                 'Charges': [{
-                    'ChargeReason': '',
+                    'ChargeReason': '/',
                     'ChargeRate': f'{max(0, -line.discount):.2f}',
                     'ChargeAmount': surcharge,
                 }, ] if surcharge != 0. else [],
@@ -405,6 +410,9 @@ class AccountMove(models.Model):
                     'ExchangeRate': f"{round(conversion_rate, 4):.4f}",
                     'LanguageName': self._context.get('lang', 'en_US').split('_')[0],
                     'InvoicingPeriod': invoicing_period,
+                    'ReceiverTransactionReference': self.ref[:20] if self.ref else False,
+                    'FileReference': self.ref[:20] if self.ref else False,
+                    'ReceiverContractReference': self.ref[:20] if self.ref else False,
                 },
                 'TaxOutputs': taxes,
                 'TaxesWithheld': taxes_withheld,
@@ -458,7 +466,10 @@ class AccountMove(models.Model):
 
     def _get_edi_decoder(self, file_data, new=False):
         def is_facturae(tree):
-            return tree.tag == '{http://www.facturae.es/Facturae/2014/v3.2.1/Facturae}Facturae'
+            return tree.tag in [
+                '{http://www.facturae.es/Facturae/2014/v3.2.1/Facturae}Facturae',
+                '{http://www.facturae.gob.es/formato/Versiones/Facturaev3_2_2.xml}Facturae',
+            ]
 
         if file_data['type'] == 'xml' and is_facturae(file_data['xml_tree']):
             return self._import_invoice_facturae
@@ -496,14 +507,15 @@ class AccountMove(models.Model):
         name = partner_vals['name']
         vat = partner_vals['vat']
         phone = partner_vals['phone']
-        mail = partner_vals['email']
+        email = partner_vals['email']
         country_code = partner_vals['country_code']
 
-        partner = self.env['res.partner']._retrieve_partner(name=name, vat=vat, phone=phone, mail=mail)
+        partner = self.env['res.partner']._retrieve_partner(name=name, vat=vat, phone=phone, email=email)
 
         if not partner and name:
-            partner_vals = {'name': name, 'email': mail, 'phone': phone}
-            country = self.env['res.country'].search([('code', '=', country_code.lower())]) if country_code else False
+            partner_vals = {'name': name, 'email': email, 'phone': phone}
+            country_code = REVERSED_COUNTRY_CODE.get(country_code)
+            country = self.env['res.country'].search([('code', '=', country_code)]) if country_code else False
             if country:
                 partner_vals['country_id'] = country.id
             partner = self.env['res.partner'].create(partner_vals)
@@ -660,7 +672,7 @@ class AccountMove(models.Model):
                     tax_ids.append(tax_incl)
                     line_vals['price_unit'] *= (1.0 + float(tax_rate) / 100.0)
                 else:
-                    logs.append(_("Could not retrieve the tax: %s %% for line '%s'.", tax_rate, line_vals.get('name', "")))
+                    logs.append(_("Could not retrieve the tax: %(tax_rate)s %% for line '%(line)s'.", tax_rate=tax_rate, line=line_vals.get('name', "")))
 
         return logs
 

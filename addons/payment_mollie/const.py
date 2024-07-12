@@ -48,7 +48,7 @@ SUPPORTED_CURRENCIES = [
 ]
 
 # The codes of the payment methods to activate when Mollie is activated.
-DEFAULT_PAYMENT_METHODS_CODES = [
+DEFAULT_PAYMENT_METHOD_CODES = {
     # Primary payment methods.
     'card',
     'ideal',
@@ -57,13 +57,14 @@ DEFAULT_PAYMENT_METHODS_CODES = [
     'mastercard',
     'amex',
     'discover',
-]
+}
 
 # Mapping of payment method codes to Mollie codes.
 PAYMENT_METHODS_MAPPING = {
     'apple_pay': 'applepay',
     'card': 'creditcard',
     'bank_transfer': 'banktransfer',
+    'kbc_cbc': 'kbc',
     'p24': 'przelewy24',
     'sepa_direct_debit': 'directdebit',
 }

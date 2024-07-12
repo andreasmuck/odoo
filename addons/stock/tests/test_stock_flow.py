@@ -902,7 +902,7 @@ class TestStockFlow(TestStockCommon):
         # Create product in kg and receive in ton.
         # -----------------------------------------
 
-        productKG = self.ProductObj.create({'name': 'Product KG', 'uom_id': self.uom_kg.id, 'uom_po_id': self.uom_kg.id, 'type': 'product'})
+        productKG = self.ProductObj.create({'name': 'Product KG', 'uom_id': self.uom_kg.id, 'uom_po_id': self.uom_kg.id, 'is_storable': True})
         picking_in = self.PickingObj.create({
             'picking_type_id': self.picking_type_in,
             'location_id': self.supplier_location,
@@ -1063,8 +1063,8 @@ class TestStockFlow(TestStockCommon):
         # TEST EMPTY INVENTORY WITH PACKS and LOTS
         # ---------------------------------------------------------
 
-        packproduct = self.ProductObj.create({'name': 'Pack Product', 'uom_id': self.uom_unit.id, 'uom_po_id': self.uom_unit.id, 'type': 'product'})
-        lotproduct = self.ProductObj.create({'name': 'Lot Product', 'uom_id': self.uom_unit.id, 'uom_po_id': self.uom_unit.id, 'type': 'product'})
+        packproduct = self.ProductObj.create({'name': 'Pack Product', 'uom_id': self.uom_unit.id, 'uom_po_id': self.uom_unit.id, 'is_storable': True})
+        lotproduct = self.ProductObj.create({'name': 'Lot Product', 'uom_id': self.uom_unit.id, 'uom_po_id': self.uom_unit.id, 'is_storable': True})
         quant_obj = self.env['stock.quant'].with_context(inventory_mode=True)
         pack_obj = self.env['stock.quant.package']
         lot_obj = self.env['stock.lot']
@@ -1802,7 +1802,7 @@ class TestStockFlow(TestStockCommon):
 
         product = self.env['product.product'].create({
             'name': 'The product from the other company that I absolutely want',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(4, route_a.id), (4, route_b.id)]
         })
 
@@ -1883,13 +1883,13 @@ class TestStockFlow(TestStockCommon):
 
         product_from_company_2 = self.env['product.product'].create({
             'name': 'The product from the other company that I absolutely want',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(4, route_a.id), (4, route_b.id)]
         })
 
         product_from_company_3 = self.env['product.product'].create({
             'name': 'Ice',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(4, route_a.id), (4, route_c.id)]
         })
 
@@ -1927,7 +1927,7 @@ class TestStockFlow(TestStockCommon):
         test ensure the scheduled_date is writable on a picking in state 'draft' or 'confirmed'
         """
         partner = self.env['res.partner'].create({'name': 'Hubert Bonisseur de la Bath'})
-        product = self.env['product.product'].create({'name': 'Un petit coup de polish', 'type': 'product'})
+        product = self.env['product.product'].create({'name': 'Un petit coup de polish', 'is_storable': True})
         wh = self.env['stock.warehouse'].search([('company_id', '=', self.env.company.id)], limit=1)
 
         picking = self.env['stock.picking'].create({
@@ -1963,7 +1963,7 @@ class TestStockFlow(TestStockCommon):
         grp_multi_loc = self.env.ref('stock.group_stock_multi_locations')
         self.env.user.write({'groups_id': [(4, grp_multi_loc.id, 0)]})
 
-        product = self.env['product.product'].create({'name': 'Un petit coup de polish', 'type': 'product'})
+        product = self.env['product.product'].create({'name': 'Un petit coup de polish', 'is_storable': True})
         wh = self.env['stock.warehouse'].search([('company_id', '=', self.env.company.id)], limit=1)
 
         self.env['stock.quant']._update_available_quantity(product, wh.wh_qc_stock_loc_id, 10)
@@ -1994,12 +1994,12 @@ class TestStockFlow(TestStockCommon):
         # Creates two tracked products (one by lots and one by SN).
         product_lot = self.env['product.product'].create({
             'name': 'Tracked by lot',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'lot',
         })
         product_serial = self.env['product.product'].create({
             'name': 'Tracked by SN',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'serial',
         })
         # Creates two receipts using some lot names in common.
@@ -2236,7 +2236,7 @@ class TestStockFlow(TestStockCommon):
         """
         partner_1 = self.env['res.partner'].create({'name': 'Hubert Bonisseur de la Bath'})
         partner_2 = self.env['res.partner'].create({'name': 'Donald Clairvoyant du Bled'})
-        product = self.env['product.product'].create({'name': 'Un petit coup de polish', 'type': 'product'})
+        product = self.env['product.product'].create({'name': 'Un petit coup de polish', 'is_storable': True})
         wh = self.env['stock.warehouse'].search([('company_id', '=', self.env.company.id)], limit=1)
 
         f = Form(self.env['stock.picking'])
@@ -2545,6 +2545,40 @@ class TestStockFlow(TestStockCommon):
         backorder.button_validate()
         self.assertEqual(backorder.state, 'done')
 
+    def test_picking_mixed_tracking_with_backorder(self):
+        self.productB.tracking = 'lot'
+        picking = self.env['stock.picking'].create({
+            'location_id': self.supplier_location,
+            'location_dest_id': self.stock_location,
+            'picking_type_id': self.picking_type_in,
+            'company_id': self.env.company.id,
+        })
+        no_tracking_move = self.env['stock.move'].create({
+            'name': self.productA.name,
+            'product_id': self.productA.id,
+            'product_uom_qty': 1,
+            'product_uom': self.productA.uom_id.id,
+            'picking_id': picking.id,
+            'location_id': self.supplier_location,
+            'location_dest_id': self.stock_location,
+        })
+        self.env['stock.move'].create({
+            'name': self.productB.name,
+            'product_id': self.productB.id,
+            'product_uom_qty': 1,
+            'product_uom': self.productB.uom_id.id,
+            'picking_id': picking.id,
+            'location_id': self.supplier_location,
+            'location_dest_id': self.stock_location,
+        })
+        picking.action_confirm()
+
+        no_tracking_move.picked = True
+        action_dict = picking.button_validate()
+        backorder_wizard = Form(self.env['stock.backorder.confirmation'].with_context(action_dict['context'])).save()
+        backorder_wizard.process()
+        bo = self.env['stock.picking'].search([('backorder_id', '=', picking.id)])
+        self.assertEqual(bo.state, 'assigned')
 
 @tagged('-at_install', 'post_install')
 class TestStockFlowPostInstall(TestStockCommon):
@@ -2556,7 +2590,7 @@ class TestStockFlowPostInstall(TestStockCommon):
 
         product = self.env['product.product'].create({
             'name': 'Super Product',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'serial',
         })
         sn = self.env['stock.lot'].create({
@@ -2619,3 +2653,49 @@ class TestStockFlowPostInstall(TestStockCommon):
         backorder = picking.backorder_ids
         self.assertEqual(backorder.move_ids.product_uom_qty, 2)
         self.assertEqual(backorder.move_ids.description_picking, 'Ipsum')
+
+    def test_onchange_picking_type_id_and_name(self):
+        """
+        when changing picking_type_id of a stock.picking, should change the name too
+        """
+        picking_type_1 = self.env['stock.picking.type'].create({
+            'name': 'new_picking_type_1',
+            'code': 'internal',
+            'sequence_code': 'PT1/',
+        })
+        picking_type_2 = self.env['stock.picking.type'].create({
+            'name': 'new_picking_type_2',
+            'code': 'internal',
+            'sequence_code': 'PT2/',
+        })
+        picking = self.env['stock.picking'].create({
+            'picking_type_id': picking_type_1.id,
+            'location_id': self.supplier_location,
+            'location_dest_id': self.stock_location,
+        })
+        self.assertEqual(picking.name, "PT1/00001")
+        picking.picking_type_id = picking_type_2
+        self.assertEqual(picking.name, "PT2/00001")
+        picking.picking_type_id = picking_type_1
+        self.assertEqual(picking.name, "PT1/00002")
+        picking.picking_type_id = picking_type_1
+        self.assertEqual(picking.name, "PT1/00002")
+
+    def test_name_create_location(self):
+        """
+        e.g., from .csv/.xlsx import:
+            If name str has a parent location prefix we try to create as child location
+            else ignore prefixes
+        """
+        parent_location = self.env['stock.location'].create({'name': 'ParentLocation'})
+        new_location_id = self.env['stock.location'].name_create('ParentLocation/TestLocation1')[0]
+        new_location = self.env['stock.location'].browse(new_location_id)
+        self.assertEqual(new_location.name, 'TestLocation1')
+        self.assertEqual(new_location.complete_name, 'ParentLocation/TestLocation1')
+        self.assertEqual(new_location.location_id, parent_location)
+
+        new_location_complete_name = self.env['stock.location'].name_create('FauxParentLocation/TestLocation2')[1]
+        self.assertEqual(new_location_complete_name, 'TestLocation2')
+
+        new_location_complete_name = self.env['stock.location'].name_create('NoPrefixLocation')[1]
+        self.assertEqual(new_location_complete_name, 'NoPrefixLocation')

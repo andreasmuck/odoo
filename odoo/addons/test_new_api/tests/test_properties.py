@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+import babel.dates
 import datetime
 import json
 import unittest
@@ -399,7 +400,7 @@ class PropertiesCase(TestPropertiesMixin):
             }])
             self.env.invalidate_all()
 
-        with self.assertQueryCount(8):
+        with self.assertQueryCount(7):
             messages = self.env['test_new_api.message'].create([{
                 'name': 'Test Message',
                 'discussion': self.discussion_1.id,
@@ -1307,7 +1308,14 @@ class PropertiesCase(TestPropertiesMixin):
         with self.assertQueryCount(0, msg='Must read value from cache'):
             self.message_1.attributes
 
-        expected = ['UPDATE "test_new_api_message" SET "attributes" = %s, "write_date" = %s, "write_uid" = %s WHERE id IN %s']
+        expected = ["""
+            UPDATE "test_new_api_message"
+            SET "attributes" = "__tmp"."attributes"::jsonb,
+                "write_date" = "__tmp"."write_date"::timestamp,
+                "write_uid" = "__tmp"."write_uid"::int4
+            FROM (VALUES %s) AS "__tmp"("id", "attributes", "write_date", "write_uid")
+            WHERE "test_new_api_message"."id" = "__tmp"."id"
+        """]
         with self.assertQueryCount(1), self.assertQueries(expected):
             self.message_1.attributes = [
                 {
@@ -2392,7 +2400,16 @@ class PropertiesGroupByCase(TestPropertiesMixin):
         self.assertEqual(result[3]['attributes.mydate_count'], 1)
         self.assertEqual(result[3]['attributes.mydate:week'], 'W5 2023')
         self.assertEqual(result[4]['attributes.mydate_count'], 2)
-        self.assertEqual(result[4]['attributes.mydate:week'], 'W1 2022')
+        # Babel issue mitigation
+        # https://github.com/python-babel/babel/pull/621 -- introduced a new bug
+        # https://github.com/python-babel/babel/pull/887 -- proposed a fix but finally closed
+        # https://sources.debian.org/patches/python-babel/2.10.3-1/ -- Debian reverted 621
+        # so this ugly fix is made to have the test working in patched and non patched versions of Babel
+        babel_year = babel.dates.format_date(datetime.datetime(2023, 1, 1), "YYYY", "en_US")  # non patched: '2022' patched: '2023'
+        if babel_year == '2022':  # Broken unpatched babel
+            self.assertEqual(result[4]['attributes.mydate:week'], 'W1 2022')
+        else:  # Patched babel
+            self.assertEqual(result[4]['attributes.mydate:week'], 'W1 2023')
         # check domain
         self.assertEqual(Model.search(result[0]['__domain']), self.message_6 | self.message_7)
         self.assertEqual(Model.search(result[1]['__domain']), self.message_5)
@@ -2507,6 +2524,12 @@ class PropertiesGroupByCase(TestPropertiesMixin):
                 orderby='attributes.myinteger DESC'
             )
 
+        with self.assertRaises(ValueError), self.assertQueryCount(0):
+            Model._read_group(
+                domain=[],
+                aggregates=['attributes.myinteger:sum'],  # Aggregate is not supported
+            )
+
     @mute_logger('odoo.fields', 'odoo.models.unlink')
     def test_properties_field_read_group_many2many(self):
         Model = self.env['test_new_api.message']
@@ -2602,18 +2625,14 @@ class PropertiesGroupByCase(TestPropertiesMixin):
             )  # bypass the ORM to set an invalid model name
             definition = self._get_sql_definition(self.discussion_1)
             self.assertEqual(definition[0]['comodel'], invalid_model_name)
-            with self.assertQueryCount(3):
+            error_message = f"You cannot use “Partners” because the linked “{invalid_model_name}” model doesn't exist or is invalid"
+            with self.assertRaisesRegex(UserError, error_message):
                 result = Model.read_group(
                     domain=[('discussion', '!=', self.wrong_discussion_id)],
                     fields=[],
                     groupby=['attributes.mypartners'],
                     lazy=False,
                 )
-
-            self.assertEqual(len(result), 1)
-            self.assertFalse(result[0]['attributes.mypartners'])
-            self.assertEqual(result[0]['__count'], 4)
-            self._check_domains_count(result)
 
     @mute_logger('odoo.fields')
     def test_properties_field_read_group_many2one(self):
@@ -2622,6 +2641,7 @@ class PropertiesGroupByCase(TestPropertiesMixin):
         # group by many2one property
         self.message_1.attributes = [{
             'name': 'mypartner',
+            'string': 'My Partner',
             'type': 'many2one',
             'value': self.partner_2.id,
             'comodel': 'test_new_api.partner',
@@ -2705,17 +2725,14 @@ class PropertiesGroupByCase(TestPropertiesMixin):
             )  # bypass the ORM to set an invalid model name
             definition = self._get_sql_definition(self.discussion_1)
             self.assertEqual(definition[0]['comodel'], invalid_model_name)
-            with self.assertQueryCount(3):
+            error_message = f"You cannot use “My Partner” because the linked “{invalid_model_name}” model doesn't exist or is invalid"
+            with self.assertRaisesRegex(UserError, error_message):
                 result = Model.read_group(
                     domain=[('discussion', '!=', self.wrong_discussion_id)],
                     fields=[],
                     groupby=['attributes.mypartner'],
                     lazy=False,
                 )
-
-            self.assertEqual(len(result), 1)
-            self.assertEqual(result[0]['__count'], 4)
-            self._check_domains_count(result)
 
     @mute_logger('odoo.fields')
     def test_properties_field_read_group_selection(self):

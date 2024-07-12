@@ -34,8 +34,10 @@ class PaymentTransaction(models.Model):
         if self.provider_code != 'razorpay':
             return res
 
-        customer_is_required = self.tokenize or self.operation in ('online_token', 'offline')
-        customer_id = customer_is_required and self._razorpay_create_customer()['id']
+        if self.operation in ('online_token', 'offline'):
+            return {}
+
+        customer_id = self._razorpay_create_customer()['id']
         order_id = self._razorpay_create_order(customer_id)['id']
         return {
             'razorpay_key_id': self.provider_id.razorpay_key_id,
@@ -52,8 +54,8 @@ class PaymentTransaction(models.Model):
         """
         payload = {
             'name': self.partner_name,
-            'email': self.partner_email,
-            'contact': self._validate_phone_number(self.partner_phone),
+            'email': self.partner_email or '',
+            'contact': self.partner_phone and self._validate_phone_number(self.partner_phone) or '',
             'fail_existing': '0',  # Don't throw an error if the customer already exists.
         }
         _logger.info(
@@ -75,12 +77,12 @@ class PaymentTransaction(models.Model):
         :return str: The formatted phone number.
         :raise ValidationError: If the phone number is missing or incorrect.
         """
-        if not phone:
+        if not phone and self.tokenize:
             raise ValidationError("Razorpay: " + _("The phone number is missing."))
 
         try:
             phone = self._phone_format(
-                number=phone, country=self.partner_country_id, raise_exception=True
+                number=phone, country=self.partner_country_id, raise_exception=self.tokenize
             )
         except Exception:
             raise ValidationError("Razorpay: " + _("The phone number is invalid."))
@@ -119,11 +121,10 @@ class PaymentTransaction(models.Model):
         payload = {
             'amount': converted_amount,
             'currency': self.currency_id.name,
-            'method': pm_code,
+            **({'method': pm_code} if pm_code not in const.FALLBACK_PAYMENT_METHOD_CODES else {}),
         }
         if self.operation in ['online_direct', 'validation']:
-            if customer_id:
-                payload['customer_id'] = customer_id  # Required for only non-subsequent payments.
+            payload['customer_id'] = customer_id  # Required for only non-subsequent payments.
             if self.tokenize:
                 payload['token'] = {
                     'max_amount': payment_utils.to_minor_currency_units(
@@ -153,12 +154,13 @@ class PaymentTransaction(models.Model):
         """ Return the eMandate's maximum amount to define.
 
         :return: The eMandate's maximum amount.
-        :rtype: int
+        :rtype: float
         """
         pm_code = (
             self.payment_method_id.primary_payment_method_id or self.payment_method_id
         ).code
-        pm_max_amount = const.MANDATE_MAX_AMOUNT.get(pm_code, 100000)
+        pm_max_amount_INR = const.MANDATE_MAX_AMOUNT.get(pm_code, 100000)
+        pm_max_amount = self._razorpay_convert_inr_to_currency(pm_max_amount_INR, self.currency_id)
         mandate_values = self._get_mandate_values()  # The linked document's values.
         if 'amount' in mandate_values and 'MRR' in mandate_values:
             max_amount = min(
@@ -167,6 +169,20 @@ class PaymentTransaction(models.Model):
         else:
             max_amount = pm_max_amount
         return max_amount
+
+    @api.model
+    def _razorpay_convert_inr_to_currency(self, amount, currency_id):
+        """ Convert the amount from INR to the given currency.
+
+        :param float amount: The amount to converted, in INR.
+        :param currency_id: The currency to which the amount should be converted.
+        :return: The converted amount in the given currency.
+        :rtype: float
+        """
+        inr_currency = self.env['res.currency'].with_context(active_test=False).search([
+            ('name', '=', 'INR'),
+        ], limit=1)
+        return inr_currency._convert(amount, currency_id)
 
     def _send_payment_request(self):
         """ Override of `payment` to send a payment request to Razorpay.
@@ -388,7 +404,9 @@ class PaymentTransaction(models.Model):
         payment_method_type = entity_data.get('method', '')
         if payment_method_type == 'card':
             payment_method_type = entity_data.get('card', {}).get('network').lower()
-        payment_method = self.env['payment.method']._get_from_code(payment_method_type)
+        payment_method = self.env['payment.method']._get_from_code(
+            payment_method_type, mapping=const.PAYMENT_METHODS_MAPPING
+        )
         self.payment_method_id = payment_method or self.payment_method_id
 
         # Update the payment state.
@@ -402,7 +420,11 @@ class PaymentTransaction(models.Model):
             if self.provider_id.capture_manually:
                 self._set_authorized()
         elif entity_status in const.PAYMENT_STATUS_MAPPING['done']:
-            if self.tokenize:
+            if (
+                not self.token_id
+                and entity_data.get('token_id')
+                and self.provider_id.allow_tokenization
+            ):
                 self._razorpay_tokenize_from_notification_data(entity_data)
             self._set_done()
 

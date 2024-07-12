@@ -10,8 +10,6 @@ import {
     patchWithCleanup,
 } from "@web/../tests/web_test_helpers";
 
-import { browser } from "@web/core/browser/browser";
-
 class Partner extends models.Model {
     _name = "res.partner";
 
@@ -21,7 +19,6 @@ class Partner extends models.Model {
         searchable: true,
         trim: true,
     });
-    text_field = fields.Text({ default: "This is a text field" });
 
     _records = [
         {
@@ -35,7 +32,6 @@ class Partner extends models.Model {
             <form>
                 <sheet>
                     <group>
-                        <field name="text_field" widget="CopyClipboardText"/>
                         <field name="char_field" widget="CopyClipboardChar"/>
                     </group>
                 </sheet>
@@ -45,27 +41,24 @@ class Partner extends models.Model {
 
 defineModels([Partner]);
 
-test("Char & Text Fields: Copy to clipboard button", async () => {
+test("Char Field: Copy to clipboard button", async () => {
     await mountView({
         type: "form",
         resModel: "res.partner",
         resId: 1,
     });
 
-    expect(".o_clipboard_button.o_btn_text_copy").toHaveCount(1);
     expect(".o_clipboard_button.o_btn_char_copy").toHaveCount(1);
 });
 
 test("Show copy button even on empty field", async () => {
     Partner._records.push({
         char_field: false,
-        text_field: false,
     });
 
     await mountView({ type: "form", resModel: "res.partner", resId: 2 });
 
     expect(".o_field_CopyClipboardChar[name='char_field'] .o_clipboard_button").toHaveCount(1);
-    expect(".o_field_CopyClipboardText[name='text_field'] .o_clipboard_button").toHaveCount(1);
 });
 
 test("Show copy button even on readonly empty field", async () => {
@@ -87,24 +80,17 @@ test("Show copy button even on readonly empty field", async () => {
 });
 
 test("Display a tooltip on click", async () => {
-    mockService("popover", () => ({
+    mockService("popover", {
         add(el, comp, params) {
-            expect(el).toHaveText("Copy");
             expect(params).toEqual({ tooltip: "Copied" });
             expect.step("copied tooltip");
             return () => {};
         },
-    }));
+    });
 
-    patchWithCleanup(browser, {
-        navigator: {
-            clipboard: {
-                writeText: (text) => {
-                    expect.step(text);
-                    return Promise.resolve();
-                },
-            },
-            userAgent: [],
+    patchWithCleanup(navigator.clipboard, {
+        async writeText(text) {
+            expect.step(text);
         },
     });
 
@@ -114,21 +100,15 @@ test("Display a tooltip on click", async () => {
         resId: 1,
     });
 
-    await expect(".o_clipboard_button.o_btn_text_copy").toHaveCount(1);
-    await contains(".o_clipboard_button").click();
-    expect(["This is a text field", "copied tooltip"]).toVerifySteps();
+    await expect(".o_clipboard_button.o_btn_char_copy").toHaveCount(1);
+    await contains(".o_clipboard_button", { visible: false }).click();
+    expect.verifySteps(["char value", "copied tooltip"]);
 });
 
 test("CopyClipboardButtonField in form view", async () => {
-    patchWithCleanup(browser, {
-        navigator: {
-            clipboard: {
-                writeText: (text) => {
-                    expect.step(text);
-                    return Promise.resolve();
-                },
-            },
-            userAgent: [],
+    patchWithCleanup(navigator.clipboard, {
+        async writeText(text) {
+            expect.step(text);
         },
     });
 
@@ -139,33 +119,23 @@ test("CopyClipboardButtonField in form view", async () => {
         arch: `
             <form>
                 <group>
-                    <field name="text_field" widget="CopyClipboardButton"/>
                     <field name="char_field" widget="CopyClipboardButton"/>
                 </group>
             </form>`,
     });
 
     expect(".o_field_widget[name=char_field] input").toHaveCount(0);
-    expect(".o_field_widget[name=text_field] input").toHaveCount(0);
-    expect(".o_clipboard_button.o_btn_text_copy").toHaveCount(1);
     expect(".o_clipboard_button.o_btn_char_copy").toHaveCount(1);
 
-    await contains(".o_clipboard_button.o_btn_text_copy").click();
     await contains(".o_clipboard_button.o_btn_char_copy").click();
 
-    expect(["This is a text field", "char value"]).toVerifySteps();
+    expect.verifySteps(["char value"]);
 });
 
 test("CopyClipboardButtonField can be disabled", async () => {
-    patchWithCleanup(browser, {
-        navigator: {
-            clipboard: {
-                writeText: (text) => {
-                    expect.step(text);
-                    return Promise.resolve();
-                },
-            },
-            userAgent: [],
+    patchWithCleanup(navigator.clipboard, {
+        async writeText(text) {
+            expect.step(text);
         },
     });
 
@@ -177,14 +147,12 @@ test("CopyClipboardButtonField can be disabled", async () => {
             <form>
                 <sheet>
                     <group>
-                        <field name="text_field" disabled="1" widget="CopyClipboardButton"/>
                         <field name="char_field" disabled="char_field == 'char value'" widget="CopyClipboardButton"/>
                         <field name="char_field" widget="char"/>
                     </group>
                 </sheet>
             </form>`,
     });
-    expect(".o_clipboard_button.o_btn_text_copy[disabled]").toHaveCount(1);
     expect(".o_clipboard_button.o_btn_char_copy[disabled]").toHaveCount(1);
     await fieldInput("char_field").edit("another char value");
     expect(".o_clipboard_button.o_btn_char_copy[disabled]").toHaveCount(0);

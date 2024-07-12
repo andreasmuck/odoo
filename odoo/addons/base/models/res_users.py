@@ -3,6 +3,7 @@
 
 import binascii
 import contextlib
+import collections
 import datetime
 import hmac
 import ipaddress
@@ -21,7 +22,7 @@ import babel.core
 import pytz
 from lxml import etree
 from lxml.builder import E
-from passlib.context import CryptContext
+from passlib.context import CryptContext as _CryptContext
 from psycopg2 import sql
 
 from odoo import api, fields, models, tools, SUPERUSER_ID, _, Command
@@ -29,9 +30,47 @@ from odoo.addons.base.models.ir_model import MODULE_UNINSTALL_FLAG
 from odoo.exceptions import AccessDenied, AccessError, UserError, ValidationError
 from odoo.http import request, DEFAULT_LANG
 from odoo.osv import expression
-from odoo.tools import is_html_empty, partition, collections, frozendict, lazy_property
+from odoo.tools import is_html_empty, partition, frozendict, lazy_property, SQL, SetDefinitions
 
 _logger = logging.getLogger(__name__)
+
+class CryptContext:
+    def __init__(self, *args, **kwargs):
+        self.__obj__ = _CryptContext(*args, **kwargs)
+
+    @property
+    def encrypt(self):
+        # deprecated alias
+        return self.hash
+
+    @property
+    def copy(self):
+        return self.__obj__.copy
+
+    @property
+    def hash(self):
+        return self.__obj__.hash
+
+    @property
+    def identify(self):
+        return self.__obj__.identify
+
+    @property
+    def verify(self):
+        return self.__obj__.verify
+
+    @property
+    def verify_and_update(self):
+        return self.__obj__.verify_and_update
+
+    def schemes(self):
+        return self.__obj__.schemes()
+
+    def update(self, **kwargs):
+        if kwargs.get("schemes"):
+            assert isinstance(kwargs["schemes"], str) or all(isinstance(s, str) for s in kwargs["schemes"])
+        return self.__obj__.update(**kwargs)
+
 
 # Only users who can modify the user (incl. the user herself) see the real contents of these fields
 USER_PRIVATE_FIELDS = []
@@ -91,13 +130,13 @@ def check_identity(fn):
     Prevents access outside of interactive contexts (aka with a request)
     """
     @wraps(fn)
-    def wrapped(self):
+    def wrapped(self, *args, **kwargs):
         if not request:
             raise UserError(_("This method can only be accessed over HTTP"))
 
         if request.session.get('identity-check-last', 0) > time.time() - 10 * 60:
             # update identity-check-last like github?
-            return fn(self)
+            return fn(self, *args, **kwargs)
 
         w = self.sudo().env['res.users.identitycheck'].create({
             'request': json.dumps([
@@ -107,7 +146,9 @@ def check_identity(fn):
                 },
                 self._name,
                 self.ids,
-                fn.__name__
+                fn.__name__,
+                args,
+                kwargs
             ])
         })
         return {
@@ -172,11 +213,11 @@ class Groups(models.Model):
     def _search_full_name(self, operator, operand):
         lst = True
         if isinstance(operand, bool):
-            return [[('name', operator, operand)]]
+            return [('name', operator, operand)]
         if isinstance(operand, str):
             lst = False
             operand = [operand]
-        where = []
+        where_domains = []
         for group in operand:
             values = [v for v in group.split('/') if v]
             group_name = values.pop().strip()
@@ -188,24 +229,24 @@ class Groups(models.Model):
             if operator in expression.NEGATIVE_TERM_OPERATORS and not values:
                 category_domain = expression.OR([category_domain, [('category_id', '=', False)]])
             if (operator in expression.NEGATIVE_TERM_OPERATORS) == (not values):
-                sub_where = expression.AND([group_domain, category_domain])
+                where = expression.AND([group_domain, category_domain])
             else:
-                sub_where = expression.OR([group_domain, category_domain])
-            if operator in expression.NEGATIVE_TERM_OPERATORS:
-                where = expression.AND([where, sub_where])
-            else:
-                where = expression.OR([where, sub_where])
-        return where
+                where = expression.OR([group_domain, category_domain])
+            where_domains.append(where)
+        if operator in expression.NEGATIVE_TERM_OPERATORS:
+            return expression.AND(where_domains)
+        else:
+            return expression.OR(where_domains)
 
     @api.model
-    def _search(self, domain, offset=0, limit=None, order=None, access_rights_uid=None):
+    def _search(self, domain, offset=0, limit=None, order=None):
         # add explicit ordering if search is sorted on full_name
         if order and order.startswith('full_name'):
             groups = super().search(domain)
             groups = groups.sorted('full_name', reverse=order.endswith('DESC'))
             groups = groups[offset:offset+limit] if limit else groups[offset:]
             return groups._as_query(order)
-        return super()._search(domain, offset, limit, order, access_rights_uid)
+        return super()._search(domain, offset, limit, order)
 
     def copy_data(self, default=None):
         default = dict(default or {})
@@ -370,7 +411,7 @@ class Users(models.Model):
         # automatically encrypted at startup: look for passwords which don't
         # match the "extended" MCF and pass those through passlib.
         # Alternative: iterate on *all* passwords and use CryptContext.identify
-        cr.execute("""
+        cr.execute(r"""
         SELECT id, password FROM res_users
         WHERE password IS NOT NULL
           AND password !~ '^\$[^$]+\$[^$]+\$.'
@@ -394,7 +435,7 @@ class Users(models.Model):
         )
         self.browse(uid).invalidate_recordset(['password'])
 
-    def _check_credentials(self, password, env):
+    def _check_credentials(self, credential, env):
         """ Validates the current user's password.
 
         Override this method to plug additional authentication methods.
@@ -405,19 +446,34 @@ class Users(models.Model):
         * catch AccessDenied and perform their own checking
         * (re)raise AccessDenied if the credentials are still invalid
           according to their own validation method
+        * return the auth_info
 
         When trying to check for credentials validity, call _check_credentials
         instead.
+
+        Credentials are considered to be untrusted user input, for more information please check :func:`~.authenticate`
+
+        :returns: auth_info dictionary containing:
+          - uid: the uid of the authenticated user
+          - auth_method: which method was used during authentication
+          - mfa: whether mfa should be skipped or not, possible values:
+            - enforce: enforce mfa no matter what (not yet implemented)
+            - default: delegate to auth_totp
+            - skip: skip mfa no matter what
+          Examples:
+          - { 'uid': 20, 'auth_method': 'password',      'mfa': 'default' }
+          - { 'uid': 17, 'auth_method': 'impersonation', 'mfa': 'enforce' }
+          - { 'uid': 32, 'auth_method': 'webauthn',      'mfa': 'skip'    }
+        :rtype: dict
         """
-        """ Override this method to plug additional authentication methods"""
-        assert password
+        assert credential['type'] == 'password' and credential['password']
         self.env.cr.execute(
             "SELECT COALESCE(password, '') FROM res_users WHERE id=%s",
             [self.env.user.id]
         )
         [hashed] = self.env.cr.fetchone()
         valid, replacement = self._crypt_context()\
-            .verify_and_update(password, hashed)
+            .verify_and_update(credential['password'], hashed)
         if replacement is not None:
             self._set_encrypted_password(self.env.user.id, replacement)
             if request and self == self.env.user:
@@ -429,6 +485,11 @@ class Users(models.Model):
 
         if not valid:
             raise AccessDenied()
+        return {
+            'uid': self.env.user.id,
+            'auth_method': 'password',
+            'mfa': 'default',
+        }
 
     def _compute_password(self):
         for user in self:
@@ -615,12 +676,12 @@ class Users(models.Model):
         return super()._read_group_groupby(groupby_spec, query)
 
     @api.model
-    def _search(self, domain, offset=0, limit=None, order=None, access_rights_uid=None):
+    def _search(self, domain, offset=0, limit=None, order=None):
         if not self.env.su and domain:
             domain_fields = {term[0] for term in domain if isinstance(term, (tuple, list))}
             if domain_fields.intersection(USER_PRIVATE_FIELDS):
                 raise AccessError(_('Invalid search criterion'))
-        return super()._search(domain, offset, limit, order, access_rights_uid)
+        return super()._search(domain, offset, limit, order)
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -694,13 +755,15 @@ class Users(models.Model):
                     user.partner_id.write({'company_id': user.company_id.id})
 
         if 'company_id' in values or 'company_ids' in values:
-            # Reset lazy properties `company` & `companies` on all envs
+            # Reset lazy properties `company` & `companies` on all envs,
+            # and also their _cache_key, which may depend on them.
             # This is unlikely in a business code to change the company of a user and then do business stuff
             # but in case it happens this is handled.
             # e.g. `account_test_savepoint.py` `setup_company_data`, triggered by `test_account_invoice_report.py`
             for env in list(self.env.transaction.envs):
                 if env.user in self:
                     lazy_property.reset_all(env)
+                    env._cache_key.clear()
 
         # clear caches linked to the users
         if self.ids and 'groups_id' in values:
@@ -723,6 +786,9 @@ class Users(models.Model):
         default_user_template = self.env.ref('base.default_user', False)
         if SUPERUSER_ID in self.ids:
             raise UserError(_('You can not remove the admin user as it is used internally for resources created by Odoo (updates, module installation, ...)'))
+        user_admin = self.env.ref('base.user_admin', raise_if_not_found=False)
+        if user_admin and user_admin in self:
+            raise UserError(_('You cannot delete the admin user because it is utilized in various places (such as security configurations,...). Instead, archive it.'))
         self.env.registry.clear_cache()
         if (portal_user_template and portal_user_template in self) or (default_user_template and default_user_template in self):
             raise UserError(_('Deleting the template users is not allowed. Deleting this profile will compromise critical functionalities.'))
@@ -826,9 +892,8 @@ class Users(models.Model):
         return self._order
 
     @classmethod
-    def _login(cls, db, login, password, user_agent_env):
-        if not password:
-            raise AccessDenied()
+    def _login(cls, db, credential, user_agent_env):
+        login = credential['login']
         ip = request.httprequest.environ['REMOTE_ADDR'] if request else 'n/a'
         try:
             with cls.pool.cursor() as cr:
@@ -838,7 +903,7 @@ class Users(models.Model):
                     if not user:
                         raise AccessDenied()
                     user = user.with_user(user)
-                    user._check_credentials(password, user_agent_env)
+                    auth_info = user._check_credentials(credential, user_agent_env)
                     tz = request.httprequest.cookies.get('tz') if request else None
                     if tz in pytz.all_timezones and (not user.tz or not user.login_date):
                         # first login or missing tz -> set tz to browser tz
@@ -850,23 +915,28 @@ class Users(models.Model):
 
         _logger.info("Login successful for db:%s login:%s from %s", db, login, ip)
 
-        return user.id
+        return auth_info
 
     @classmethod
-    def authenticate(cls, db, login, password, user_agent_env):
+    def authenticate(cls, db, credential, user_agent_env):
         """Verifies and returns the user ID corresponding to the given
-          ``login`` and ``password`` combination, or False if there was
-          no matching user.
-           :param str db: the database on which user is trying to authenticate
-           :param str login: username
-           :param str password: user password
-           :param dict user_agent_env: environment dictionary describing any
-               relevant environment attributes
+        ``credential``, or False if there was no matching user.
+
+        :param str db: the database on which user is trying to authenticate
+        :param dict credential: a dictionary where the `type` key defines the authentication method and
+            additional keys are passed as required per authentication method.
+            For example:
+            - { 'type': 'password', 'login': 'username', 'password': '123456' }
+            - { 'type': 'webauthn', 'webauthn_response': '{json data}' }
+        :param dict user_agent_env: environment dictionary describing any
+            relevant environment attributes
+        :return: auth_info
+        :rtype: dict
         """
-        uid = cls._login(db, login, password, user_agent_env=user_agent_env)
+        auth_info = cls._login(db, credential, user_agent_env=user_agent_env)
         if user_agent_env and user_agent_env.get('base_location'):
             with cls.pool.cursor() as cr:
-                env = api.Environment(cr, uid, {})
+                env = api.Environment(cr, auth_info['uid'], {})
                 if env.user.has_group('base.group_system'):
                     # Successfully logged in as system user!
                     # Attempt to guess the web base url...
@@ -877,7 +947,7 @@ class Users(models.Model):
                             ICP.set_param('web.base.url', base)
                     except Exception:
                         _logger.exception("Failed to update web.base.url configuration parameter")
-        return uid
+        return auth_info
 
     @classmethod
     @tools.ormcache('uid', 'passwd')
@@ -893,19 +963,39 @@ class Users(models.Model):
             with self._assert_can_auth(user=uid):
                 if not self.env.user.active:
                     raise AccessDenied()
-                self._check_credentials(passwd, {'interactive': False})
+                credential = {'login': self.env.user.login, 'password': passwd, 'type': 'password'}
+                self._check_credentials(credential, {'interactive': False})
 
     def _get_session_token_fields(self):
         return {'id', 'login', 'password', 'active'}
+
+    def _get_session_token_query_params(self):
+        database_secret = SQL("SELECT value FROM ir_config_parameter WHERE key='database.secret'")
+        fields = SQL(", ").join(
+            SQL.identifier(self._table, fname)
+            for fname in sorted(self._get_session_token_fields())
+            # To handle `auth_passkey_key_ids`,
+            # which we want in the `_get_session_token_fields` list for the cache invalidation mechanism
+            # but which we do not want here as it isn't an actual column in the res_users table.
+            # Instead, the left join to that table is done with an override of `_get_session_token_query_params`.
+            if not self._fields[fname].relational
+        )
+        return {
+            "select": SQL("(%s), %s", database_secret, fields),
+            "from": SQL("res_users"),
+            "joins": SQL(""),
+            "where": SQL("res_users.id = %s", self.id),
+            "group_by": SQL("res_users.id"),
+        }
 
     @tools.ormcache('sid')
     def _compute_session_token(self, sid):
         """ Compute a session token given a session id and a user id """
         # retrieve the fields used to generate the session token
-        session_fields = ', '.join(sorted(self._get_session_token_fields()))
-        self.env.cr.execute("""SELECT %s, (SELECT value FROM ir_config_parameter WHERE key='database.secret')
-                                FROM res_users
-                                WHERE id=%%s""" % (session_fields), (self.id,))
+        self.env.cr.execute(SQL(
+            "SELECT %(select)s FROM %(from)s %(joins)s WHERE %(where)s GROUP BY %(group_by)s",
+            **self._get_session_token_query_params(),
+        ))
         if self.env.cr.rowcount != 1:
             self.env.registry.clear_cache()
             return False
@@ -932,7 +1022,8 @@ class Users(models.Model):
             raise AccessDenied()
 
         # alternatively: use identitycheck wizard?
-        self._check_credentials(old_passwd, {'interactive': True})
+        credential = {'login': self.env.user.login, 'password': old_passwd, 'type': 'password'}
+        self._check_credentials(credential, {'interactive': True})
 
         # use self.env.user here, because it has uid=SUPERUSER_ID
         self.env.user._change_password(new_passwd)
@@ -1075,7 +1166,6 @@ class Users(models.Model):
         the current request is in debug mode.
         """
         self.ensure_one()
-
         if not (self.env.su or self == self.env.user or self._has_group('base.group_user')):
             # this prevents RPC calls from non-internal users to retrieve
             # information about other users
@@ -1086,7 +1176,6 @@ class Users(models.Model):
             result = result and bool(request and request.session.debug)
         return result
 
-    @tools.ormcache('self.id', 'group_ext_id')
     def _has_group(self, group_ext_id: str) -> bool:
         """ Return whether user ``self`` belongs to the given group.
 
@@ -1096,14 +1185,15 @@ class Users(models.Model):
         :return: True if user ``self`` is a member of the group with the
            given external ID (XML ID), else False.
         """
-        try:
-            module, ext_id = group_ext_id.split('.')
-        except (AttributeError, ValueError):
-            raise ValueError(f"External ID {group_ext_id!r} must be fully qualified") from None
-        self._cr.execute("""SELECT 1 FROM res_groups_users_rel WHERE uid=%s AND gid IN
-                            (SELECT res_id FROM ir_model_data WHERE module=%s AND name=%s AND model='res.groups')""",
-                         (self.id, module, ext_id))
-        return bool(self._cr.fetchone())
+        group_id = self.env['res.groups']._get_group_definitions().get_id(group_ext_id)
+        # for new record don't fill the ormcache
+        return group_id in (self._get_group_ids() if self.id else self.groups_id._origin._ids)
+
+    @tools.ormcache('self.id')
+    def _get_group_ids(self):
+        """ Return ``self``'s group ids (as a tuple)."""
+        self.ensure_one()
+        return self.groups_id._ids
 
     def _action_show(self):
         """If self is a singleton, directly access the form view. If it is a recordset, open a tree view"""
@@ -1359,6 +1449,7 @@ class GroupsImplied(models.Model):
             if user_ids:
                 # delegate addition of users to add implied groups
                 group.write({'users': user_ids})
+        self.env.registry.clear_cache('groups')
         return groups
 
     def write(self, values):
@@ -1387,6 +1478,13 @@ class GroupsImplied(models.Model):
                           WHERE i.gid = %(gid)s
                 """, dict(gid=group.id))
             self._check_one_user_type()
+        if 'implied_ids' in values:
+            self.env.registry.clear_cache('groups')
+        return res
+
+    def unlink(self):
+        res = super().unlink()
+        self.env.registry.clear_cache('groups')
         return res
 
     def _apply_group(self, implied_group):
@@ -1414,6 +1512,34 @@ class GroupsImplied(models.Model):
                 # do not remove inactive users (e.g. default)
                 implied_group.with_context(active_test=False).write(
                     {'users': [Command.unlink(user.id) for user in users_to_unlink]})
+
+    @api.model
+    @tools.ormcache(cache='groups')
+    def _get_group_definitions(self):
+        """ Return the definition of all the groups as a :class:`~odoo.tools.SetDefinitions`. """
+        groups = self.sudo().search([], order='id')
+        id_to_ref = groups.get_external_id()
+
+        # The 'base.group_no_one' is not actually involved by any other group because it is session dependent.
+        group_no_one_id = {gid for gid, ref in id_to_ref.items() if ref == 'base.group_no_one'}
+
+        data = {
+            group.id: {
+                'ref': id_to_ref[group.id] or str(group.id),
+                'supersets': set(group.implied_ids.ids) - group_no_one_id,
+            }
+            for group in groups
+        }
+
+        # determine exclusive groups (will be disjoint for the set expression)
+        user_types_category_id = self.env['ir.model.data']._xmlid_to_res_id('base.module_category_user_type', raise_if_not_found=False)
+        if user_types_category_id:
+            user_type_ids = self.sudo().search([('category_id', '=', user_types_category_id)]).ids
+            for user_type_id in user_type_ids:
+                data[user_type_id]['disjoints'] = set(user_type_ids) - {user_type_id}
+
+        return SetDefinitions(data)
+
 
 class UsersImplied(models.Model):
     _inherit = 'res.users'
@@ -1534,6 +1660,9 @@ class GroupsView(models.Model):
             user_type_readonly = str({})
             sorted_tuples = sorted(self.get_groups_by_application(),
                                    key=lambda t: t[0].xml_id != 'base.module_category_user_type')
+
+            invisible_information = "All fields linked to groups must be present in the view due to the overwrite of create and write. The implied groups are calculated using this values."
+
             for app, kind, gs, category_name in sorted_tuples:  # we process the user type first
                 attrs = {}
                 # hide groups in categories 'Hidden' and 'Extra' (except for group_no_one)
@@ -1549,7 +1678,8 @@ class GroupsView(models.Model):
                     # as it's used in domain of attrs of other fields,
                     # and the normal user category type field node is wrapped in a `groups="base.no_one"`,
                     # and is therefore removed when not in debug mode.
-                    xml0.append(E.field(name=field_name, invisible="1", on_change="1"))
+                    xml0.append(E.field(name=field_name, invisible="True", on_change="1"))
+                    xml0.append(etree.Comment(invisible_information))
                     user_type_field_name = field_name
                     user_type_readonly = f'{user_type_field_name} != {group_employee.id}'
                     attrs['widget'] = 'radio'
@@ -1570,7 +1700,8 @@ class GroupsView(models.Model):
                     xml_by_category[category_name].append(E.newline())
                     # add duplicate invisible field so default values are saved on create
                     if attrs.get('groups') == 'base.group_no_one':
-                        xml0.append(E.field(name=field_name, **dict(attrs, invisible="1", groups='!base.group_no_one')))
+                        xml0.append(E.field(name=field_name, **dict(attrs, invisible="True", groups='!base.group_no_one')))
+                        xml0.append(etree.Comment(invisible_information))
 
                 else:
                     # application separator with boolean fields
@@ -1585,11 +1716,13 @@ class GroupsView(models.Model):
                         dest_group = left_group if group_count % 2 == 0 else right_group
                         if g == group_no_one:
                             # make the group_no_one invisible in the form view
-                            dest_group.append(E.field(name=field_name, invisible="1", **attrs))
+                            dest_group.append(E.field(name=field_name, invisible="True", **attrs))
+                            dest_group.append(etree.Comment(invisible_information))
                         else:
                             dest_group.append(E.field(name=field_name, **attrs))
                         # add duplicate invisible field so default values are saved on create
-                        xml0.append(E.field(name=field_name, **dict(attrs, invisible="1", groups='!base.group_no_one')))
+                        xml0.append(E.field(name=field_name, **dict(attrs, invisible="True", groups='!base.group_no_one')))
+                        xml0.append(etree.Comment(invisible_information))
                         group_count += 1
                     xml4.append(E.group(*left_group))
                     xml4.append(E.group(*right_group))
@@ -1977,11 +2110,20 @@ class CheckIdentity(models.TransientModel):
     _description = "Password Check Wizard"
 
     request = fields.Char(readonly=True, groups=fields.NO_ACCESS)
+    auth_method = fields.Selection([('password', 'Password')], default=lambda self: self._get_default_auth_method())
     password = fields.Char()
+
+    def _get_default_auth_method(self):
+        return 'password'
 
     def _check_identity(self):
         try:
-            self.create_uid._check_credentials(self.password, {'interactive': True})
+            credential = {
+                'login': self.env.user.login,
+                'password': self.password,
+                'type': 'password',
+            }
+            self.create_uid._check_credentials(credential, {'interactive': True})
         except AccessDenied:
             raise UserError(_("Incorrect Password, try again or click on Forgot Password to reset your password."))
 
@@ -1991,10 +2133,10 @@ class CheckIdentity(models.TransientModel):
         self.password = False
 
         request.session['identity-check-last'] = time.time()
-        ctx, model, ids, method = json.loads(self.sudo().request)
+        ctx, model, ids, method, args, kwargs = json.loads(self.sudo().request)
         method = getattr(self.env(context=ctx)[model].browse(ids), method)
         assert getattr(method, '__has_check_identity', False)
-        return method()
+        return method(*args, **kwargs)
 
     def revoke_all_devices(self):
         self._check_identity()
@@ -2093,7 +2235,7 @@ class APIKeysUser(models.Model):
         """ To be overridden if RPC access needs to be restricted to API keys, e.g. for 2FA """
         return False
 
-    def _check_credentials(self, password, user_agent_env):
+    def _check_credentials(self, credential, user_agent_env):
         user_agent_env = user_agent_env or {}
         if user_agent_env.get('interactive', True):
             if 'interactive' not in user_agent_env:
@@ -2102,17 +2244,21 @@ class APIKeysUser(models.Model):
                     Check calls and overrides to ensure the 'interactive' key is properly set in \
                     all _check_credentials environments"
                 )
-            return super()._check_credentials(password, user_agent_env)
+            return super()._check_credentials(credential, user_agent_env)
 
         if not self.env.user._rpc_api_keys_only():
             try:
-                return super()._check_credentials(password, user_agent_env)
+                return super()._check_credentials(credential, user_agent_env)
             except AccessDenied:
                 pass
 
         # 'rpc' scope does not really exist, we basically require a global key (scope NULL)
-        if self.env['res.users.apikeys']._check_credentials(scope='rpc', key=password) == self.env.uid:
-            return
+        if self.env['res.users.apikeys']._check_credentials(scope='rpc', key=credential['password']) == self.env.uid:
+            return {
+                'uid': self.env.user.id,
+                'auth_method': 'apikey',
+                'mfa': 'default',
+            }
 
         raise AccessDenied()
 

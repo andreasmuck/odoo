@@ -80,6 +80,9 @@ export const FONT_SIZE_CLASSES = ["display-1-fs", "display-2-fs", "display-3-fs"
  */
 export const TEXT_STYLE_CLASSES = ["display-1", "display-2", "display-3", "display-4", "lead", "o_small", "small"];
 
+export const ZERO_WIDTH_CHARS = ['\u200b', '\ufeff'];
+export const ZERO_WIDTH_CHARS_REGEX = new RegExp(`[${ZERO_WIDTH_CHARS.join('')}]`, 'g');
+
 //------------------------------------------------------------------------------
 // Position and sizes
 //------------------------------------------------------------------------------
@@ -572,6 +575,84 @@ export function getNormalizedCursorPosition(node, offset, full = true) {
 
     return [node, offset];
 }
+export function insertSelectionChars(anchorNode, anchorOffset, focusNode, focusOffset, startChar='[', endChar=']') {
+    // If the range characters have to be inserted within the same parent and
+    // the anchor range character has to be before the focus range character,
+    // the focus offset needs to be adapted to account for the first insertion.
+    if (anchorNode === focusNode && anchorOffset <= focusOffset) {
+        focusOffset += (focusNode.nodeType === Node.TEXT_NODE ? startChar.length : 1);
+    }
+    insertCharsAt(startChar, anchorNode, anchorOffset);
+    insertCharsAt(endChar, focusNode, focusOffset);
+}
+/**
+ * Log the contents of the given root, with the characters "[" and "]" around
+ * the selection.
+ *
+ * @param {Element} root
+ * @param {Object} [options={}]
+ * @param {Selection} [options.selection] if undefined, the current selection is used.
+ * @param {boolean} [options.doFormat] if true, the HTML is formatted.
+ * @param {boolean} [options.includeOids] if true, the HTML is formatted.
+ */
+export function logSelection(root, options = {}) {
+    const sel = options.selection || root.ownerDocument.getSelection();
+    if (!root.contains(sel.anchorNode) || !root.contains(sel.focusNode)) {
+        console.warn('The selection is not contained in the root.');
+        return;
+    }
+
+    // Clone the root and its contents.
+    let anchorClone, focusClone;
+    const cloneTree = node => {
+        const clone = node.cloneNode();
+        if (options.includeOids) {
+            clone.oid = node.oid;
+        }
+        anchorClone = anchorClone || (node === sel.anchorNode && clone);
+        focusClone = focusClone || (node === sel.focusNode && clone);
+        for (const child of node.childNodes || []) {
+            clone.append(cloneTree(child));
+        }
+        return clone;
+    }
+    const rootClone = cloneTree(root);
+
+    // Insert the selection characters.
+    insertSelectionChars(anchorClone, sel.anchorOffset, focusClone, sel.focusOffset, '%c[%c', '%c]%c');
+
+    // Remove information that is not useful for the log.
+    rootClone.removeAttribute('data-last-history-steps');
+
+    // Format the HTML by splitting and indenting to highlight the structure.
+    if (options.doFormat) {
+        const formatHtml = (node, spaces = 0) => {
+            node.before(document.createTextNode('\n' + ' '.repeat(spaces)));
+            for (const child of [...node.childNodes]) {
+                formatHtml(child, spaces + 4);
+            }
+            if (node.nodeType !== Node.TEXT_NODE) {
+                node.appendChild(document.createTextNode('\n' + ' '.repeat(spaces)));
+            }
+            if (options.includeOids) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    node.textContent += ` (${node.oid})`;
+                } else {
+                    node.setAttribute('oid', node.oid);
+                }
+            }
+        }
+        formatHtml(rootClone);
+    }
+
+    // Style and log the result.
+    const selectionCharacterStyle = 'color: #75bfff; font-weight: 700;';
+    const defaultStyle = 'color: inherit; font-weight: inherit;';
+    console.log(
+        makeZeroWidthCharactersVisible(rootClone.outerHTML),
+        selectionCharacterStyle, defaultStyle, selectionCharacterStyle, defaultStyle,
+    );
+}
 /**
  * Guarantee that the focus is on element or one of its children.
  *
@@ -703,6 +784,34 @@ export function getTraversedNodes(editable, range = getDeepRange(editable)) {
     do {
         node = iterator.nextNode();
     } while (node && node !== range.startContainer && !(selectedTableCells.length && node === selectedTableCells[0]));
+    if (
+        node &&
+        !range.collapsed &&
+        node.nodeType === Node.ELEMENT_NODE &&
+        node.childNodes.length &&
+        range.startOffset &&
+        node.childNodes[range.startOffset - 1].nodeName === "BR"
+    ) {
+        // Handle the cases:
+        // <p>ab<br>[</p><p>cd</p>] => [p2, cd]
+        // <p>ab<br>[<br>cd</p><p>ef</p>] => [br2, cd, p2, ef]
+        const targetBr = node.childNodes[range.startOffset - 1];
+        while (node != targetBr) {
+            node = iterator.nextNode();
+        }
+        node = iterator.nextNode();
+    }
+    if (
+        node &&
+        !range.collapsed &&
+        node === range.startContainer &&
+        range.startOffset === nodeSize(node) &&
+        node.nextSibling &&
+        node.nextSibling.nodeName === "BR"
+    ) {
+        // Handle the case: <p>ab[<br>cd</p><p>ef</p>] => [br, cd, p2, ef]
+        node = iterator.nextNode();
+    }
     const traversedNodes = new Set([node, ...descendants(node)]);
     while (node && node !== range.endContainer) {
         node = iterator.nextNode();
@@ -713,9 +822,32 @@ export function getTraversedNodes(editable, range = getDeepRange(editable)) {
                     traversedNodes.add(selectedTd);
                     descendants(selectedTd).forEach(descendant => traversedNodes.add(descendant));
                 }
-            } else {
+            } else if (
+                !(
+                    // Handle the case: [<p>ab</p><p>cd<br>]ef</p> => [ab, p2, cd, br]
+                    node === range.endContainer &&
+                    range.endOffset === 0 &&
+                    !range.collapsed &&
+                    node.previousSibling &&
+                    node.previousSibling.nodeName === "BR"
+                )
+            ) {
                 traversedNodes.add(node);
             }
+        }
+    }
+    if (node) {
+        // Handle the cases:
+        // [<p>ab</p><p>cd<br>]</p> => [ab, p2, cd, br]
+        // [<p>ab</p><p>cd<br>]<br>ef</p> => [ab, p2, cd, br1]
+        for (const descendant of descendants(node)) {
+            if (
+                descendant.parentElement === node &&
+                childNodeIndex(descendant) >= range.endOffset
+            ) {
+                break;
+            }
+            traversedNodes.add(descendant);
         }
     }
     return [...traversedNodes];
@@ -769,7 +901,7 @@ export function getDeepRange(editable, { range, sel, splitText, select, correctT
         sel.anchorNode &&
         (sel.anchorNode.nodeName === "BR" || (sel.anchorNode.nodeType === Node.TEXT_NODE && sel.anchorNode.textContent === ''))
     ) {
-        setCursorStart(sel.anchorNode.parentElement, false);
+        setSelection(sel.anchorNode.parentElement, childNodeIndex(sel.anchorNode));
     }
     range = range ? range.cloneRange() : sel && sel.rangeCount && sel.getRangeAt(0).cloneRange();
     if (!range) return;
@@ -854,11 +986,48 @@ export function getDeepRange(editable, { range, sel, splitText, select, correctT
     return range;
 }
 
+export function getAdjacentCharacter(editable, side) {
+    let { focusNode, focusOffset } = editable.ownerDocument.getSelection();
+    const originalBlock = closestBlock(focusNode);
+    let adjacentCharacter;
+    while (!adjacentCharacter && focusNode) {
+        if (side === 'previous') {
+            adjacentCharacter = focusOffset > 0 && focusNode.textContent[focusOffset - 1];
+        } else {
+            adjacentCharacter = focusNode.textContent[focusOffset];
+        }
+        if (!adjacentCharacter) {
+            if (side === 'previous') {
+                focusNode = previousLeaf(focusNode, editable);
+                focusOffset = focusNode && nodeSize(focusNode);
+            } else {
+                focusNode = nextLeaf(focusNode, editable);
+                focusOffset = 0;
+            }
+            const characterIndex = side === 'previous' ? focusOffset - 1 : focusOffset;
+            adjacentCharacter = focusNode && focusNode.textContent[characterIndex];
+        }
+    }
+    return closestBlock(focusNode) === originalBlock ? adjacentCharacter : undefined;
+}
+
+function isZwnbsp(node) {
+    return node.nodeType === Node.TEXT_NODE && node.textContent === '\ufeff';
+}
+
+function isTangible(node) {
+    return isVisible(node) || isZwnbsp(node) || hasTangibleContent(node);
+}
+
+function hasTangibleContent(node) {
+    return [...(node?.childNodes || [])].some(n => isTangible(n));
+}
+
 export function getDeepestPosition(node, offset) {
     let direction = DIRECTIONS.RIGHT;
     let next = node;
     while (next) {
-        if ((isVisible(next) || isZWS(next)) && (!isBlock(next) || next.isContentEditable)) {
+        if ((isTangible(next) || isZWS(next)) && (!isBlock(next) || next.isContentEditable)) {
             // Valid node: update position then try to go deeper.
             if (next !== node) {
                 [node, offset] = [next, direction ? 0 : nodeSize(next)];
@@ -955,7 +1124,7 @@ export function getOffsetAndCharSize(nodeValue, offset, direction) {
 // Format utils
 //------------------------------------------------------------------------------
 
-const formatsSpecs = {
+export const formatsSpecs = {
     italic: {
         tagName: 'em',
         isFormatted: isItalic,
@@ -1119,8 +1288,12 @@ export const formatSelection = (editor, formatName, {applyStyle, formatProps} = 
         // Remove the format on all inline ancestors until a block or an element
         // with a class that is not related to font size (in case the formatting
         // comes from the class).
-        while (parentNode && (!isBlock(parentNode) && (parentNode.classList.length === 0 ||
-                [...parentNode.classList].every(cls => FONT_SIZE_CLASSES.includes(cls))))) {
+        while (
+            parentNode && !isBlock(parentNode) &&
+            !isUnbreakable(parentNode) && !isUnbreakable(currentNode) &&
+            (parentNode.classList.length === 0 ||
+                [...parentNode.classList].every(cls => FONT_SIZE_CLASSES.includes(cls)))
+        ) {
             const isUselessZws = parentNode.tagName === 'SPAN' &&
                 parentNode.hasAttribute('data-oe-zws-empty-inline') &&
                 parentNode.getAttributeNames().length === 1;
@@ -1193,6 +1366,73 @@ export const formatSelection = (editor, formatName, {applyStyle, formatProps} = 
         } else {
             setSelection(lastNode, lastNode.length, firstNode, 0, false);
         }
+    }
+}
+export const isLinkEligibleForZwnbsp = (editable, link) => {
+    return link.isContentEditable && editable.contains(link) && !(
+        [link, ...link.querySelectorAll('*')].some(el => el.nodeName === 'IMG' || isBlock(el)) ||
+        link.matches('nav a, a.nav-link')
+    );
+}
+/**
+ * Take a link and pad it with non-break zero-width spaces to ensure that it is
+ * always possible to place the cursor at its inner and outer edges.
+ *
+ * @param {HTMLElement} editable
+ * @param {HTMLAnchorElement} link
+ */
+export const padLinkWithZws = (editable, link) => {
+    if (!isLinkEligibleForZwnbsp(editable, link)) {
+        // Only add the ZWNBSP for simple (possibly styled) text links, and
+        // never in a nav.
+        return;
+    }
+    const selection = editable.ownerDocument.getSelection() || {};
+    const { anchorOffset, focusOffset } = selection;
+    let extraAnchorOffset = 0;
+    let extraFocusOffset = 0;
+    if (!link.textContent.startsWith('\uFEFF')) {
+        if (selection.anchorNode === link && anchorOffset) {
+            extraAnchorOffset += 1;
+        }
+        if (selection.focusNode === link && focusOffset) {
+            extraFocusOffset += 1;
+        }
+        link.prepend(document.createTextNode('\uFEFF'));
+    }
+    if (!link.textContent.endsWith('\uFEFF')) {
+        if (selection.anchorNode === link && anchorOffset + extraAnchorOffset === nodeSize(link)) {
+            extraAnchorOffset += 1;
+        }
+        if (selection.focusNode === link && focusOffset + extraFocusOffset === nodeSize(link)) {
+            extraFocusOffset += 1;
+        }
+        link.append(document.createTextNode('\uFEFF'));
+    }
+    const linkIndex = childNodeIndex(link);
+    if (!(link.previousSibling && link.previousSibling.textContent.endsWith('\uFEFF'))) {
+        if (selection.anchorNode === link.parentElement && anchorOffset + extraAnchorOffset > linkIndex) {
+            extraAnchorOffset += 1;
+        }
+        if (selection.focusNode === link.parentElement && focusOffset + extraFocusOffset > linkIndex) {
+            extraFocusOffset += 1;
+        }
+        link.before(document.createTextNode('\uFEFF'));
+    }
+    if (!(link.nextSibling && link.nextSibling.textContent.startsWith('\uFEFF'))) {
+        if (selection.anchorNode === link.parentElement && anchorOffset + extraAnchorOffset > linkIndex + 1) {
+            extraAnchorOffset += 1;
+        }
+        if (selection.focusNode === link.parentElement && focusOffset + extraFocusOffset > linkIndex + 1) {
+            extraFocusOffset += 1;
+        }
+        link.after(document.createTextNode('\uFEFF'));
+    }
+    if (extraAnchorOffset || extraFocusOffset) {
+        setSelection(
+            selection.anchorNode, anchorOffset + extraAnchorOffset,
+            selection.focusNode, focusOffset + extraFocusOffset,
+        );
     }
 }
 
@@ -1287,10 +1527,10 @@ export function isBlock(node) {
     // We won't call `getComputedStyle` more than once per node.
     let style = computedStyles.get(node);
     if (!style) {
-        style = node.ownerDocument.defaultView.getComputedStyle(node);
+        style = node.ownerDocument.defaultView?.getComputedStyle(node);
         computedStyles.set(node, style);
     }
-    if (style.display) {
+    if (style?.display) {
         return !style.display.includes('inline') && style.display !== 'contents';
     }
     return blockTagNames.includes(tagName);
@@ -1472,6 +1712,14 @@ export const ICON_SELECTOR = iconTags.map(tag => {
     }).join(', ');
 }).join(', ');
 
+/**
+ * Return true if the given node is a zero-width breaking space (200b), false
+ * otherwise. Note that this will return false for a zero-width NON-BREAK space
+ * (feff)!
+ *
+ * @param {Node} node
+ * @returns {boolean}
+ */
 export function isZWS(node) {
     return (
         node &&
@@ -1670,7 +1918,7 @@ export function isInPre(node) {
             getComputedStyle(element).getPropertyValue('white-space') === 'pre')
     );
 }
-const whitespace = `[^\\S\\u00A0\\u0009]`; // for formatting (no "real" content) (TODO: 0009 shouldn't be included)
+const whitespace = `[^\\S\\u00A0\\u0009\\ufeff]`; // for formatting (no "real" content) (TODO: 0009 shouldn't be included)
 const whitespaceRegex = new RegExp(`^${whitespace}*$`);
 export function isWhitespace(value) {
     const str = typeof value === 'string' ? value : value.nodeValue;
@@ -1690,7 +1938,10 @@ export function isWhitespace(value) {
 export function isVisible(node) {
     return !!node && (
         (node.nodeType === Node.TEXT_NODE && isVisibleTextNode(node)) ||
+        (node.nodeType === Node.ELEMENT_NODE &&
+            (node.getAttribute("t-esc") || node.getAttribute("t-out"))) ||
         isSelfClosingElement(node) ||
+        isIconElement(node) ||
         hasVisibleContent(node)
     );
 }
@@ -1705,8 +1956,8 @@ export function isVisibleTextNode(testedNode) {
     if (visibleCharRegex.test(testedNode.textContent) || (isInPre(testedNode) && isWhitespace(testedNode))) {
         return true;
     }
-    if (testedNode.textContent === '\u200B') {
-        return false;
+    if (ZERO_WIDTH_CHARS.includes(testedNode.textContent)) {
+        return false; // a ZW(NB)SP is always invisible, regardless of context.
     }
     // The following assumes node is made entirely of whitespace and is not
     // preceded of followed by a block.
@@ -1823,6 +2074,10 @@ export function toggleClass(node, className) {
     if (!node.className) {
         node.removeAttribute('class');
     }
+}
+
+export function makeZeroWidthCharactersVisible(text) {
+    return text.replaceAll('\u200B', '//ZWSP//').replaceAll('\uFEFF', '//ZWNBSP//');
 }
 
 /**
@@ -2058,6 +2313,9 @@ export function splitAroundUntil(elements, limitAncestor) {
 }
 
 export function insertText(sel, content) {
+    if (!content) {
+        return;
+    }
     if (sel.anchorNode.nodeType === Node.TEXT_NODE) {
         const pos = [sel.anchorNode.parentElement, splitTextNode(sel.anchorNode, sel.anchorOffset)];
         setSelection(...pos, ...pos, false);
@@ -2068,6 +2326,33 @@ export function insertText(sel, content) {
     restore();
     setSelection(...boundariesOut(txt), false);
     return txt;
+}
+
+/**
+ * Inserts the given characters at the given offset of the given node.
+ *
+ * @param {string} chars
+ * @param {Node} node
+ * @param {number} offset
+ */
+export function insertCharsAt(chars, node, offset) {
+    if (node.nodeType === Node.TEXT_NODE) {
+        const startValue = node.nodeValue;
+        if (offset < 0 || offset > startValue.length) {
+            throw new Error(`Invalid ${chars} insertion in text node`);
+        }
+        node.nodeValue = startValue.slice(0, offset) + chars + startValue.slice(offset);
+    } else {
+        if (offset < 0 || offset > node.childNodes.length) {
+            throw new Error(`Invalid ${chars} insertion in non-text node`);
+        }
+        const textNode = document.createTextNode(chars);
+        if (offset < node.childNodes.length) {
+            node.insertBefore(textNode, node.childNodes[offset]);
+        } else {
+            node.appendChild(textNode);
+        }
+    }
 }
 
 /**
@@ -2102,7 +2387,7 @@ export function fillEmpty(el) {
         blockEl.appendChild(br);
         fillers.br = br;
     }
-    if (!isVisible(el) && !el.hasAttribute("data-oe-zws-empty-inline")) {
+    if (!isTangible(el) && !el.hasAttribute("data-oe-zws-empty-inline") && !el.hasChildNodes()) {
         // As soon as there is actual content in the node, the zero-width space
         // is removed by the sanitize function.
         const zws = document.createTextNode('\u200B');
@@ -2114,6 +2399,18 @@ export function fillEmpty(el) {
             previousSibling.remove();
         }
         setSelection(zws, 0, zws, 0);
+    }
+    // If the element is empty and inside an <a> tag with 'inline' display,
+    // it's not possible to place the cursor in element even if it contains
+    // ZWSP. To make the element cursor-friendly, change its display to
+    // 'inline-block'.
+    if (
+        !isVisible(el) &&
+        el.nodeName !== 'A' &&
+        closestElement(el, 'a') &&
+        getComputedStyle(el).display === 'inline'
+    ) {
+        el.style.display = 'inline-block';
     }
     return fillers;
 }
@@ -2306,7 +2603,7 @@ export function prepareUpdate(...args) {
         const right = getState(el, offset, DIRECTIONS.RIGHT, left.cType);
         if (options.debug) {
             const editable = el && closestElement(el, '.odoo-editor-editable');
-            const oldEditableHTML = editable && editable.innerHTML.replaceAll(' ', '_').replaceAll('\u200B', 'ZWS') || '';
+            const oldEditableHTML = editable && makeZeroWidthCharactersVisible(editable.innerHTML).replaceAll(' ', '_') || '';
             left.oldEditableHTML = oldEditableHTML;
             right.oldEditableHTML = oldEditableHTML;
         }
@@ -2379,7 +2676,8 @@ export function getState(el, offset, direction, leftCType) {
     let lastSpace = null;
     for (const node of domPath) {
         if (node.nodeType === Node.TEXT_NODE) {
-            const value = node.nodeValue;
+            // ZWNBSP are technical characters which should be ignored.
+            const value = node.nodeValue.replaceAll('\ufeff', '');
             // If we hit a text node, the state depends on the path direction:
             // any space encountered backwards is a visible space if we hit
             // visible content afterwards. If going forward, spaces are only
@@ -2599,12 +2897,12 @@ export function restoreState(prevStateData, debug=false) {
     if (debug) {
         const editable = closestElement(node, '.odoo-editor-editable');
         console.log(
-            '%c' + node.textContent.replaceAll(' ', '_').replaceAll('\u200B', 'ZWS') + '\n' +
+            '%c' + makeZeroWidthCharactersVisible(node.textContent).replaceAll(' ', '_') + '\n' +
             '%c' + (direction === DIRECTIONS.LEFT ? 'left' : 'right') + '\n' +
             '%c' + ctypeToString(cType1) + '\n' +
             '%c' + ctypeToString(cType2) + '\n' +
             '%c' + 'BEFORE: ' + (oldEditableHTML || '(unavailable)') + '\n' +
-            '%c' + 'AFTER:  ' + (editable ? editable.innerHTML.replaceAll(' ', '_').replaceAll('\u200B', 'ZWS') : '(unavailable)') + '\n',
+            '%c' + 'AFTER:  ' + (editable ? makeZeroWidthCharactersVisible(editable.innerHTML).replaceAll(' ', '_') : '(unavailable)') + '\n',
             'color: white; display: block; width: 100%;',
             'color: ' + (direction === DIRECTIONS.LEFT ? 'magenta' : 'lightgreen') + '; display: block; width: 100%;',
             'color: pink; display: block; width: 100%;',
@@ -2811,6 +3109,7 @@ export function getRangePosition(el, document, options = {}) {
     const selection = document.getSelection();
     if (!selection.rangeCount) return;
     const range = selection.getRangeAt(0);
+    const isRtl = options.direction === 'rtl';
 
     const marginRight = options.marginRight || 20;
     const marginBottom = options.marginBottom || 20;
@@ -2838,6 +3137,18 @@ export function getRangePosition(el, document, options = {}) {
         clonedRange.detach();
     }
 
+    if (isRtl) {
+        // To handle the RTL case we shift the elelement to the left by its size
+        // and handle it the same as left.
+        offset.right = offset.left - el.offsetWidth;
+        const leftMove = Math.max(0, offset.right + el.offsetWidth + marginLeft - window.innerWidth);
+        if (leftMove && offset.right - leftMove > marginRight) {
+            offset.right -= leftMove;
+        } else if (offset.right - leftMove < marginRight) {
+            offset.right = marginRight;
+        }
+    }
+
     const leftMove = Math.max(0, offset.left + el.offsetWidth + marginRight - window.innerWidth);
     if (leftMove && offset.left - leftMove > marginLeft) {
         offset.left -= leftMove;
@@ -2848,6 +3159,9 @@ export function getRangePosition(el, document, options = {}) {
     if (options.parentContextRect) {
         offset.left += options.parentContextRect.left;
         offset.top += options.parentContextRect.top;
+        if (isRtl) {
+            offset.right += options.parentContextRect.left;
+        }
     }
 
     if (
@@ -2862,6 +3176,13 @@ export function getRangePosition(el, document, options = {}) {
     if (offset) {
         offset.top += window.scrollY;
         offset.left += window.scrollX;
+        if (isRtl) {
+            offset.right += window.scrollX;
+        }
+    }
+    if (isRtl) {
+        // Get the actual right value.
+        offset.right = window.innerWidth - offset.right - el.offsetWidth;
     }
 
     return offset;
@@ -2921,6 +3242,7 @@ export function isMacOS() {
 
 /**
  * Remove zero-width spaces from the provided node and its descendants.
+ * Note: Does NOT remove zero-width NON-BREAK spaces (feff)!
  *
  * @param {Node} node
  */

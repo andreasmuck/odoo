@@ -1,12 +1,14 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import random
+
 from datetime import datetime
 
 from dateutil.relativedelta import relativedelta
 
-from odoo import _, api, fields, models
+from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
+from odoo.fields import Command
 from odoo.http import request
 from odoo.osv import expression
 from odoo.tools import float_is_zero
@@ -21,7 +23,6 @@ class SaleOrder(models.Model):
         readonly=True,
     )
 
-    access_point_address = fields.Json(string="Delivery Point Address")
     cart_recovery_email_sent = fields.Boolean(string="Cart recovery email already sent")
     shop_warning = fields.Char(string="Warning")
 
@@ -148,10 +149,10 @@ class SaleOrder(models.Model):
                     company = self.env['res.company'].browse(vals['company_id'])
                     if website.company_id.id != company.id:
                         raise ValueError(_(
-                            "The company of the website you are trying to sale from (%s)"
-                            " is different than the one you want to use (%s)",
-                            website.company_id.name,
-                            company.name,
+                            "The company of the website you are trying to sell from (%(website_company)s)"
+                            " is different than the one you want to use (%(company)s)",
+                            website_company=website.company_id.name,
+                            company=company.name,
                         ))
                 else:
                     vals['company_id'] = website.company_id.id
@@ -165,55 +166,6 @@ class SaleOrder(models.Model):
             if not order.transaction_ids and not order.amount_total and self._context.get('send_email'):
                 order._send_order_confirmation_mail()
         return res
-
-    def _action_confirm(self):
-        for order in self:
-            order_location = order.access_point_address
-
-            if not order_location:
-                continue
-
-            # retrieve all the data :
-            # name, street, city, state, zip, country
-            name = order.partner_shipping_id.name
-            street = order_location['pick_up_point_address']
-            city = order_location['pick_up_point_town']
-            zip_code = order_location['pick_up_point_postal_code']
-            country = order.env['res.country'].search([('code', '=', order_location['pick_up_point_country'])]).id
-            state = order.env['res.country.state'].search([
-                ('code', '=', order_location['pick_up_point_state']),
-                ('country_id', '=', country),
-            ]).id if (order_location['pick_up_point_state'] and country) else None
-            parent_id = order.partner_shipping_id.id
-            email = order.partner_shipping_id.email
-            phone = order.partner_shipping_id.phone
-
-            # we can check if the current partner has a partner of type "delivery" that has the same address
-            existing_partner = order.env['res.partner'].search([
-                ('street', '=', street),
-                ('city', '=', city),
-                ('state_id', '=', state),
-                ('country_id', '=', country),
-                ('type', '=', 'delivery'),
-            ], limit=1)
-
-            if existing_partner:
-                order.partner_shipping_id = existing_partner
-            else:
-                # if not, we create that res.partner
-                order.partner_shipping_id = order.env['res.partner'].create({
-                    'parent_id': parent_id,
-                    'type': 'delivery',
-                    'name': name,
-                    'street': street,
-                    'city': city,
-                    'state_id': state,
-                    'zip': zip_code,
-                    'country_id': country,
-                    'email': email,
-                    'phone': phone,
-                })
-        return super()._action_confirm()
 
     def action_preview_sale_order(self):
         action = super().action_preview_sale_order()
@@ -284,18 +236,43 @@ class SaleOrder(models.Model):
             order_line = self.env['sale.order.line'].sudo().create(order_line_values)
         return order_line
 
-    def _cart_update_pricelist(self, pricelist_id=None, update_pricelist=False):
+    def _update_address(self, partner_id, fnames=None):
+        if not fnames:
+            return
+
+        fpos_before = self.fiscal_position_id
+        pricelist_before = self.pricelist_id
+
+        self.write(dict.fromkeys(fnames, partner_id))
+
+        fpos_changed = fpos_before != self.fiscal_position_id
+        if fpos_changed:
+            # Recompute taxes on fpos change
+            self._recompute_taxes()
+
+        if self.pricelist_id != pricelist_before or fpos_changed:
+            # Pricelist may have been recomputed by the `partner_id` field update
+            # we need to recompute the prices to match the new pricelist if it changed
+            self._recompute_prices()
+
+            request.session['website_sale_current_pl'] = self.pricelist_id.id
+            self.website_id.invalidate_recordset(['pricelist_id'])
+
+        if self.carrier_id and 'partner_shipping_id' in fnames and self._has_deliverable_products():
+            # Update the delivery method on shipping address change.
+            delivery_methods = self._get_delivery_methods()
+            delivery_method = self._get_preferred_delivery_method(delivery_methods)
+            self._set_delivery_method(delivery_method)
+
+        if 'partner_id' in fnames:
+            # Only add the main partner as follower of the order
+            self._message_subscribe([partner_id])
+
+    def _cart_update_pricelist(self, pricelist_id=None):
         self.ensure_one()
 
-        previous_pricelist_id = self.pricelist_id.id
-
-        if pricelist_id:
+        if self.pricelist_id.id != pricelist_id:
             self.pricelist_id = pricelist_id
-
-        if update_pricelist:
-            self._compute_pricelist_id()
-
-        if update_pricelist or previous_pricelist_id != self.pricelist_id.id:
             self._recompute_prices()
 
     def _cart_update(self, product_id, line_id=None, add_qty=0, set_qty=0, **kwargs):
@@ -358,7 +335,7 @@ class SaleOrder(models.Model):
             order_line
             and order_line.price_unit == 0
             and self.website_id.prevent_zero_price_sale
-            and product.detailed_type not in self.env['product.template']._get_product_types_allow_zero_price()
+            and product.service_tracking not in self.env['product.template']._get_product_types_allow_zero_price()
         ):
             raise UserError(_(
                 "The given product does not have a price therefore it cannot be added to cart.",
@@ -367,53 +344,64 @@ class SaleOrder(models.Model):
         return {
             'line_id': order_line.id,
             'quantity': quantity,
-            'option_ids': list(set(order_line.option_line_ids.filtered(
+            'option_ids': list(set(order_line.linked_line_ids.filtered(
                 lambda sol: sol.order_id == order_line.order_id).ids)
             ),
             'warning': warning,
         }
 
     def _cart_find_product_line(
-            self,
-            product_id,
-            line_id=None,
-            linked_line_id=False,
-            optional_product_ids=None,
-            **kwargs
-        ):
+        self,
+        product_id,
+        line_id=None,
+        linked_line_id=False,
+        no_variant_attribute_value_ids=None,
+        **kwargs
+    ):
         """Find the cart line matching the given parameters.
 
-        If a product_id is given, the line will match the product only if the
-        line also has the same special attributes: `no_variant` attributes and
-        `is_custom` values.
+        Custom attributes won't be matched (but no_variant & dynamic ones will be)
+
+        :param int product_id: the product being added/removed, as a `product.product` id
+        :param int line_id: optional, the line the customer wants to edit (/shop/cart page), as a
+            `sale.order.line` id
+        :param int linked_line_id: optional, the parent line (for optional products), as a
+            `sale.order.line` id
+        :param list optional_product_ids: optional, the optional products of the line, as a list
+            of `product.product` ids
+        :param list no_variant_attribute_value_ids: list of `product.template.attribute.value` ids
+            whose attribute is configured as `no_variant`
+        :param dict kwargs: unused parameters, maybe used in overrides or other cart update methods
         """
         self.ensure_one()
-        SaleOrderLine = self.env['sale.order.line']
 
         if not self.order_line:
-            return SaleOrderLine
+            return self.env['sale.order.line']
+
+        if line_id:
+            # If we update a specific line, there is no need to filter anything else
+            return self.order_line.filtered(
+                lambda sol: sol.product_id.id == product_id and sol.id == line_id
+            )
+
+        domain = [
+            ('product_id', '=', product_id),
+            ('product_custom_attribute_value_ids', '=', False),
+            ('linked_line_id', '=', linked_line_id),
+        ]
+
+        filtered_sol = self.order_line.filtered_domain(domain)
+        if not filtered_sol:
+            return self.env['sale.order.line']
 
         product = self.env['product.product'].browse(product_id)
-        if not line_id and (
-            product.product_tmpl_id.has_dynamic_attributes()
-            or product.product_tmpl_id._has_no_variant_attributes()
-        ):
-            return SaleOrderLine
+        if product.product_tmpl_id._has_no_variant_attributes():
+            filtered_sol = filtered_sol.filtered(
+                lambda sol:
+                    sol.product_no_variant_attribute_value_ids.ids == no_variant_attribute_value_ids
+            )
 
-        domain = [('order_id', '=', self.id), ('product_id', '=', product_id)]
-        if line_id:
-            domain += [('id', '=', line_id)]
-        else:
-            domain += [
-                ('product_custom_attribute_value_ids', '=', False),
-                ('linked_line_id', '=', linked_line_id)
-            ]
-            if optional_product_ids:
-                domain += [('option_line_ids.product_id', 'in', optional_product_ids)]
-            else:
-                domain += [('option_line_ids', '=', False)]
-
-        return SaleOrderLine.search(domain)
+        return filtered_sol
 
     # hook to be overridden
     def _verify_updated_quantity(self, order_line, product_id, new_qty, **kwargs):
@@ -421,18 +409,16 @@ class SaleOrder(models.Model):
 
     def _prepare_order_line_values(
         self, product_id, quantity, linked_line_id=False,
-        no_variant_attribute_values=None, product_custom_attribute_values=None,
+        no_variant_attribute_value_ids=None, product_custom_attribute_values=None,
         **kwargs
     ):
         self.ensure_one()
         product = self.env['product.product'].browse(product_id)
 
-        no_variant_attribute_values = no_variant_attribute_values or []
-        received_no_variant_values = product.env['product.template.attribute.value'].browse([
-            int(ptav['value'])
-            for ptav in no_variant_attribute_values
-        ])
-        received_combination = product.product_template_attribute_value_ids | received_no_variant_values
+        no_variant_attribute_values = product.env['product.template.attribute.value'].browse(
+            no_variant_attribute_value_ids
+        )
+        received_combination = product.product_template_attribute_value_ids | no_variant_attribute_values
         product_template = product.product_tmpl_id
 
         # handle all cases where incorrect or incomplete data are received
@@ -452,17 +438,12 @@ class SaleOrder(models.Model):
         }
 
         # add no_variant attributes that were not received
-        for ptav in combination.filtered(
-            lambda ptav: ptav.attribute_id.create_variant == 'no_variant' and ptav not in received_no_variant_values
-        ):
-            no_variant_attribute_values.append({
-                'value': ptav.id,
-            })
+        no_variant_attribute_values |= combination.filtered(
+            lambda ptav: ptav.attribute_id.create_variant == 'no_variant'
+        )
 
         if no_variant_attribute_values:
-            values['product_no_variant_attribute_value_ids'] = [
-                fields.Command.set([int(attribute['value']) for attribute in no_variant_attribute_values])
-            ]
+            values['product_no_variant_attribute_value_ids'] = [Command.set(no_variant_attribute_values.ids)]
 
         # add is_custom attribute values that were not received
         custom_values = product_custom_attribute_values or []
@@ -505,6 +486,9 @@ class SaleOrder(models.Model):
         self.ensure_one()
         order_line.write(update_values)
 
+    def _validate_zero_amount_cart(self):
+        self.with_context(send_email=True).with_user(SUPERUSER_ID).action_confirm()
+
     def _cart_accessories(self):
         """ Suggest accessories based on 'Accessory Products' of products in cart """
         product_ids = set(self.website_order_line.product_id.ids)
@@ -516,6 +500,7 @@ class SaleOrder(models.Model):
                 combination = line.product_id.product_template_attribute_value_ids + line.product_no_variant_attribute_value_ids
                 all_accessory_products |= accessory_products.filtered(lambda product:
                     product.id not in product_ids
+                    and product._website_show_quick_add()
                     and product.filtered_domain(self.env['product.product']._check_company_domain(line.company_id))
                     and product._is_variant_possible(parent_combination=combination)
                     and (
@@ -621,48 +606,59 @@ class SaleOrder(models.Model):
             and not has_later_sale_order.get(abandoned_sale_order.partner_id, False)
         )
 
-    def _check_carrier_quotation(self, force_carrier_id=None, keep_carrier=False):
+    def _has_deliverable_products(self):
+        """ Return whether the order has lines with products that should be delivered.
+
+        :return: Whether the order has deliverable products.
+        :rtype: bool
+        """
+        return not self.only_services
+
+    def _remove_delivery_line(self):
+        super()._remove_delivery_line()
+        self.pickup_location_data = {}  # Reset the pickup location data.
+
+    def _get_preferred_delivery_method(self, available_delivery_methods):
+        """ Get the preferred delivery method based on available delivery methods for the order.
+
+        The preferred delivery method is selected as follows:
+
+        1. The one that is already set if it is compatible.
+        2. The default one if compatible.
+        3. The first compatible one.
+
+        :param delivery.carrier available_delivery_methods: The available delivery methods for
+               the order.
+        :return: The preferred delivery method for the order.
+        :rtype: delivery.carrier
+        """
         self.ensure_one()
-        DeliveryCarrier = self.env['delivery.carrier']
 
-        if self.only_services:
-            self._remove_delivery_line()
-            return True
-
-        self = self.with_company(self.company_id)
-        # attempt to use partner's preferred carrier
-        if not force_carrier_id and self.partner_shipping_id.property_delivery_carrier_id and not keep_carrier:
-            force_carrier_id = self.partner_shipping_id.property_delivery_carrier_id.id
-
-        carrier = force_carrier_id and DeliveryCarrier.browse(force_carrier_id) or self.carrier_id
-        available_carriers = self._get_delivery_methods()
-        if carrier:
-            if carrier not in available_carriers:
-                carrier = DeliveryCarrier
+        delivery_method = self.carrier_id
+        if available_delivery_methods and delivery_method not in available_delivery_methods:
+            if self.partner_shipping_id.property_delivery_carrier_id in available_delivery_methods:
+                delivery_method = self.partner_shipping_id.property_delivery_carrier_id
             else:
-                # set the forced carrier at the beginning of the list to be verfied first below
-                available_carriers -= carrier
-                available_carriers = carrier + available_carriers
-        if force_carrier_id or not carrier or carrier not in available_carriers:
-            for delivery in available_carriers:
-                verified_carrier = delivery._match_address(self.partner_shipping_id)
-                if verified_carrier:
-                    carrier = delivery
-                    break
-            self.write({'carrier_id': carrier.id})
+                delivery_method = available_delivery_methods[0]
+        return delivery_method
+
+    def _set_delivery_method(self, delivery_method, rate=None):
+        """ Set the delivery method on the order and create a delivery line if the shipment rate can
+         be retrieved.
+
+        :param delivery.carrier delivery_method: The delivery_method to set on the order.
+        :param dict rate: The rate of the delivery method.
+        :return: None
+        """
+        self.ensure_one()
+
         self._remove_delivery_line()
-        if carrier:
-            res = carrier.rate_shipment(self)
-            if res.get('success'):
-                self.set_delivery_line(carrier, res['price'])
-                self.delivery_rating_success = True
-                self.delivery_message = res['warning_message']
-            else:
-                self.set_delivery_line(carrier, 0.0)
-                self.delivery_rating_success = False
-                self.delivery_message = res['error_message']
+        if not delivery_method or not self._has_deliverable_products():
+            return
 
-        return bool(carrier)
+        rate = rate or delivery_method.rate_shipment(self)
+        if rate.get('success'):
+            self.set_delivery_line(delivery_method, rate['price'])
 
     def _get_delivery_methods(self):
         # searching on website_published will also search for available website (_search method on computed field)
@@ -672,7 +668,14 @@ class SaleOrder(models.Model):
 
     #=== TOOLING ===#
 
-    def _is_public_order(self):
+    def _is_anonymous_cart(self):
+        """ Return whether the cart was created by the public user and no address was added yet.
+
+        Note: `self.ensure_one()`
+
+        :return: Whether the cart is anonymous.
+        :rtype: bool
+        """
         self.ensure_one()
         return self.partner_id.id == request.website.user_id.sudo().partner_id.id
 
@@ -708,3 +711,6 @@ class SaleOrder(models.Model):
             raise ValidationError(_(
                 "Your cart is not ready to be paid, please verify previous steps."
             ))
+
+        if not self.only_services and not self.carrier_id:
+            raise ValidationError(_("No shipping method is selected."))

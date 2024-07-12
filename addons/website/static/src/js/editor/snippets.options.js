@@ -10,7 +10,12 @@ import weUtils from "@web_editor/js/common/utils";
 import options from "@web_editor/js/editor/snippets.options";
 import { NavbarLinkPopoverWidget } from "@website/js/widgets/link_popover_widget";
 import wUtils from "@website/js/utils";
-import {isImageCorsProtected, isImageSupportedForStyle} from "@web_editor/js/editor/image_processing";
+import {
+    applyModifications,
+    isImageCorsProtected,
+    isImageSupportedForStyle,
+    loadImageInfo,
+} from "@web_editor/js/editor/image_processing";
 import "@website/snippets/s_popup/options";
 import { range } from "@web/core/utils/numbers";
 import { _t } from "@web/core/l10n/translation";
@@ -722,28 +727,10 @@ options.Class.include({
         }
         for (const widget of widgets) {
             const methodsNames = widget.getMethodsNames();
-            const specialMethodsNames = [];
-            // If it's a pageOption, it's most likely to need to reload, so check the widgets.
-            if (this.data.pageOptions) {
-                specialMethodsNames.push(methodsNames);
-            } else {
-                for (const methodName of methodsNames) {
-                    if (this.specialCheckAndReloadMethodsNames.includes(methodName)) {
-                        specialMethodsNames.push(methodName);
-                    }
-                }
-            }
-            if (!specialMethodsNames.length) {
-                continue;
-            }
-            let paramsReload = false;
-            for (const methodName of specialMethodsNames) {
-                if (widget.getMethodsParams(methodName).reload) {
-                    paramsReload = true;
-                    break;
-                }
-            }
-            if (paramsReload) {
+            const methodNamesToCheck = this.data.pageOptions
+                ? methodsNames
+                : methodsNames.filter(m => this.specialCheckAndReloadMethodsNames.includes(m));
+            if (methodNamesToCheck.some(m => widget.getMethodsParams(m).reload)) {
                 return true;
             }
         }
@@ -896,7 +883,8 @@ options.Class.include({
      */
     async _customizeWebsiteData(value, params, isViewData) {
         const allDataKeys = this._getDataKeysFromPossibleValues(params.possibleValues);
-        const enableDataKeys = value.split(/\s*,\s*/);
+        const keysToEnable = value.split(/\s*,\s*/);
+        const enableDataKeys = allDataKeys.filter(value => keysToEnable.includes(value));
         const disableDataKeys = allDataKeys.filter(value => !enableDataKeys.includes(value));
         const resetViewArch = !!params.resetViewArch;
 
@@ -915,7 +903,8 @@ options.Class.include({
         for (const dataKeysStr of possibleValues) {
             allDataKeys.push(...dataKeysStr.split(/\s*,\s*/));
         }
-        return allDataKeys.filter((v, i, arr) => arr.indexOf(v) === i);
+        // return only unique non-empty strings
+        return allDataKeys.filter((v, i, arr) => v && arr.indexOf(v) === i);
     },
     /**
      * @private
@@ -1548,8 +1537,8 @@ options.registry.OptionsTab = options.registry.WebsiteLevelColor.extend({
      */
     async customizeButtonStyle(previewMode, widgetValue, params) {
         await this._customizeWebsiteVariables({
-            [`btn-${params.button}-outline`]: widgetValue === 'outline',
-            [`btn-${params.button}-flat`]: widgetValue === 'flat',
+            [`btn-${params.button}-outline`]: widgetValue === "outline" ? "true" : "false",
+            [`btn-${params.button}-flat`]: widgetValue === "flat" ? "true" : "false",
         }, params.nullValue);
     },
 
@@ -1633,7 +1622,7 @@ options.registry.OptionsTab = options.registry.WebsiteLevelColor.extend({
         if (methodName === 'customizeButtonStyle') {
             const isOutline = weUtils.getCSSVariableValue(`btn-${params.button}-outline`);
             const isFlat = weUtils.getCSSVariableValue(`btn-${params.button}-flat`);
-            return isFlat === "'True'" ? 'flat' : isOutline === "'True'" ? 'outline' : 'fill';
+            return isFlat === "true" ? "flat" : isOutline === "true" ? "outline" : "fill";
         }
         return this._super(...arguments);
     },
@@ -2961,10 +2950,31 @@ options.registry.CoverProperties = options.Class.extend({
      * @see this.selectClass for parameters
      */
     background: async function (previewMode, widgetValue, params) {
+        if (previewMode === false) {
+            this.$image[0].classList.remove("o_b64_image_to_save");
+        }
         if (widgetValue === '') {
             this.$image.css('background-image', '');
             this.$target.removeClass('o_record_has_cover');
         } else {
+            if (previewMode === false) {
+                const imgEl = document.createElement("img");
+                imgEl.src = widgetValue;
+                await loadImageInfo(imgEl);
+                if (imgEl.dataset.mimetype && ![
+                    "image/gif",
+                    "image/svg+xml",
+                    "image/webp",
+                ].includes(imgEl.dataset.mimetype)) {
+                    // Convert to webp but keep original width.
+                    imgEl.dataset.mimetype = "image/webp";
+                    const base64src = await applyModifications(imgEl, {
+                        mimetype: "image/webp",
+                    });
+                    widgetValue = base64src;
+                    this.$image[0].classList.add("o_b64_image_to_save");
+                }
+            }
             this.$image.css('background-image', `url('${widgetValue}')`);
             this.$target.addClass('o_record_has_cover');
             const $defaultSizeBtn = this.$el.find('.o_record_cover_opt_size_default');

@@ -1,4 +1,3 @@
-/** @odoo-module **/
 /* global html2canvas */
 
 import { registry } from "@web/core/registry";
@@ -10,7 +9,7 @@ export class RenderContainer extends Component {
     // place where to momentarily render some html code
     // we should only intact with that div through the `whenMounted` function
     static template = xml`
-        <div style="left: -1000px; position: fixed;">
+        <div class="render-container-parent" style="left: -1000px; position: fixed;">
             <div t-ref="ref">
                 <t t-if="props.comp.component" t-component="props.comp.component" t-props="props.comp.props"/>
             </div>

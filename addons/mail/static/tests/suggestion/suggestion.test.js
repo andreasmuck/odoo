@@ -1,6 +1,3 @@
-import { describe, beforeEach, test } from "@odoo/hoot";
-
-import { Composer } from "@mail/core/common/composer";
 import {
     assertSteps,
     click,
@@ -12,9 +9,12 @@ import {
     start,
     startServer,
     step,
-} from "../mail_test_helpers";
-import { Command, onRpc, patchWithCleanup, serverState } from "@web/../tests/web_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
+import { beforeEach, describe, test } from "@odoo/hoot";
 import { Deferred, tick } from "@odoo/hoot-mock";
+import { Command, onRpc, patchWithCleanup, serverState } from "@web/../tests/web_test_helpers";
+
+import { Composer } from "@mail/core/common/composer";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -76,7 +76,7 @@ test('post a first message then display partner mention suggestions on typing "@
     await openDiscuss(channelId);
     await contains(".o-mail-Composer-input");
     await insertText(".o-mail-Composer-input", "first message");
-    await click("button:enabled", { text: "Send" });
+    await click("button[aria-label='Send']:enabled");
     await contains(".o-mail-Message");
     await insertText(".o-mail-Composer-input", "@");
     await contains(".o-mail-Composer-suggestion strong", { count: 3 });
@@ -184,11 +184,9 @@ test("Channel suggestions do not crash after rpc returns", async () => {
     const pyEnv = await startServer();
     const channelId = pyEnv["discuss.channel"].create({ name: "general" });
     const deferred = new Deferred();
-    onRpc((route, args) => {
-        if (route === "/web/dataset/call_kw/discuss.channel/get_mention_suggestions") {
-            step("get_mention_suggestions");
-            deferred.resolve();
-        }
+    onRpc("discuss.channel", "get_mention_suggestions", () => {
+        step("get_mention_suggestions");
+        deferred.resolve();
     });
     await start();
     await openDiscuss(channelId);
@@ -306,17 +304,29 @@ test("Current user that is a follower should be considered as such", async () =>
     await openFormView("res.partner", serverState.partnerId);
     await click("button", { text: "Send message" });
     await insertText(".o-mail-Composer-input", "@");
-    await contains(".o-mail-Composer-suggestion", { count: 6 }); // FIXME: should be 4, but +2 extra with Hermit / Public User
+    await contains(".o-mail-Composer-suggestion", { count: 5 }); // FIXME: should be 3, but +2 extra with Hermit / Public User
     await contains(".o-mail-Composer-suggestion", {
         text: "Mitchell Admin",
         before: [".o-mail-Composer-suggestion", { text: "Person B(b@test.com)" }],
     });
     await contains(".o-mail-Composer-suggestion", {
         text: "Person B(b@test.com)",
-        before: [".o-mail-Composer-suggestion", { text: "OdooBot" }],
-    });
-    await contains(".o-mail-Composer-suggestion", {
-        text: "OdooBot",
         before: [".o-mail-Composer-suggestion", { text: "Person A(a@test.com)" }],
     });
+});
+
+test("Mention with @everyone", async () => {
+    const pyEnv = await startServer();
+    const channelId = pyEnv["discuss.channel"].create({
+        name: "General",
+        channel_type: "channel",
+    });
+    await start();
+    await openDiscuss(channelId);
+    await contains(".o-mail-Composer-suggestionList");
+    await contains(".o-mail-Composer-suggestionList .o-open", { count: 0 });
+    await contains(".o-mail-Composer-input", { value: "" });
+    await insertText(".o-mail-Composer-input", "@ever");
+    await click(".o-mail-Composer-suggestion");
+    await contains(".o-mail-Composer-input", { value: "@everyone " });
 });

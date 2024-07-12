@@ -52,7 +52,7 @@ class WebsiteSnippetFilter(models.Model):
         for record in self:
             for field_name in record.field_names.split(","):
                 if not field_name.strip():
-                    raise ValidationError(_("Empty field name in %r", record.field_names))
+                    raise ValidationError(_("Empty field name in “%s”", record.field_names))
 
     def _render(self, template_key, limit, search_domain=None, with_sample=False):
         """Renders the website dynamic snippet items"""
@@ -67,7 +67,7 @@ class WebsiteSnippetFilter(models.Model):
         if self.model_name.replace('.', '_') not in template_key:
             return ''
 
-        records = self._prepare_values(limit, search_domain)
+        records = self._prepare_values(limit=limit, search_domain=search_domain)
         is_sample = with_sample and not records
         if is_sample:
             records = self._prepare_sample(limit)

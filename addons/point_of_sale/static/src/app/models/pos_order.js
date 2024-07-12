@@ -1,16 +1,22 @@
-/** @odoo-module */
 import { registry } from "@web/core/registry";
 import { Base } from "./related_models";
 import { _t } from "@web/core/l10n/translation";
 import { formatDate, formatDateTime } from "@web/core/l10n/dates";
 import { omit } from "@web/core/utils/objects";
-import { qrCodeSrc, random5Chars, uuidv4 } from "@point_of_sale/utils";
+import {
+    getUTCString,
+    parseUTCString,
+    qrCodeSrc,
+    random5Chars,
+    uuidv4,
+} from "@point_of_sale/utils";
 import { renderToElement } from "@web/core/utils/render";
 import { floatIsZero, roundPrecision } from "@web/core/utils/numbers";
 import { computeComboLines } from "./utils/compute_combo_lines";
 import { changesToOrder } from "./utils/order_change";
 
 const { DateTime } = luxon;
+const formatCurrency = registry.subRegistries.formatters.content.monetary[1];
 
 export class PosOrder extends Base {
     static pythonModel = "pos.order";
@@ -19,7 +25,7 @@ export class PosOrder extends Base {
         super.setup(vals);
 
         // Data present in python model
-        this.date_order = vals.date_order || luxon.DateTime.now().toFormat("yyyy-MM-dd HH:mm:ss");
+        this.date_order = vals.date_order || getUTCString(luxon.DateTime.now());
         this.to_invoice = vals.to_invoice || false;
         this.shipping_date = vals.shipping_date || false;
         this.state = vals.state || "draft";
@@ -27,6 +33,10 @@ export class PosOrder extends Base {
         this.last_order_preparation_change = vals.last_order_preparation_change
             ? JSON.parse(vals.last_order_preparation_change)
             : {};
+        this.tracking_number =
+            vals.tracking_number && !isNaN(parseInt(vals.tracking_number))
+                ? vals.tracking_number
+                : ((this.session?.id % 10) * 100 + (this.sequence_number % 100)).toString();
 
         if (!vals.lines) {
             this.lines = [];
@@ -34,28 +44,18 @@ export class PosOrder extends Base {
 
         // !!Keep all uiState in one object!!
         this.uiState = {
+            lineToRefund: {},
             displayed: true,
             booked: false,
             screen_data: {},
             selected_orderline_uuid: undefined,
             selected_paymentline_uuid: undefined,
             locked: this.state !== "draft",
-            ReceiptScreen: {
-                inputEmail: "",
-                emailSuccessful: null,
-                emailNotice: "",
-            },
             // Pos restaurant specific to most proper way is to override this
             TipScreen: {
                 inputTipAmount: "",
             },
         };
-    }
-
-    get pos() {
-        //REVIEW - will this works with self order ?
-        //NOTE - The goal is to avoid to use pos from models
-        return this.models["pos.store"].getFirst().pos;
     }
 
     get user() {
@@ -94,7 +94,6 @@ export class PosOrder extends Base {
         const paymentlines = this.payment_ids
             .filter((p) => !p.is_change)
             .map((p) => p.export_for_printing());
-        this.receiptDate ||= formatDateTime(luxon.DateTime.now());
         return {
             orderlines: this.lines.map((l) => omit(l.getDisplayData(), "internalNote")),
             paymentlines,
@@ -109,19 +108,20 @@ export class PosOrder extends Base {
             name: this.name,
             invoice_id: null, //TODO
             cashier: this.employee_id?.name || this.user_id?.name,
-            date: this.receiptDate,
+            date: formatDateTime(parseUTCString(this.date_order)),
             pos_qr_code:
                 this.company.point_of_sale_use_ticket_qr_code &&
-                qrCodeSrc(`${baseUrl}/pos/ticket/validate?access_token=${this.access_token}`),
-            ticket_code: this.company.point_of_sale_ticket_unique_code && this.ticketCode,
+                this.finalized &&
+                qrCodeSrc(`${baseUrl}/pos/ticket/`),
+            ticket_code: this.ticket_code,
             base_url: baseUrl,
             footer: this.config.receipt_footer,
             // FIXME: isn't there a better way to handle this date?
             shippingDate:
-                this.shippingDate && formatDate(DateTime.fromJSDate(new Date(this.shippingDate))),
+                this.shipping_date && formatDate(DateTime.fromJSDate(new Date(this.shipping_date))),
             headerData: {
                 ...headerData,
-                trackingNumber: this.trackingNumber,
+                trackingNumber: this.tracking_number,
             },
         };
     }
@@ -148,6 +148,16 @@ export class PosOrder extends Base {
         let minutes = "" + d.getMinutes();
         minutes = minutes.length < 2 ? "0" + minutes : minutes;
 
+        orderChange.new.sort((a, b) => {
+            const sequenceA = a.pos_categ_sequence;
+            const sequenceB = b.pos_categ_sequence;
+            if (sequenceA === 0 && sequenceB === 0) {
+                return a.pos_categ_id - b.pos_categ_id;
+            }
+
+            return sequenceA - sequenceB;
+        });
+
         for (const printer of unwatchedPrinter) {
             const changes = this._getPrintingCategoriesChanges(
                 printer.config.product_categories_ids,
@@ -157,15 +167,14 @@ export class PosOrder extends Base {
                 const printingChanges = {
                     new: changes["new"],
                     cancelled: changes["cancelled"],
-                    table_name: this.config.module_pos_restaurant ? this.table_id.name : false,
-                    floor_name: this.config.module_pos_restaurant
-                        ? this.table_id.floor_id.name
-                        : false,
+                    table_name: this.table_id?.name,
+                    floor_name: this.table_id?.floor_id?.name,
                     name: this.name || "unknown order",
                     time: {
                         hours,
                         minutes,
                     },
+                    tracking_number: this.tracking_number,
                 };
                 const receipt = renderToElement("point_of_sale.OrderChangeReceipt", {
                     changes: printingChanges,
@@ -202,6 +211,9 @@ export class PosOrder extends Base {
         };
     }
 
+    get hasChange() {
+        return this.lines.some((l) => l.uiState.hasChange);
+    }
     /**
      * This function is called after the order has been successfully sent to the preparation tool(s).
      * In the future, this status should be separated between the different preparation tools,
@@ -212,21 +224,20 @@ export class PosOrder extends Base {
         const orderlineIdx = [];
         this.lines.forEach((line) => {
             if (!line.skip_change) {
-                const note = line.getNote();
-                const lineKey = `${line.uuid} - ${note}`;
-                orderlineIdx.push(lineKey);
+                orderlineIdx.push(line.preparationKey);
 
-                if (this.last_order_preparation_change[lineKey]) {
-                    this.last_order_preparation_change[lineKey]["quantity"] = line.get_quantity();
+                if (this.last_order_preparation_change[line.preparationKey]) {
+                    this.last_order_preparation_change[line.preparationKey]["quantity"] =
+                        line.get_quantity();
                 } else {
-                    this.last_order_preparation_change[lineKey] = {
+                    this.last_order_preparation_change[line.preparationKey] = {
                         attribute_value_ids: line.attribute_value_ids.map((a) =>
                             a.serialize({ orm: true })
                         ),
-                        line_uuid: line.uuid,
+                        uuid: line.uuid,
                         product_id: line.get_product().id,
                         name: line.get_full_product_name(),
-                        note: note,
+                        note: line.getNote(),
                         quantity: line.get_quantity(),
                     };
                 }
@@ -236,19 +247,11 @@ export class PosOrder extends Base {
 
         // Checks whether an orderline has been deleted from the order since it
         // was last sent to the preparation tools. If so we delete it to the changes.
-        for (const lineKey in this.last_order_preparation_change) {
-            if (!this.getOrderedLine(lineKey)) {
-                delete this.last_order_preparation_change[lineKey];
+        for (const [key, change] of Object.entries(this.last_order_preparation_change)) {
+            if (!this.models["pos.order.line"].getBy("uuid", change.uuid)) {
+                delete this.last_order_preparation_change[key];
             }
         }
-    }
-
-    getOrderedLine(lineKey) {
-        return this.lines.find(
-            (line) =>
-                line.uuid === this.last_order_preparation_change[lineKey]["line_uuid"] &&
-                line.note === this.last_order_preparation_change[lineKey]["note"]
-        );
     }
 
     hasSkippedChanges() {
@@ -375,7 +378,7 @@ export class PosOrder extends Base {
 
         const lines_to_recompute = this.lines.filter(
             (line) =>
-                line.uiState.price_type === "original" &&
+                line.price_type === "original" &&
                 !(line.combo_line_ids?.length || line.combo_parent_id)
         );
 
@@ -390,7 +393,7 @@ export class PosOrder extends Base {
 
         const attributes_prices = {};
         const combo_parent_lines = this.lines.filter(
-            (line) => line.uiState.price_type === "original" && line.combo_line_ids?.length
+            (line) => line.price_type === "original" && line.combo_line_ids?.length
         );
         for (const pLine of combo_parent_lines) {
             attributes_prices[pLine.id] = computeComboLines(
@@ -413,7 +416,7 @@ export class PosOrder extends Base {
             );
         }
         const combo_children_lines = this.lines.filter(
-            (line) => line.uiState.price_type === "original" && line.combo_parent_id
+            (line) => line.price_type === "original" && line.combo_parent_id
         );
         combo_children_lines.forEach((line) => {
             line.set_unit_price(
@@ -434,8 +437,8 @@ export class PosOrder extends Base {
     removeOrderline(line) {
         const linesToRemove = line.getAllLinesInCombo();
         for (const lineToRemove of linesToRemove) {
-            if (lineToRemove.refunded_orderline_id?.uuid in this.pos.lineToRefund) {
-                delete this.pos.lineToRefund[lineToRemove.refunded_orderline_id.uuid];
+            if (lineToRemove.refunded_orderline_id?.uuid in this.uiState.lineToRefund) {
+                delete this.uiState.lineToRefund[lineToRemove.refunded_orderline_id.uuid];
             }
 
             if (this.assert_editable()) {
@@ -694,21 +697,24 @@ export class PosOrder extends Base {
         );
     }
 
+    getTotalDue() {
+        return this.get_total_with_tax() + this.get_rounding_applied();
+    }
+
     get_tax_details() {
         const taxDetails = {};
         for (const line of this.lines) {
-            const taxValuesList = line.get_all_prices().taxValuesList;
-            for (const taxValues of taxValuesList) {
-                const taxId = taxValues.id;
+            for (const taxData of line.get_all_prices().taxesData) {
+                const taxId = taxData.id;
                 if (!taxDetails[taxId]) {
-                    taxDetails[taxId] = Object.assign({}, taxValues, {
+                    taxDetails[taxId] = Object.assign({}, taxData, {
                         amount: 0.0,
                         base: 0.0,
-                        tax_percentage: taxValues.amount,
+                        tax_percentage: taxData.amount,
                     });
                 }
-                taxDetails[taxId].base += taxValues.display_base;
-                taxDetails[taxId].amount += taxValues.tax_amount_factorized;
+                taxDetails[taxId].base += taxData.display_base;
+                taxDetails[taxId].amount += taxData.tax_amount_factorized;
             }
         }
         return Object.values(taxDetails);
@@ -994,11 +1000,11 @@ export class PosOrder extends Base {
     /* ---- Ship later --- */
     //FIXME remove this
     setShippingDate(shippingDate) {
-        this.shippingDate = shippingDate;
+        this.shipping_date = shippingDate;
     }
     //FIXME remove this
     getShippingDate() {
-        return this.shippingDate;
+        return this.shipping_date;
     }
 
     getHasRefundLines() {
@@ -1042,6 +1048,22 @@ export class PosOrder extends Base {
         }
 
         return data;
+    }
+    getCustomerDisplayData() {
+        return {
+            lines: this.lines.map((l) => ({
+                ...l.getDisplayData(),
+                isSelected: l.isSelected(),
+                imageSrc: `/web/image/product.product/${l.product_id.id}/image_128`,
+            })),
+            finalized: this.finalized,
+            amount: formatCurrency(this.get_total_with_tax() || 0),
+            paymentLines: this.payment_ids.map((pl) => ({
+                name: pl.payment_method_id.name,
+                amount: formatCurrency(pl.get_amount()),
+            })),
+            change: this.get_change() && formatCurrency(this.get_change()),
+        };
     }
 }
 

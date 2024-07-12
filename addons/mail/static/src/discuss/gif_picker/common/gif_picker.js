@@ -1,12 +1,9 @@
 import { Component, onWillStart, useState, useEffect } from "@odoo/owl";
 import { useOnBottomScrolled, useSequential } from "@mail/utils/common/hooks";
-
-/** @type {ReturnType<import("@mail/utils/common/misc").rpcWithEnv>} */
-let rpc;
 import { user } from "@web/core/user";
 import { useService, useAutofocus } from "@web/core/utils/hooks";
 import { useDebounced } from "@web/core/utils/timing";
-import { rpcWithEnv } from "@mail/utils/common/misc";
+import { rpc } from "@web/core/network/rpc";
 
 /**
  * @typedef {Object} TenorCategory
@@ -53,7 +50,7 @@ export class GifPicker extends Component {
     static props = ["PICKERS?", "className?", "close?", "onSelect", "state?"];
 
     setup() {
-        rpc = rpcWithEnv(this.env);
+        super.setup();
         this.orm = useService("orm");
         this.store = useState(useService("mail.store"));
         this.sequential = useSequential();
@@ -269,9 +266,6 @@ export class GifPicker extends Component {
             );
             this.offset += 20;
             this.state.favorites.gifs.push(...results);
-            for (const gif of results) {
-                this.pushGif(gif);
-            }
         } catch {
             this.state.loadingError = true;
         }

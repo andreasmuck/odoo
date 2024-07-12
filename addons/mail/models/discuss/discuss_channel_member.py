@@ -2,9 +2,11 @@
 
 import logging
 import requests
+import uuid
 
 import odoo
 from odoo import api, fields, models, _
+from odoo.addons.mail.tools.discuss import Store
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.osv import expression
 from ...tools import jwt, discuss
@@ -24,17 +26,18 @@ class ChannelMember(models.Model):
     guest_id = fields.Many2one("mail.guest", "Guest", ondelete="cascade", index=True)
     is_self = fields.Boolean(compute="_compute_is_self", search="_search_is_self")
     # channel
-    channel_id = fields.Many2one("discuss.channel", "Channel", ondelete="cascade", required=True)
+    channel_id = fields.Many2one("discuss.channel", "Channel", ondelete="cascade", required=True, auto_join=True)
     # state
     custom_channel_name = fields.Char('Custom channel name')
     fetched_message_id = fields.Many2one('mail.message', string='Last Fetched', index="btree_not_null")
     seen_message_id = fields.Many2one('mail.message', string='Last Seen', index="btree_not_null")
+    new_message_separator = fields.Integer(help="Message id before which the separator should be displayed", default=0, required=True)
     message_unread_counter = fields.Integer('Unread Messages Counter', compute='_compute_message_unread', compute_sudo=True)
     fold_state = fields.Selection([('open', 'Open'), ('folded', 'Folded'), ('closed', 'Closed')], string='Conversation Fold State', default='closed')
     custom_notifications = fields.Selection(
-        [("mentions", "Mentions Only"), ("no_notif", "Nothing")],
+        [("all", "All Messages"), ("mentions", "Mentions Only"), ("no_notif", "Nothing")],
         "Customized Notifications",
-        help="All Messages if not specified",
+        help="Use default from user settings if not specified. This setting will only be applied to channels.",
     )
     mute_until_dt = fields.Datetime("Mute notifications until", help="If set, the member will not receive notifications from the channel until this date.")
     is_pinned = fields.Boolean("Is pinned on the interface", compute="_compute_is_pinned", search="_search_is_pinned")
@@ -92,11 +95,11 @@ class ChannelMember(models.Model):
                 ("channel_id.last_interest_dt", "<", self._field_to_sql(self._table, "unpin_dt")),
             ]
 
-    @api.depends("channel_id.message_ids", "seen_message_id")
+    @api.depends("channel_id.message_ids", "new_message_separator")
     def _compute_message_unread(self):
         if self.ids:
             self.env['mail.message'].flush_model()
-            self.flush_recordset(['channel_id', 'seen_message_id'])
+            self.flush_recordset(['channel_id', 'new_message_separator'])
             self.env.cr.execute("""
                      SELECT count(mail_message.id) AS count,
                             discuss_channel_member.id
@@ -105,10 +108,7 @@ class ChannelMember(models.Model):
                          ON discuss_channel_member.channel_id = mail_message.res_id
                       WHERE mail_message.model = 'discuss.channel'
                         AND mail_message.message_type NOT IN ('notification', 'user_notification')
-                        AND (
-                            mail_message.id > discuss_channel_member.seen_message_id
-                         OR discuss_channel_member.seen_message_id IS NULL
-                        )
+                        AND mail_message.id >= discuss_channel_member.new_message_separator
                         AND discuss_channel_member.id IN %(ids)s
                    GROUP BY discuss_channel_member.id
             """, {'ids': tuple(self.ids)})
@@ -191,10 +191,9 @@ class ChannelMember(models.Model):
         """
         notifications = []
         for member in self:
-            formatted_member = member._discuss_channel_member_format().get(member)
-            formatted_member['isTyping'] = is_typing
-            notifications.append([member.channel_id, 'discuss.channel.member/typing_status', formatted_member])
-            notifications.append([member.channel_id.uuid, 'discuss.channel.member/typing_status', formatted_member])  # notify livechat users
+            store = Store(member)
+            store.add("ChannelMember", {"id": member.id, "isTyping": is_typing})
+            notifications.append([member.channel_id, "mail.record/insert", store.get_result()])
         self.env['bus.bus']._sendmany(notifications)
 
     @api.model
@@ -212,7 +211,7 @@ class ChannelMember(models.Model):
             notifications.append((member.partner_id, "mail.record/insert", {"Thread": channel_data}))
         self.env["bus.bus"]._sendmany(notifications)
 
-    def _discuss_channel_member_format(self, fields=None, extra_fields=None):
+    def _to_store(self, store: Store, fields=None, extra_fields=None):
         if not fields:
             fields = {
                 "channel": {},
@@ -221,26 +220,36 @@ class ChannelMember(models.Model):
                 "id": True,
                 "persona": {},
                 "seen_message_id": True,
+                "last_seen_dt": True,
             }
         if extra_fields:
             fields.update(extra_fields)
-        members_formatted_data = {}
+        if "message_unread_counter" in fields:
+            bus_last_id = fields.get("message_unread_counter_bus_id")
+            if bus_last_id is None:
+                # sudo: bus.bus: reading non-sensitive last id
+                bus_last_id = self.env["bus.bus"].sudo()._bus_last_id()
         for member in self:
             data = {}
             if 'id' in fields:
                 data['id'] = member.id
             if 'channel' in fields:
-                data['thread'] = member.channel_id._channel_format(fields=fields.get('channel')).get(member.channel_id)
+                data["thread"] = {"id": member.channel_id.id, "model": "discuss.channel"}
             if 'create_date' in fields:
                 data['create_date'] = odoo.fields.Datetime.to_string(member.create_date)
+            if 'last_seen_dt' in fields:
+                data['last_seen_dt'] = odoo.fields.Datetime.to_string(member.last_seen_dt)
             if 'persona' in fields:
                 if member.partner_id:
-                    # sudo: res.partner - reading _get_partner_data related to a member is considered acceptable
-                    persona = member.sudo()._get_partner_data(fields=fields.get('persona', {}).get('partner'))
+                    # sudo: res.partner - calling _partner_data_to_store related to a member is considered acceptable
+                    member.sudo()._partner_data_to_store(
+                        store, fields=fields.get("persona", {}).get("partner")
+                    )
+                    data["persona"] = {"id": member.partner_id.id, "type": "partner"}
                 if member.guest_id:
-                    # sudo: mail.guest - reading _guest_format related to a member is considered acceptable
-                    persona = member.guest_id.sudo()._guest_format(fields=fields.get('persona', {}).get('guest')).get(member.guest_id)
-                data['persona'] = persona
+                    # sudo: mail.guest - reading guest related to a member is considered acceptable
+                    store.add(member.guest_id.sudo(), fields=fields.get("persona", {}).get("guest"))
+                    data["persona"] = {"id": member.guest_id.id, "type": "guest"}
             if 'custom_notifications' in fields:
                 data['custom_notifications'] = member.custom_notifications
             if 'mute_until_dt' in fields:
@@ -249,14 +258,18 @@ class ChannelMember(models.Model):
                 data['fetched_message_id'] = {'id': member.fetched_message_id.id} if member.fetched_message_id else False
             if 'seen_message_id' in fields:
                 data['seen_message_id'] = {'id': member.seen_message_id.id} if member.seen_message_id else False
+            if 'new_message_separator' in fields:
+                data['new_message_separator'] = member.new_message_separator
+            if "message_unread_counter" in fields:
+                data["message_unread_counter"] = member.message_unread_counter
+                data["message_unread_counter_bus_id"] = bus_last_id
             if fields.get("last_interest_dt"):
                 data['last_interest_dt'] = odoo.fields.Datetime.to_string(member.last_interest_dt)
-            members_formatted_data[member] = data
-        return members_formatted_data
+            store.add("ChannelMember", data)
 
-    def _get_partner_data(self, fields=None):
+    def _partner_data_to_store(self, store: Store, fields=None):
         self.ensure_one()
-        return self.partner_id.mail_partner_format(fields=fields).get(self.partner_id)
+        store.add(self.partner_id, fields=fields)
 
     def _channel_fold(self, state, state_count):
         """Update the fold_state of the given member. The change will be
@@ -278,7 +291,7 @@ class ChannelMember(models.Model):
     # RTC (voice/video)
     # --------------------------------------------------------------------------
 
-    def _rtc_join_call(self, check_rtc_session_ids=None):
+    def _rtc_join_call(self, store=None, check_rtc_session_ids=None):
         self.ensure_one()
         check_rtc_session_ids = (check_rtc_session_ids or []) + self.rtc_session_ids.ids
         self.channel_id._rtc_cancel_invitations(member_ids=self.ids)
@@ -287,21 +300,30 @@ class ChannelMember(models.Model):
         current_rtc_sessions, outdated_rtc_sessions = self._rtc_sync_sessions(check_rtc_session_ids=check_rtc_session_ids)
         ice_servers = self.env["mail.ice.server"]._get_ice_servers()
         self._join_sfu(ice_servers)
-        res = {
-            'iceServers': ice_servers or False,
-            'rtcSessions': [
-                ('ADD', [rtc_session_sudo._mail_rtc_session_format() for rtc_session_sudo in current_rtc_sessions]),
-                ('DELETE', [{'id': missing_rtc_session_sudo.id} for missing_rtc_session_sudo in outdated_rtc_sessions]),
-            ],
-            'sessionId': rtc_session.id,
-            'serverInfo': self._get_rtc_server_info(rtc_session, ice_servers),
-        }
+        if store:
+            store.add(
+                "Thread",
+                {
+                    "id": self.channel_id.id,
+                    "model": "discuss.channel",
+                    "rtcSessions": [
+                        ("ADD", [{"id": session.id} for session in current_rtc_sessions]),
+                        ("DELETE", [{"id": session.id} for session in outdated_rtc_sessions]),
+                    ],
+                },
+            )
+            store.add(current_rtc_sessions)
+            store.add(
+                "Rtc",
+                {
+                    "iceServers": ice_servers or False,
+                    "selfSession": {"id": rtc_session.id},
+                    "serverInfo": self._get_rtc_server_info(rtc_session, ice_servers),
+                },
+            )
         if len(self.channel_id.rtc_session_ids) == 1 and self.channel_id.channel_type in {'chat', 'group'}:
             self.channel_id.message_post(body=_("%s started a live conference", self.partner_id.name or self.guest_id.name), message_type='notification')
-            invited_members = self._rtc_invite_members()
-            if invited_members:
-                res['invitedMembers'] = [('ADD', list(invited_members._discuss_channel_member_format(fields={'id': True, 'channel': {}, 'persona': {'partner': {'id': True, 'name': True, 'im_status': True}, 'guest': {'id': True, 'name': True, 'im_status': True}}}).values()))]
-        return res
+            self._rtc_invite_members()
 
     def _join_sfu(self, ice_servers=None):
         if len(self.channel_id.rtc_session_ids) < SFU_MODE_THRESHOLD:
@@ -314,10 +336,13 @@ class ChannelMember(models.Model):
         sfu_server_url = discuss.get_sfu_url(self.env)
         if not sfu_server_url:
             return
-        sfu_server_key = discuss.get_sfu_key(self.env)
+        sfu_local_key = self.env["ir.config_parameter"].sudo().get_param("mail.sfu_local_key")
+        if not sfu_local_key:
+            sfu_local_key = str(uuid.uuid4())
+            self.env["ir.config_parameter"].sudo().set_param("mail.sfu_local_key", sfu_local_key)
         json_web_token = jwt.sign(
-            {"iss": f"{self.get_base_url()}:channel:{self.channel_id.id}"},
-            key=sfu_server_key,
+            {"iss": f"{self.get_base_url()}:channel:{self.channel_id.id}", "key": sfu_local_key},
+            key=discuss.get_sfu_key(self.env),
             ttl=30,
             algorithm=jwt.Algorithm.HS256,
         )
@@ -338,7 +363,7 @@ class ChannelMember(models.Model):
             [
                 session.guest_id or session.partner_id,
                 "discuss.channel.rtc.session/sfu_hot_swap",
-                {"serverInfo": self._get_rtc_server_info(session, ice_servers, key=sfu_server_key)},
+                {"serverInfo": self._get_rtc_server_info(session, ice_servers, key=sfu_local_key)},
             ]
             for session in self.channel_id.rtc_session_ids
         ]
@@ -350,21 +375,20 @@ class ChannelMember(models.Model):
         if not sfu_channel_uuid or not sfu_server_url:
             return None
         if not key:
-            key = discuss.get_sfu_key(self.env)
+            key = self.env["ir.config_parameter"].sudo().get_param("mail.sfu_local_key")
         claims = {
-            "sfu_channel_uuid": sfu_channel_uuid,
             "session_id": rtc_session.id,
             "ice_servers": ice_servers,
         }
         json_web_token = jwt.sign(claims, key=key, ttl=60 * 60 * 8, algorithm=jwt.Algorithm.HS256)  # 8 hours
-        return {"url": sfu_server_url, "jsonWebToken": json_web_token}
+        return {"url": sfu_server_url, "channelUUID": sfu_channel_uuid, "jsonWebToken": json_web_token}
 
     def _rtc_leave_call(self):
         self.ensure_one()
         if self.rtc_session_ids:
             self.rtc_session_ids.unlink()
         else:
-            return self.channel_id._rtc_cancel_invitations(member_ids=self.ids)
+            self.channel_id._rtc_cancel_invitations(member_ids=self.ids)
 
     def _rtc_sync_sessions(self, check_rtc_session_ids=None):
         """Synchronize the RTC sessions for self channel member.
@@ -402,16 +426,115 @@ class ChannelMember(models.Model):
                 target = member.partner_id
             else:
                 target = member.guest_id
-            invitation_notifications.append((target, 'mail.record/insert', {
-                'Thread': {
-                    'id': self.channel_id.id,
-                    'model': 'discuss.channel',
-                    'rtcInvitingSession': self.rtc_session_ids._mail_rtc_session_format(),
-                }
-            }))
+            channel_data = {
+                "id": self.channel_id.id,
+                "model": "discuss.channel",
+                "rtcInvitingSession": {"id": member.rtc_inviting_session_id.id},
+            }
+            store = Store("Thread", channel_data)
+            store.add(member.rtc_inviting_session_id)
+            invitation_notifications.append((target, "mail.record/insert", store.get_result()))
         self.env['bus.bus']._sendmany(invitation_notifications)
         if members:
-            channel_data = {'id': self.channel_id.id, 'model': 'discuss.channel'}
-            channel_data['invitedMembers'] = [('ADD', list(members._discuss_channel_member_format(fields={'id': True, 'channel': {}, 'persona': {'partner': {'id': True, 'name': True, 'im_status': True}, 'guest': {'id': True, 'name': True, 'im_status': True}}}).values()))]
-            self.env['bus.bus']._sendone(self.channel_id, 'mail.record/insert', {'Thread': channel_data})
+            channel_data = {
+                "id": self.channel_id.id,
+                "model": "discuss.channel",
+                "invitedMembers": [("ADD", [{"id": member.id} for member in members])],
+            }
+            store = Store("Thread", channel_data)
+            store.add(
+                members,
+                fields={
+                    "id": True,
+                    "channel": {},
+                    "persona": {
+                        "partner": {"id": True, "name": True, "im_status": True},
+                        "guest": {"id": True, "name": True, "im_status": True},
+                    },
+                },
+            )
+            self.env["bus.bus"]._sendone(self.channel_id, "mail.record/insert", store.get_result())
         return members
+
+    def _mark_as_read(self, last_message_id, sync=False):
+        """
+        Mark channel as read by updating the seen message id of the current
+        member as well as its new message separator.
+
+        :param last_message_id: the id of the message to be marked as read.
+        :param sync: wether the new message separator and the unread counter in
+            the UX will sync to their server values.
+        """
+        self.ensure_one()
+        domain = [
+            ("model", "=", "discuss.channel"),
+            ("res_id", "=", self.channel_id.id),
+            ("id", "<=", last_message_id),
+        ]
+        last_message = self.env['mail.message'].search(domain, order="id DESC", limit=1)
+        if not last_message:
+            return
+        self._set_last_seen_message(last_message)
+        self._set_new_message_separator(last_message.id + 1, sync=sync)
+
+    def _set_last_seen_message(self, message, notify=True):
+        """
+        Set the last seen message of the current member.
+
+        :param message: the message to set as last seen message.
+        :param notify: whether to send a bus notification relative to the new
+            last seen message.
+        """
+        self.ensure_one()
+        if self.seen_message_id.id >= message.id:
+            return
+        self.fetched_message_id = max(self.fetched_message_id.id, message.id)
+        self.seen_message_id = message.id
+        self.last_seen_dt = fields.Datetime.now()
+        if not notify:
+            return
+        target = self.partner_id or self.guest_id
+        if self.channel_id.channel_type in self.channel_id._types_allowing_seen_infos():
+            target = self.channel_id
+        store = Store(
+            self,
+            fields={
+                "id": True,
+                "channel": {},
+                "persona": {
+                    "partner": {"id": True, "name": True},
+                    "guest": {"id": True, "name": True},
+                },
+                "seen_message_id": True,
+            },
+        )
+        self.env["bus.bus"]._sendone(target, "mail.record/insert", store.get_result())
+
+    def _set_new_message_separator(self, message_id, sync=False):
+        """
+        :param message_id: id of the message above which the new message
+            separator should be displayed.
+        :param sync: whether the new message separator and the unread counter
+            in the UX will sync to their server values.
+
+        """
+        self.ensure_one()
+        if message_id == self.new_message_separator:
+            return
+        self.new_message_separator = message_id
+        target = self.partner_id or self.guest_id
+        store = Store(
+            self,
+            fields={
+                "id": True,
+                "channel": {},
+                "message_unread_counter": True,
+                "new_message_separator": True,
+                "persona": {
+                    "partner": {"id": True, "name": True},
+                    "guest": {"id": True, "name": True},
+                },
+            },
+        )
+        store.add("ChannelMember", {"id": self.id, "syncUnread": sync})
+        self.env["bus.bus"]._sendone(target, "mail.record/insert", store.get_result())

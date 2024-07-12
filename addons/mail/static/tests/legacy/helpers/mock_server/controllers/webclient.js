@@ -20,7 +20,7 @@ patch(MockServer.prototype, {
         if ("init_messaging" in args) {
             const initMessaging =
                 this._mockMailGuest__getGuestFromContext() && this.pyEnv.currentUser?._is_public()
-                    ? this._mockMailGuest__initMessaging(args.context)
+                    ? {}
                     : this._mockResUsers_InitMessaging([this.pyEnv.currentUserId], args.context);
             this._addToRes(res, initMessaging);
             const guest =
@@ -44,37 +44,8 @@ patch(MockServer.prototype, {
                 ),
             });
         }
-        if (args.failures && this.pyEnv.currentPartnerId) {
-            const partner = this.getRecords(
-                "res.partner",
-                [["id", "=", this.pyEnv.currentPartnerId]],
-                {
-                    active_test: false,
-                }
-            )[0];
-            const messages = this.getRecords("mail.message", [
-                ["author_id", "=", partner.id],
-                ["res_id", "!=", 0],
-                ["model", "!=", false],
-                ["message_type", "!=", "user_notification"],
-            ]).filter((message) => {
-                // Purpose is to simulate the following domain on mail.message:
-                // ['notification_ids.notification_status', 'in', ['bounce', 'exception']],
-                // But it's not supported by getRecords domain to follow a relation.
-                const notifications = this.getRecords("mail.notification", [
-                    ["mail_message_id", "=", message.id],
-                    ["notification_status", "in", ["bounce", "exception"]],
-                ]);
-                return notifications.length > 0;
-            });
-            messages.length = Math.min(messages.length, 100);
-            this._addToRes(res, {
-                Message: this._mockMailMessage_MessageNotificationFormat(
-                    messages.map((message) => message.id)
-                ),
-            });
-        }
         if (args.systray_get_activities && this.pyEnv.currentPartnerId) {
+            const bus_last_id = this.lastBusNotificationId;
             const groups = this._mockResUsers_getActivityGroups();
             this._addToRes(res, {
                 Store: {
@@ -82,6 +53,7 @@ patch(MockServer.prototype, {
                         (counter, group) => counter + (group.total_count || 0),
                         0
                     ),
+                    activity_counter_bus_id: bus_last_id,
                     activityGroups: groups,
                 },
             });

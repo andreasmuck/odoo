@@ -12,6 +12,7 @@ registry.category("web_tour.tours").add('website_sale_reorder_from_portal', {
         {
             content: 'Select first order',
             trigger: '.o_portal_my_doc_table a:first',
+            run: "click",
         },
         wTourUtils.clickOnElement('Reorder Again', '.o_wsale_reorder_button'),
         wTourUtils.clickOnElement('Confirm', '.o_wsale_reorder_confirm'),
@@ -20,6 +21,7 @@ registry.category("web_tour.tours").add('website_sale_reorder_from_portal', {
         {
             content: "Check that quantity is 1",
             trigger: ".js_quantity[value='1']",
+            run: "edit Test",
         },
         // Second reorder, add reorder to cart
         {
@@ -32,6 +34,7 @@ registry.category("web_tour.tours").add('website_sale_reorder_from_portal', {
         {
             content: 'Select first order',
             trigger: '.o_portal_my_doc_table a:first',
+            run: "click",
         },
         wTourUtils.clickOnElement('Reorder Again', '.o_wsale_reorder_button'),
         wTourUtils.clickOnElement('Confirm', '.o_wsale_reorder_confirm'),
@@ -41,6 +44,7 @@ registry.category("web_tour.tours").add('website_sale_reorder_from_portal', {
         {
             content: "Check that quantity is 2",
             trigger: ".js_quantity[value='2']",
+            run: "edit Test",
         },
         // Third reorder, clear cart and reorder
         {
@@ -53,6 +57,7 @@ registry.category("web_tour.tours").add('website_sale_reorder_from_portal', {
         {
             content: 'Select first order',
             trigger: '.o_portal_my_doc_table a:first',
+            run: "click",
         },
         wTourUtils.clickOnElement('Reorder Again', '.o_wsale_reorder_button'),
         wTourUtils.clickOnElement('Confirm', '.o_wsale_reorder_confirm'),
@@ -62,7 +67,6 @@ registry.category("web_tour.tours").add('website_sale_reorder_from_portal', {
         {
             content: "Check that quantity is 1",
             trigger: ".js_quantity[value='1']",
-            isCheck: true,
         },
     ]
 });

@@ -1,7 +1,3 @@
-import { describe, expect, test } from "@odoo/hoot";
-
-/** @type {ReturnType<import("@mail/utils/common/misc").rpcWithEnv>} */
-let rpc;
 import {
     click,
     contains,
@@ -13,10 +9,17 @@ import {
     start,
     startServer,
     triggerHotkey,
-} from "../../../mail_test_helpers";
-import { Command, patchWithCleanup, serverState } from "@web/../tests/web_test_helpers";
-import { withUser } from "@web/../tests/_framework/mock_server/mock_server";
-import { rpcWithEnv } from "@mail/utils/common/misc";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, expect, test } from "@odoo/hoot";
+import {
+    Command,
+    getService,
+    patchWithCleanup,
+    serverState,
+    withUser,
+} from "@web/../tests/web_test_helpers";
+
+import { rpc } from "@web/core/network/rpc";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -142,33 +145,39 @@ test("channel preview ignores messages from the past", async () => {
             res_id: channelId,
         });
     }
-    pyEnv["mail.message"].create({
+    const newestMessageId = pyEnv["mail.message"].create({
         body: "last message",
         message_type: "comment",
         model: "discuss.channel",
         parent_id: messageId,
         res_id: channelId,
     });
-    const env = await start();
-    rpc = rpcWithEnv(env);
+    const [selfMember] = pyEnv["discuss.channel.member"].search_read([
+        ["partner_id", "=", serverState.partnerId],
+        ["channel_id", "=", channelId],
+    ]);
+    pyEnv["discuss.channel.member"].write([selfMember.id], {
+        new_message_separator: newestMessageId + 1,
+    });
+    await start();
     await openDiscuss(channelId);
     await contains(".o-mail-Message", { count: 30 });
     await contains(".o-mail-Message-content", { text: "last message" });
     await contains(".o-mail-Thread", { scroll: "bottom" });
     await click(".o-mail-MessageInReply-content", { text: "first message" });
-    await contains(".o-mail-Message", { count: 16 });
+    await contains(".o-mail-Message", { count: 31 });
     await contains(".o-mail-Message-content", { text: "first message" });
     await contains(".o-mail-Message-content", { text: "last message", count: 0 });
     await click(".o_menu_systray .dropdown-toggle:has(i[aria-label='Messages'])");
     await contains(".o-mail-NotificationItem-text", { text: "You: last message" });
     withUser(serverState.userId, () =>
         rpc("/mail/message/post", {
-            post_data: { body: "new message", message_type: "comment" },
+            post_data: { body: "it's a good idea", message_type: "comment" },
             thread_id: channelId,
             thread_model: "discuss.channel",
         })
     );
-    await contains(".o-mail-NotificationItem-text", { text: "You: new message" });
+    await contains(".o-mail-NotificationItem-text", { text: "You: it's a good idea" });
 });
 
 test("counter is taking into account non-fetched channels", async () => {
@@ -193,11 +202,11 @@ test("counter is taking into account non-fetched channels", async () => {
         model: "discuss.channel",
         res_id: channelId,
     });
-    const env = await start();
+    await start();
     await contains(".o-mail-MessagingMenu-counter", { text: "1" });
     expect(
-        env.services["mail.store"].Thread.get({ model: "discuss.channel", id: channelId })
-    ).not.toBeTruthy();
+        Boolean(getService("mail.store").Thread.get({ model: "discuss.channel", id: channelId }))
+    ).toBe(false);
 });
 
 test("counter is updated on receiving message on non-fetched channels", async () => {
@@ -222,16 +231,15 @@ test("counter is updated on receiving message on non-fetched channels", async ()
         model: "discuss.channel",
         res_id: channelId,
     });
-    const env = await start();
-    rpc = rpcWithEnv(env);
+    await start();
     await contains(".o_menu_systray .dropdown-toggle i[aria-label='Messages']");
     await contains(".o-mail-MessagingMenu-counter", { count: 0 });
     expect(
-        env.services["mail.store"].Thread.get({ model: "discuss.channel", id: channelId })
-    ).not.toBeTruthy();
+        Boolean(getService("mail.store").Thread.get({ model: "discuss.channel", id: channelId }))
+    ).toBe(false);
     withUser(userId, () =>
         rpc("/mail/message/post", {
-            post_data: { body: "new message", message_type: "comment" },
+            post_data: { body: "good to know", message_type: "comment" },
             thread_id: channelId,
             thread_model: "discuss.channel",
         })

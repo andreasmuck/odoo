@@ -1,4 +1,4 @@
-import { describe, test } from "@odoo/hoot";
+import { waitNotifications } from "@bus/../tests/bus_test_helpers";
 import {
     click,
     contains,
@@ -7,7 +7,8 @@ import {
     openDiscuss,
     start,
     startServer,
-} from "../../../mail_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, test } from "@odoo/hoot";
 import { Command, serverState } from "@web/../tests/web_test_helpers";
 
 describe.current.tags("desktop");
@@ -65,7 +66,7 @@ test("unknown channel can be displayed and interacted with", async () => {
         channel_type: "channel",
         name: "Not So Secret",
     });
-    await start();
+    const env = await start();
     await openDiscuss();
     await contains("button.o-active", { text: "Inbox" });
     await contains(".o-mail-DiscussSidebarChannel", { count: 0 });
@@ -77,10 +78,12 @@ test("unknown channel can be displayed and interacted with", async () => {
     await insertText(".o-mail-Composer-input", "Hello", { replace: true });
     await click(".o-mail-Composer-send:enabled");
     await contains(".o-mail-Message", { text: "Hello" });
+    await waitNotifications([env, "discuss.channel/new_message"]);
     await click("button", { text: "Inbox" });
     await contains(".o-mail-DiscussSidebarChannel:not(.o-active)", { text: "Not So Secret" });
-    await click("div[title='Leave this channel']", {
+    await click("[title='Leave this channel']", {
         parent: [".o-mail-DiscussSidebarChannel", { text: "Not So Secret" }],
     });
+    await click("button", { text: "Leave Conversation" });
     await contains(".o-mail-DiscussSidebarChannel", { count: 0 });
 });

@@ -129,7 +129,7 @@ export class KanbanRenderer extends Component {
         }
 
         useBounceButton(this.rootRef, (clickedEl) => {
-            if (!this.props.list.count || this.props.list.model.useSampleModel) {
+            if (this.props.list.isGrouped ? !this.props.list.recordCount : !this.props.list.count || this.props.list.model.useSampleModel) {
                 return clickedEl.matches(
                     [
                         ".o_kanban_renderer",
@@ -167,12 +167,16 @@ export class KanbanRenderer extends Component {
                     return;
                 }
 
+                if (this.props.archInfo.canOpenRecords) {
+                    target.click();
+                    return;
+                }
+
                 // Open first link
-                const firstLink = target.querySelector(".oe_kanban_global_click, a, button");
-                if (firstLink && firstLink instanceof HTMLElement) {
+                const firstLink = target.querySelector("a, button");
+                if (firstLink) {
                     firstLink.click();
                 }
-                return;
             },
             { area: () => this.rootRef.el }
         );
@@ -454,11 +458,12 @@ export class KanbanRenderer extends Component {
      */
     async sortGroupDrop(dataGroupId, { previous }) {
         this.toggleProcessing(dataGroupId, true);
-
         const refId = previous ? previous.dataset.id : null;
-        await this.props.list.resequence(dataGroupId, refId);
-
-        this.toggleProcessing(dataGroupId, false);
+        try {
+            await this.props.list.resequence(dataGroupId, refId);
+        } finally {
+            this.toggleProcessing(dataGroupId, false);
+        }
     }
 
     /**
@@ -485,13 +490,11 @@ export class KanbanRenderer extends Component {
             }
             const refId = previous ? previous.dataset.id : null;
             const targetGroupId = parent?.dataset.id;
-            await this.props.list.moveRecord(dataRecordId, dataGroupId, refId, targetGroupId);
-            if (dataGroupId !== targetGroupId) {
-                const group = this.props.list.groups.find((g) => g.id === dataGroupId);
-                this.props.progressBarState?.updateAggreagteGroup(group);
+            try {
+                await this.props.list.moveRecord(dataRecordId, dataGroupId, refId, targetGroupId);
+            } finally {
+                this.toggleProcessing(dataRecordId, false);
             }
-
-            this.toggleProcessing(dataRecordId, false);
         }
     }
 

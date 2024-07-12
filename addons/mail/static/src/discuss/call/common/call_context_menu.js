@@ -16,6 +16,7 @@ export class CallContextMenu extends Component {
     rtcConnectionTypes = CONNECTION_TYPES;
 
     setup() {
+        super.setup();
         this.store = useState(useService("mail.store"));
         this.rtc = useState(useService("discuss.rtc"));
         this.state = useState({
@@ -34,7 +35,7 @@ export class CallContextMenu extends Component {
     }
 
     get isSelf() {
-        return this.rtc.state.selfSession?.eq(this.props.rtcSession);
+        return this.rtc.selfSession?.eq(this.props.rtcSession);
     }
 
     get inboundConnectionTypeText() {
@@ -72,7 +73,7 @@ export class CallContextMenu extends Component {
     }
 
     async updateStats() {
-        if (this.rtc.state.selfSession?.eq(this.props.rtcSession)) {
+        if (this.rtc.selfSession?.eq(this.props.rtcSession)) {
             if (this.rtc.sfuClient) {
                 const { uploadStats, downloadStats, ...producerStats } =
                     await this.rtc.sfuClient.getStats();

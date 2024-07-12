@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import ast
@@ -6,6 +5,7 @@ import json
 
 from odoo import _, api, fields, models
 from odoo.osv import expression
+
 
 class LoyaltyReward(models.Model):
     _name = 'loyalty.reward'
@@ -116,15 +116,16 @@ class LoyaltyReward(models.Model):
 
     def _get_discount_product_domain(self):
         self.ensure_one()
-        domain = []
+        constrains = []
         if self.discount_product_ids:
-            domain = [('id', 'in', self.discount_product_ids.ids)]
+            constrains.append([('id', 'in', self.discount_product_ids.ids)])
         if self.discount_product_category_id:
             product_category_ids = self._find_all_category_children(self.discount_product_category_id, [])
             product_category_ids.append(self.discount_product_category_id.id)
-            domain = expression.OR([domain, [('categ_id', 'in', product_category_ids)]])
+            constrains.append([('categ_id', 'in', product_category_ids)])
         if self.discount_product_tag_id:
-            domain = expression.OR([domain, [('all_product_tag_ids', 'in', self.discount_product_tag_id.id)]])
+            constrains.append([('all_product_tag_ids', 'in', self.discount_product_tag_id.id)])
+        domain = expression.OR(constrains) if constrains else []
         if self.discount_product_domain and self.discount_product_domain != '[]':
             domain = expression.AND([domain, ast.literal_eval(self.discount_product_domain)])
         return domain
@@ -203,9 +204,11 @@ class LoyaltyReward(models.Model):
     @api.depends('reward_type', 'discount_applicability', 'discount_mode')
     def _compute_is_global_discount(self):
         for reward in self:
-            reward.is_global_discount = reward.reward_type == 'discount' and\
-                                        reward.discount_applicability == 'order' and\
-                                        reward.discount_mode == 'percent'
+            reward.is_global_discount = (
+                reward.reward_type == 'discount'
+                and reward.discount_applicability == 'order'
+                and reward.discount_mode in ['per_order', 'percent']
+            )
 
     @api.depends_context('uid')
     @api.depends("reward_type")
@@ -234,9 +237,9 @@ class LoyaltyReward(models.Model):
                 reward.discount_line_product_id.write({'name': reward.description})
         if 'active' in vals:
             if vals['active']:
-                self.reward_product_id.action_unarchive()
+                self.discount_line_product_id.action_unarchive()
             else:
-                self.reward_product_id.action_archive()
+                self.discount_line_product_id.action_archive()
         return res
 
     def unlink(self):

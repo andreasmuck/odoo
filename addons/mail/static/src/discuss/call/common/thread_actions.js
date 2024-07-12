@@ -10,9 +10,7 @@ threadActionsRegistry
     .add("call", {
         condition(component) {
             return (
-                component.thread?.allowCalls &&
-                !component.thread?.eq(component.rtc.state.channel) &&
-                !component.props.chatWindow?.hidden
+                component.thread?.allowCalls && !component.thread?.eq(component.rtc.state.channel)
             );
         },
         icon: "fa fa-fw fa-phone",
@@ -29,13 +27,15 @@ threadActionsRegistry
     })
     .add("settings", {
         component: CallSettings,
+        componentProps(action) {
+            return { isCompact: true };
+        },
         condition(component) {
             return (
                 component.thread?.allowCalls &&
-                (!component.props.chatWindow || component.props.chatWindow.isOpen)
+                (component.props.chatWindow?.isOpen || component.store.inPublicPage)
             );
         },
-        panelOuterClass: "o-discuss-CallSettings",
         icon: "fa fa-fw fa-gear",
         iconLarge: "fa fa-fw fa-lg fa-gear",
         name: _t("Show Call Settings"),
@@ -48,6 +48,7 @@ threadActionsRegistry
         setup() {
             const component = useComponent();
             component.rtc = useState(useService("discuss.rtc"));
+            this.panelOuterClass = component.props.chatWindow ? "p-2" : "";
         },
         toggle: true,
     });

@@ -31,7 +31,7 @@
         </record>
 
         <menuitem id="menu_product_attribute_action"
-            action="product.attribute_action" name="Product Attributes"
+            action="product.attribute_action" name="Attributes"
             parent="purchase.menu_product_in_config_purchase"  groups="product.group_product_variant" sequence="1"/>
 
         <menuitem
@@ -156,7 +156,7 @@
                             class="oe_stat_button"
                             icon="fa-pencil-square-o" invisible="invoice_count == 0 or state in ('draft', 'sent', 'to approve')">
                             <field name="invoice_count" widget="statinfo" string="Vendor Bills"/>
-                            <field name='invoice_ids' invisible="1"/>
+                            <field name='account_move_ids' invisible="1"/>
                         </button>
                     </div>
                     <div class="oe_title">
@@ -198,7 +198,7 @@
                                 <field name="receipt_reminder_email"/>
                                 <span>Ask confirmation</span>
                                 <div class="o_row oe_inline" invisible="not receipt_reminder_email">
-                                    <field name="reminder_date_before_receipt"/>
+                                    <field name="reminder_date_before_receipt" class="oe_inline" style="max-width: 30px;"/>
                                     day(s) before
                                     <widget name='toaster_button' button_name="send_reminder_preview" title="Preview the reminder email by sending it to yourself." invisible="not id"/>
                                 </div>
@@ -228,25 +228,25 @@
                                     <field name="product_type" column_invisible="True"/>
                                     <field name="product_uom" column_invisible="True" groups="!uom.group_uom"/>
                                     <field name="product_uom_category_id" column_invisible="True"/>
-                                    <field name="invoice_lines" column_invisible="True"/>
+                                    <field name="account_move_line_ids" column_invisible="True"/>
+                                    <field name="is_downpayment" column_invisible="True"/>
                                     <field name="sequence" widget="handle"/>
                                     <field
                                         name="product_id"
                                         readonly="state in ('purchase', 'to approve', 'done', 'cancel')"
                                         required="not display_type"
-                                        width="35%"
                                         context="{'partner_id':parent.partner_id, 'quantity':product_qty, 'company_id': parent.company_id}"
                                         force_save="1" domain="[('purchase_ok', '=', True)]"/>
                                     <field name="name" widget="section_and_note_text" optional="show"/>
-                                    <field name="date_planned" optional="hide" required="not display_type" force_save="1"/>
+                                    <field name="date_planned" optional="hide" required="not display_type" force_save="1" readonly="is_downpayment"/>
                                     <field name="analytic_distribution" widget="analytic_distribution"
                                            optional="hide"
                                            groups="analytic.group_analytic_accounting"
                                            options="{'product_field': 'product_id', 'business_domain': 'purchase_order', 'amount_field': 'price_subtotal'}"/>
-                                    <field name="product_qty"/>
+                                    <field name="product_qty" readonly="is_downpayment"/>
                                     <field name="qty_received_manual" column_invisible="True"/>
                                     <field name="qty_received_method" column_invisible="True"/>
-                                    <field name="qty_received" string="Received" column_invisible="parent.state not in ('purchase', 'done')" readonly="qty_received_method != 'manual'" optional="show"/>
+                                    <field name="qty_received" string="Received" column_invisible="parent.state not in ('purchase', 'done')" readonly="qty_received_method != 'manual' or is_downpayment" optional="show"/>
                                     <field name="qty_invoiced" string="Billed" column_invisible="parent.state not in ('purchase', 'done')" optional="show"/>
                                     <field name="product_uom" string="UoM" groups="uom.group_uom"
                                         readonly="state in ('purchase', 'done', 'cancel')"
@@ -257,12 +257,13 @@
                                     <field name="product_packaging_id" invisible="not product_id" context="{'default_product_id': product_id, 'tree_view_ref':'product.product_packaging_tree_view', 'form_view_ref':'product.product_packaging_form_view'}" groups="product.group_stock_packaging" optional="show"/>
                                     <field name="price_unit" readonly="qty_invoiced != 0"/>
                                     <button name="action_purchase_history" type="object" icon="fa-history" title="Purchase History" invisible="not id"/>
-                                    <field name="taxes_id" widget="many2many_tags" domain="[('type_tax_use', '=', 'purchase'), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id), ('active', '=', True)]" context="{'default_type_tax_use': 'purchase', 'search_view_ref': 'account.account_tax_view_search'}" options="{'no_create': True}" optional="show"/>
-                                    <field name="discount" string="Disc.%" readonly="qty_invoiced != 0" optional="hide"/>
-                                    <field name="price_subtotal" string="Tax excl."/>
+                                    <field name="tax_ids" widget="many2many_tags" domain="[('type_tax_use', '=', 'purchase'), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id), ('active', '=', True)]" context="{'default_type_tax_use': 'purchase', 'search_view_ref': 'account.account_tax_view_search'}" options="{'no_create': True}" optional="show" readonly="is_downpayment"/>
+                                    <field name="discount" string="Disc.%" readonly="qty_invoiced != 0 or is_downpayment" optional="hide"/>
+                                    <field name="price_subtotal" string="Tax excl." invisible="is_downpayment"/>
                                     <field name="price_total"
                                            string="Tax incl."
                                            column_invisible="parent.tax_calculation_rounding_method == 'round_globally'"
+                                           invisible="is_downpayment"
                                            optional="hide"/>
                                 </tree>
                                 <form string="Purchase Order Line">
@@ -290,7 +291,8 @@
                                                 <field name="product_packaging_qty" invisible="not product_id or not product_packaging_id" groups="product.group_stock_packaging"/>
                                                 <field name="product_packaging_id" invisible="not product_id" context="{'default_product_id': product_id, 'tree_view_ref':'product.product_packaging_tree_view', 'form_view_ref':'product.product_packaging_form_view'}" groups="product.group_stock_packaging" />
                                                 <field name="price_unit"/>
-                                                <field name="taxes_id" widget="many2many_tags" domain="[('type_tax_use', '=', 'purchase'), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id)]" options="{'no_create': True}"/>
+                                                <field name="discount"/>
+                                                <field name="tax_ids" widget="many2many_tags" domain="[('type_tax_use', '=', 'purchase'), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id)]" options="{'no_create': True}"/>
                                             </group>
                                             <group>
                                                 <field name="date_planned" required="not display_type"/>
@@ -304,7 +306,7 @@
                                                     <field name="name"/>
                                                 </page>
                                                 <page string="Invoices and Incoming Shipments" name="invoices_incoming_shiptments">
-                                                    <field name="invoice_lines"/>
+                                                    <field name="account_move_line_ids"/>
                                                 </page>
                                             </notebook>
                                             </group>
@@ -322,8 +324,9 @@
                                      <field name="price_tax"/>
                                      <field name="price_total"/>
                                      <field name="price_unit"/>
+                                     <field name="discount"/>
                                      <field name="display_type"/>
-                                     <field name="taxes_id"/>
+                                     <field name="tax_ids"/>
                                      <field name="tax_calculation_rounding_method"/>
                                      <templates>
                                          <t t-name="kanban-box">
@@ -348,7 +351,7 @@
                                                              <span>
                                                                  Quantity:
                                                                  <t t-esc="record.product_qty.value"/>
-                                                                 <t t-esc="record.product_uom.value" groups="uom.group_uom"/>
+                                                                 <small> <t t-esc="record.product_uom.value" groups="uom.group_uom"/></small>
                                                              </span>
                                                          </div>
                                                          <div class="col-4" t-if="record.tax_calculation_rounding_method.raw_value === 'round_per_line'">
@@ -365,6 +368,13 @@
                                                                  Unit Price:
                                                                  <t t-esc="record.price_unit.value"/>
                                                              </span>
+                                                         </div>
+                                                     </div>
+                                                     <div class="row" t-if="record.discount.raw_value">
+                                                         <div class="col-12 text-muted">
+                                                            <span>
+                                                                Discount: <t t-out="record.discount.value"/>%
+                                                            </span>
                                                          </div>
                                                      </div>
                                                  </t>
@@ -606,6 +616,8 @@
                     <field name="amount_untaxed" sum="Total Untaxed amount" string="Untaxed" widget="monetary" optional="hide"/>
                     <field name="amount_total" sum="Total amount" widget="monetary" optional="show" decoration-bf="state in ['purchase', 'done']"/>
                     <field name="currency_id" column_invisible="True" readonly="state in ['cancel', 'done', 'purchase']"/>
+                    <field name="amount_total_cc" sum="Total amount" widget="monetary" optional="hide"/>
+                    <field name="company_currency_id" column_invisible="True"/>
                     <field name="state" optional="show" widget="badge" decoration-success="state == 'purchase' or state == 'done'"
                         decoration-warning="state == 'to approve'" decoration-info="state == 'draft' or state == 'sent'"/>
                     <field name="invoice_status" optional="hide"/>
@@ -640,6 +652,8 @@
                     <field name="amount_total" sum="Total amount" widget="monetary" optional="show" decoration-bf="1"/>
                     <field name="currency_id" column_invisible="True" readonly="state in ['cancel', 'done', 'purchase']"/>
                     <field name="state" column_invisible="True"/>
+                    <field name="amount_total_cc" sum="Total amount" widget="monetary" optional="hide"/>
+                    <field name="company_currency_id" column_invisible="True"/>
                     <field name="invoice_status" widget="badge" decoration-success="invoice_status == 'invoiced'" decoration-info="invoice_status == 'to invoice'" optional="show"/>
                     <field name="date_planned" column_invisible="context.get('quotation_only', False)" optional="show"/>
                 </tree>
@@ -762,8 +776,8 @@
                                 <field name="price_unit"/>
                             </group>
                             <group>
-                                <field name="taxes_id" widget="many2many_tags"
-                                    domain="[('type_tax_use', '=', 'purchase')]"/>
+                                <field name="tax_ids" widget="many2many_tags"
+                                       domain="[('type_tax_use', '=', 'purchase')]"/>
                                 <field name="date_planned" readonly="1"/>
                                 <field name="company_id" groups="base.group_multi_company" options="{'no_create': True}"/>
                                 <field name="analytic_distribution" widget="analytic_distribution"
@@ -773,7 +787,7 @@
                         </group>
                         <field name="name"/>
                         <separator string="Manual Invoices"/>
-                        <field name="invoice_lines"/>
+                        <field name="account_move_line_ids"/>
                     </sheet>
                 </form>
             </field>
@@ -787,11 +801,19 @@
                     <field name="product_id"/>
                     <field name="partner_id" string="Vendor"/>
                     <filter name="hide_cancelled" string="Hide cancelled lines" domain="[('state', '!=', 'cancel')]"/>
+                    <filter string="Status" name="purchase_state" domain="[('state', '=', 'purchase')]"/>
+                    <separator/>
+                    <filter name="filter_date_order" date="date_order" default_period="month"/>
+                    <filter name="order_date_last_year" string="Order Date: Last 365 Days"
+                        domain="[
+                            ('date_order', '>', ((context_today() - relativedelta(years=1)).strftime('%Y-%m-%d')))
+                        ]" invisible="1"/>
                     <group expand="0" string="Group By">
                         <filter name="groupby_supplier" string="Vendor" domain="[]" context="{'group_by' : 'partner_id'}" />
                         <filter name="groupby_product" string="Product" domain="[]" context="{'group_by' : 'product_id'}" />
                         <filter string="Order Reference" name="order_reference" domain="[]" context="{'group_by' :'order_id'}"/>
-                        <filter string="Status" name="status" domain="[]" context="{'group_by' : 'state'}" />
+                        <separator/>
+                        <filter string="Order Date" name="group_by_date_order" context="{'group_by': 'date_order'}"/>
                     </group>
                 </search>
             </field>
@@ -801,21 +823,51 @@
         <field name="name">purchase.history.tree</field>
         <field name="model">purchase.order.line</field>
         <field name="arch" type="xml">
-            <tree create="false" default_order="order_id asc">
+            <tree create="false" default_order="order_id asc" action="action_open_order" type="object">
+                <field name="currency_id" column_invisible="True"/>
                 <field name="order_id" widget="many2one"/>
                 <field name="date_approve"/>
-                <field name="partner_id"/>
-                <field name="product_uom_qty"/>
-                <field name="price_unit"/>
+                <field name="partner_id" string="Vendor"/>
+                <field name="company_id" optional="show" groups="base.group_multi_company"/>
+                <field name="product_uom_qty" string="Quantity"/>
+                <field name="price_unit" widget="monetary"/>
+                <field name="price_subtotal" widget="monetary" string="Total Untaxed"/>
+                <field name="state" optional="hide"/>
             </tree>
         </field>
     </record>
 
+    <record id="purchase_history_pivot" model="ir.ui.view">
+         <field name="name">purchase.history.pivot</field>
+         <field name="model">purchase.order.line</field>
+         <field name="arch" type="xml">
+             <pivot>
+                <field name="price_total" string="Total purchased amount" type="measure"/>
+                <field name="product_uom_qty" string="Total Qty purchased" type="measure"/>
+             </pivot>
+         </field>
+    </record>
+
+     <record id="purchase_history_graph" model="ir.ui.view">
+         <field name="name">purchase.history.graph</field>
+         <field name="model">purchase.order.line</field>
+         <field name="arch" type="xml">
+             <graph type="line">
+                <field name="date_order" interval="month"/>
+                <field name="product_uom_qty" type="measure"/>
+             </graph>
+         </field>
+    </record>
+
     <record id="action_purchase_history" model="ir.actions.act_window">
         <field name="res_model">purchase.order.line</field>
-        <field name="view_mode">tree</field>
+        <field name="view_mode">tree,pivot,graph</field>
         <field name="view_id" ref="purchase.purchase_history_tree"/>
-        <field name="context">{}</field>
+        <field name="context">{
+                'search_default_purchase_state': 1,
+                'search_default_order_date_last_year': 1,
+                'search_default_groupby_supplier': 1,
+        }</field>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">
                 No purchase order were made for this product yet!

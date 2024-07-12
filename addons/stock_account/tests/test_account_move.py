@@ -8,8 +8,10 @@ from odoo import fields
 
 class TestAccountMoveStockCommon(AccountTestInvoicingCommon):
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
+
+        cls.other_currency = cls.setup_other_currency('EUR')
 
         (
             cls.stock_input_account,
@@ -35,7 +37,7 @@ class TestAccountMoveStockCommon(AccountTestInvoicingCommon):
         cls.product_A = cls.env["product.product"].create(
             {
                 "name": "Product A",
-                "type": "product",
+                "is_storable": True,
                 "default_code": "prda",
                 "categ_id": cls.auto_categ.id,
                 "taxes_id": [(5, 0, 0)],
@@ -51,11 +53,11 @@ class TestAccountMoveStockCommon(AccountTestInvoicingCommon):
 @tagged("post_install", "-at_install")
 class TestAccountMove(TestAccountMoveStockCommon):
     def test_standard_perpetual_01_mc_01(self):
-        rate = self.currency_data["rates"].sorted()[0].rate
+        rate = self.other_currency.rate_ids.sorted()[0].rate
 
         move_form = Form(self.env["account.move"].with_context(default_move_type="out_invoice"))
         move_form.partner_id = self.partner_a
-        move_form.currency_id = self.currency_data["currency"]
+        move_form.currency_id = self.other_currency
         with move_form.invoice_line_ids.new() as line_form:
             line_form.product_id = self.product_A
             line_form.tax_ids.clear()
@@ -75,11 +77,11 @@ class TestAccountMove(TestAccountMoveStockCommon):
 
     def test_fifo_perpetual_01_mc_01(self):
         self.product_A.categ_id.property_cost_method = "fifo"
-        rate = self.currency_data["rates"].sorted()[0].rate
+        rate = self.other_currency.rate_ids.sorted()[0].rate
 
         move_form = Form(self.env["account.move"].with_context(default_move_type="out_invoice"))
         move_form.partner_id = self.partner_a
-        move_form.currency_id = self.currency_data["currency"]
+        move_form.currency_id = self.other_currency
         with move_form.invoice_line_ids.new() as line_form:
             line_form.product_id = self.product_A
             line_form.tax_ids.clear()
@@ -99,11 +101,11 @@ class TestAccountMove(TestAccountMoveStockCommon):
 
     def test_average_perpetual_01_mc_01(self):
         self.product_A.categ_id.property_cost_method = "average"
-        rate = self.currency_data["rates"].sorted()[0].rate
+        rate = self.other_currency.rate_ids.sorted()[0].rate
 
         move_form = Form(self.env["account.move"].with_context(default_move_type="out_invoice"))
         move_form.partner_id = self.partner_a
-        move_form.currency_id = self.currency_data["currency"]
+        move_form.currency_id = self.other_currency
         with move_form.invoice_line_ids.new() as line_form:
             line_form.product_id = self.product_A
             line_form.tax_ids.clear()
@@ -132,7 +134,7 @@ class TestAccountMove(TestAccountMoveStockCommon):
             'move_type': 'out_refund',
             'invoice_date': fields.Date.from_string('2019-01-01'),
             'partner_id': self.partner_a.id,
-            'currency_id': self.currency_data['currency'].id,
+            'currency_id': self.other_currency.id,
             'invoice_line_ids': [
                 (0, None, {'product_id': self.product_A.id}),
             ]
@@ -216,7 +218,7 @@ class TestAccountMove(TestAccountMoveStockCommon):
         self.env.user.company_ids |= first_company
         basic_product = self.env['product.product'].create({
             'name': 'SuperProduct',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': self.all_categ.id,
         })
 
@@ -232,3 +234,69 @@ class TestAccountMove(TestAccountMoveStockCommon):
 
             product_accounts = basic_product.product_tmpl_id.with_company(company.id).get_product_accounts()
             self.assertEqual(bill.invoice_line_ids.account_id, product_accounts['expense'])
+
+    def test_product_valuation_method_change_to_automated_negative_on_hand_qty(self):
+        """ We have a product whose category has manual valuation and on-hand quantity is negative:
+        Upon switching to an automated valuation method for the product category, the following
+        entries should be generated in the stock journal:
+            1. CREDIT to valuation account
+            2. DEBIT to stock output account
+        """
+        stock_location = self.env['stock.warehouse'].search([
+            ('company_id', '=', self.env.company.id),
+        ], limit=1).lot_stock_id
+        categ = self.env['product.category'].create({'name': 'categ'})
+        product = self.product_a
+        product.write({
+            'is_storable': True,
+            'categ_id': categ.id,
+        })
+
+        out_picking = self.env['stock.picking'].create({
+            'location_id': stock_location.id,
+            'location_dest_id': self.ref('stock.stock_location_customers'),
+            'picking_type_id': stock_location.warehouse_id.out_type_id.id,
+        })
+        sm = self.env['stock.move'].create({
+            'name': product.name,
+            'product_id': product.id,
+            'product_uom_qty': 1,
+            'product_uom': product.uom_id.id,
+            'location_id': out_picking.location_id.id,
+            'location_dest_id': out_picking.location_dest_id.id,
+            'picking_id': out_picking.id,
+        })
+        out_picking.action_confirm()
+        sm.quantity = 1
+        out_picking.button_validate()
+
+        categ.write({
+            'property_valuation': 'real_time',
+            'property_stock_account_input_categ_id': self.stock_input_account.id,
+            'property_stock_account_output_categ_id': self.stock_output_account.id,
+            'property_stock_valuation_account_id': self.stock_valuation_account.id,
+            'property_stock_journal': self.stock_journal.id,
+        })
+
+        amls = self.env['account.move.line'].search([('product_id', '=', product.id)])
+        if amls[0].account_id == self.stock_valuation_account:
+            stock_valuation_line = amls[0]
+            output_line = amls[1]
+        else:
+            output_line = amls[0]
+            stock_valuation_line = amls[1]
+
+        expected_valuation_line = {
+            'account_id': self.stock_valuation_account.id,
+            'credit': product.standard_price,
+            'debit': 0,
+        }
+        expected_output_line = {
+            'account_id': self.stock_output_account.id,
+            'credit': 0,
+            'debit': product.standard_price,
+        }
+        self.assertRecordValues(
+            [stock_valuation_line, output_line],
+            [expected_valuation_line, expected_output_line]
+        )

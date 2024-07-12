@@ -11,7 +11,7 @@ from odoo.http import request
 from odoo.tools import replace_exceptions
 from odoo.addons.base.models.assetsbundle import AssetsBundle
 from odoo.addons.mail.models.discuss.mail_guest import add_guest_to_context
-from odoo.addons.mail.tools.discuss import StoreData
+from odoo.addons.mail.tools.discuss import Store
 
 
 class LivechatController(http.Controller):
@@ -59,19 +59,6 @@ class LivechatController(http.Controller):
         stream = request.env['ir.binary']._get_stream_from(asset.js())
         return stream.get_response()
 
-    @http.route('/im_livechat/load_templates', type='json', auth='none', cors="*")
-    def load_templates(self, **kwargs):
-        templates = self._livechat_templates_get()
-        return [tools.file_open(tmpl, 'rb').read() for tmpl in templates]
-
-    def _livechat_templates_get(self):
-        return [
-            'im_livechat/static/src/legacy/widgets/feedback/feedback.xml',
-            'im_livechat/static/src/legacy/widgets/public_livechat_window/public_livechat_window.xml',
-            'im_livechat/static/src/legacy/widgets/public_livechat_view/public_livechat_view.xml',
-            'im_livechat/static/src/legacy/public_livechat_chatbot.xml',
-        ]
-
     @http.route('/im_livechat/support/<int:channel_id>', type='http', auth='public')
     def support_page(self, channel_id, **kwargs):
         channel = request.env['im_livechat.channel'].sudo().browse(channel_id)
@@ -98,8 +85,7 @@ class LivechatController(http.Controller):
         # find the first matching rule for the given country and url
         matching_rule = request.env['im_livechat.channel.rule'].sudo().match_rule(channel_id, url, country_id)
         if matching_rule and (not matching_rule.chatbot_script_id or matching_rule.chatbot_script_id.script_step_ids):
-            frontend_lang = request.httprequest.cookies.get('frontend_lang', request.env.user.lang or 'en_US')
-            matching_rule = matching_rule.with_context(lang=frontend_lang)
+            matching_rule = matching_rule.with_context(lang=request.env['chatbot.script']._get_chatbot_language())
             rule = {
                 'action': matching_rule.action,
                 'auto_popup_timer': matching_rule.auto_popup_timer,
@@ -109,7 +95,7 @@ class LivechatController(http.Controller):
                (not operator_available and matching_rule.chatbot_only_if_no_operator)) and matching_rule.chatbot_script_id.script_step_ids:
                 chatbot_script = matching_rule.chatbot_script_id
                 rule.update({'chatbotScript': chatbot_script._format_for_frontend()})
-        store = StoreData()
+        store = Store()
         request.env["res.users"]._init_store_data(store)
         return {
             'available_for_me': bool((rule and rule.get('chatbotScript'))
@@ -124,6 +110,7 @@ class LivechatController(http.Controller):
     @http.route('/im_livechat/get_session', methods=["POST"], type="json", auth='public')
     @add_guest_to_context
     def get_session(self, channel_id, anonymous_name, previous_operator_id=None, chatbot_script_id=None, persisted=True, **kwargs):
+        store = Store()
         user_id = None
         country_id = None
         # if the user is identifiy (eg: portal user on the frontend), don't use the anonymous name. The user will be added to session.
@@ -143,8 +130,9 @@ class LivechatController(http.Controller):
 
         chatbot_script = False
         if chatbot_script_id:
-            frontend_lang = request.httprequest.cookies.get('frontend_lang', request.env.user.lang or 'en_US')
-            chatbot_script = request.env['chatbot.script'].sudo().with_context(lang=frontend_lang).browse(chatbot_script_id)
+            chatbot_script = request.env['chatbot.script'].sudo().with_context(
+                lang=request.env["chatbot.script"]._get_chatbot_language()
+            ).browse(chatbot_script_id)
         channel_vals = request.env["im_livechat.channel"].with_context(lang=False).sudo().browse(channel_id)._get_livechat_discuss_channel_vals(
             anonymous_name,
             previous_operator_id=previous_operator_id,
@@ -155,23 +143,31 @@ class LivechatController(http.Controller):
         )
         if not channel_vals:
             return False
-        channel_info = None
         if not persisted:
             operator_partner = request.env['res.partner'].sudo().browse(channel_vals['livechat_operator_id'])
+            store.add(
+                operator_partner,
+                fields={"id": True, "user_livechat_username": True, "write_date": True},
+            )
             channel_info = {
                 'id': -1, # only one temporary thread at a time, id does not matter.
+                "isLoaded": True,
                 'model': 'discuss.channel',
                 'name': channel_vals['name'],
+                "operator": {"id": operator_partner.id, "type": "partner"},
                 'state': 'open',
-                'operator': operator_partner.mail_partner_format(fields={'id': True, 'user_livechat_username': True, 'write_date': True})[operator_partner],
                 'channel_type': 'livechat',
                 'chatbot': {
                     'script': chatbot_script._format_for_frontend(),
                     'steps': chatbot_script._get_welcome_steps().mapped(lambda s: {'scriptStep': {'id': s.id}}),
                 } if chatbot_script else None
             }
+            store.add("Thread", channel_info)
         else:
-            channel = request.env['discuss.channel'].with_context(mail_create_nosubscribe=False).sudo().create(channel_vals)
+            channel = request.env['discuss.channel'].with_context(
+                mail_create_nosubscribe=False,
+                lang=request.env['chatbot.script']._get_chatbot_language()
+            ).sudo().create(channel_vals)
             if chatbot_script:
                 chatbot_script._post_welcome_steps(channel)
             with replace_exceptions(UserError, by=NotFound()):
@@ -186,13 +182,11 @@ class LivechatController(http.Controller):
             channel.channel_member_ids.filtered(lambda m: m.is_self).fold_state = "open"
             if not chatbot_script or chatbot_script.operator_partner_id != channel.livechat_operator_id:
                 channel._broadcast([channel.livechat_operator_id.id])
-            channel_info = channel._channel_info()[0]
+            store.add(channel)
+            store.add("Thread", {"id": channel.id, "model": "discuss.channel", "isLoaded": not chatbot_script})
             if guest:
-                channel_info['guest_token'] = guest._format_auth_cookie()
-        channel_info.update(isLoaded=not persisted or not chatbot_script)
-        store = StoreData()
+                store.add({"guest_token": guest._format_auth_cookie()})
         request.env["res.users"]._init_store_data(store)
-        store.add({"Thread": channel_info})
         return store.get_result()
 
     def _post_feedback_message(self, channel, rating, reason):

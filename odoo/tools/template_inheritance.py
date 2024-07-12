@@ -1,17 +1,23 @@
-
-from lxml import etree
-from lxml.builder import E
 import copy
 import itertools
 import logging
 import re
 
+from lxml import etree
+from lxml.builder import E
+
 from odoo.tools.translate import _
-from odoo.tools import SKIPPED_ELEMENT_TYPES, html_escape
 from odoo.exceptions import ValidationError
+from .misc import SKIPPED_ELEMENT_TYPES, html_escape
+
+__all__ = []
 
 _logger = logging.getLogger(__name__)
 RSTRIP_REGEXP = re.compile(r'\n[ \t]*$')
+
+# attribute names that contain Python expressions
+PYTHON_ATTRIBUTES = {'readonly', 'required', 'invisible', 'column_invisible', 't-if', 't-elif'}
+
 
 def add_stripped_items_before(node, spec, extract):
     text = spec.text or ''
@@ -22,7 +28,8 @@ def add_stripped_items_before(node, spec, extract):
         parent = node.getparent()
         result = parent.text and RSTRIP_REGEXP.search(parent.text)
         before_text = result.group(0) if result else ''
-        parent.text = (parent.text or '').rstrip() + text
+        fallback_text = None if spec.text is None else ''
+        parent.text = ((parent.text or '').rstrip() + text) or fallback_text
     else:
         result = prev.tail and RSTRIP_REGEXP.search(prev.tail)
         before_text = result.group(0) if result else ''
@@ -76,7 +83,7 @@ def locate_node(arch, spec):
         try:
             xPath = etree.ETXPath(expr)
         except etree.XPathSyntaxError as e:
-            raise ValidationError(_("Invalid Expression while parsing xpath %r", expr)) from e
+            raise ValidationError(_("Invalid Expression while parsing xpath “%s”", expr)) from e
         nodes = xPath(arch)
         return nodes[0] if nodes else None
     elif spec.tag == 'field':
@@ -121,7 +128,7 @@ def apply_inheritance_specs(source, specs_tree, inherit_branding=False, pre_loca
         """
         if len(spec):
             raise ValueError(
-                _("Invalid specification for moved nodes: %r", etree.tostring(spec, encoding='unicode'))
+                _("Invalid specification for moved nodes: “%s”", etree.tostring(spec, encoding='unicode'))
             )
         pre_locate(spec)
         to_extract = locate_node(source, spec)
@@ -130,7 +137,7 @@ def apply_inheritance_specs(source, specs_tree, inherit_branding=False, pre_loca
             return to_extract
         else:
             raise ValueError(
-                _("Element %r cannot be located in parent view", etree.tostring(spec, encoding='unicode'))
+                _("Element “%s” cannot be located in parent view", etree.tostring(spec, encoding='unicode'))
             )
 
     while len(specs):
@@ -205,23 +212,77 @@ def apply_inheritance_specs(source, specs_tree, inherit_branding=False, pre_loca
                     raise ValueError(_("Invalid mode attribute:") + " '%s'" % mode)
             elif pos == 'attributes':
                 for child in spec.getiterator('attribute'):
-                    attribute = child.get('name')
-                    value = child.text or ''
-                    if child.get('add') or child.get('remove'):
-                        assert not child.text
-                        separator = child.get('separator', ',')
-                        if separator == ' ':
-                            separator = None    # squash spaces
-                        to_add = (
-                            s for s in (s.strip() for s in child.get('add', '').split(separator))
-                            if s
-                        )
-                        to_remove = {s.strip() for s in child.get('remove', '').split(separator)}
-                        values = (s.strip() for s in node.get(attribute, '').split(separator))
-                        value = (separator or ' ').join(itertools.chain(
-                            (v for v in values if v not in to_remove),
-                            to_add
+                    # The element should only have attributes:
+                    # - name (mandatory),
+                    # - add, remove, separator
+                    # - any attribute that starts with data-oe-*
+                    unknown = [
+                        key
+                        for key in child.attrib
+                        if key not in ('name', 'add', 'remove', 'separator')
+                        and not key.startswith('data-oe-')
+                    ]
+                    if unknown:
+                        raise ValueError(_(
+                            "Invalid attributes %s in element <attribute>",
+                            ", ".join(map(repr, unknown)),
                         ))
+
+                    attribute = child.get('name')
+                    value = None
+
+                    if child.get('add') or child.get('remove'):
+                        if child.text:
+                            raise ValueError(_(
+                                "Element <attribute> with 'add' or 'remove' cannot contain text %s",
+                                repr(child.text),
+                            ))
+                        value = node.get(attribute, '')
+                        add = child.get('add', '')
+                        remove = child.get('remove', '')
+                        separator = child.get('separator')
+
+                        if attribute in PYTHON_ATTRIBUTES or attribute.startswith('decoration-'):
+                            # attribute containing a python expression
+                            separator = separator.strip()
+                            if separator not in ('and', 'or'):
+                                raise ValueError(_(
+                                    "Invalid separator %(separator)s for python expression %(expression)s; "
+                                    "valid values are 'and' and 'or'",
+                                    separator=repr(separator), expression=repr(attribute),
+                                ))
+                            if remove:
+                                if re.match(rf'^\(*{remove}\)*$', value):
+                                    value = ''
+                                else:
+                                    patterns = [
+                                        f"({remove}) {separator} ",
+                                        f" {separator} ({remove})",
+                                        f"{remove} {separator} ",
+                                        f" {separator} {remove}",
+                                    ]
+                                    for pattern in patterns:
+                                        index = value.find(pattern)
+                                        if index != -1:
+                                            value = value[:index] + value[index + len(pattern):]
+                                            break
+                            if add:
+                                value = f"({value}) {separator} ({add})" if value else add
+                        else:
+                            if separator is None:
+                                separator = ','
+                            elif separator == ' ':
+                                separator = None    # squash spaces
+                            values = (s.strip() for s in value.split(separator))
+                            to_add = filter(None, (s.strip() for s in add.split(separator)))
+                            to_remove = {s.strip() for s in remove.split(separator)}
+                            value = (separator or ' ').join(itertools.chain(
+                                (v for v in values if v and v not in to_remove),
+                                to_add
+                            ))
+                    else:
+                        value = child.text or ''
+
                     if value:
                         node.set(attribute, value)
                     elif attribute in node.attrib:
@@ -238,6 +299,9 @@ def apply_inheritance_specs(source, specs_tree, inherit_branding=False, pre_loca
                 # spec before the sentinel, then remove the sentinel element
                 sentinel = E.sentinel()
                 node.addnext(sentinel)
+                if node.tail is not None:  # for lxml >= 5.1
+                    sentinel.tail = node.tail
+                    node.tail = None
                 add_stripped_items_before(sentinel, spec, extract)
                 remove_element(sentinel)
             elif pos == 'before':

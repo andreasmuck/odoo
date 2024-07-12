@@ -8,6 +8,8 @@ from odoo import fields, http
 from odoo.http import request
 from odoo.addons.mail.controllers.webclient import WebclientController
 from odoo.addons.mail.models.discuss.mail_guest import add_guest_to_context
+from odoo.addons.mail.tools.discuss import Store
+
 
 class DiscussChannelWebclientController(WebclientController):
     """Override to add discuss channel specific features."""
@@ -18,8 +20,8 @@ class DiscussChannelWebclientController(WebclientController):
             channels = request.env["discuss.channel"]._get_channels_as_member()
             # fetch channels data before messages to benefit from prefetching (channel info might
             # prefetch a lot of data that message format could use)
-            store.add({"Thread": channels._channel_info()})
-            store.add({"Message": channels._get_last_messages().message_format()})
+            store.add(channels)
+            store.add(channels._get_last_messages(), for_current_user=True)
 
 
 class ChannelController(http.Controller):
@@ -29,7 +31,7 @@ class ChannelController(http.Controller):
         channel = request.env["discuss.channel"].search([("id", "=", channel_id)])
         if not channel:
             raise NotFound()
-        return channel.load_more_members(known_member_ids)
+        return channel._load_more_members(known_member_ids)
 
     @http.route("/discuss/channel/update_avatar", methods=["POST"], type="json")
     def discuss_channel_avatar_update(self, channel_id, data):
@@ -44,7 +46,7 @@ class ChannelController(http.Controller):
         channel = request.env["discuss.channel"].search([("id", "=", channel_id)])
         if not channel:
             return
-        return channel._channel_info()[0]
+        return Store(channel).get_result()
 
     @http.route("/discuss/channel/messages", methods=["POST"], type="json", auth="public")
     @add_guest_to_context
@@ -60,9 +62,14 @@ class ChannelController(http.Controller):
         res = request.env["mail.message"]._message_fetch(
             domain, search_term=search_term, before=before, after=after, around=around, limit=limit
         )
+        messages = res.pop("messages")
         if not request.env.user._is_public() and not around:
-            res["messages"].set_message_done()
-        return {**res, "messages": res["messages"].message_format()}
+            messages.set_message_done()
+        return {
+            **res,
+            "data": Store(messages, for_current_user=True).get_result(),
+            "messages": [{"id": message.id} for message in messages],
+        }
 
     @http.route("/discuss/channel/pinned_messages", methods=["POST"], type="json", auth="public")
     @add_guest_to_context
@@ -70,7 +77,8 @@ class ChannelController(http.Controller):
         channel = request.env["discuss.channel"].search([("id", "=", channel_id)])
         if not channel:
             raise NotFound()
-        return channel.pinned_message_ids.sorted(key="pinned_at", reverse=True).message_format()
+        messages = channel.pinned_message_ids.sorted(key="pinned_at", reverse=True)
+        return Store(messages, for_current_user=True).get_result()
 
     @http.route("/discuss/channel/mute", methods=["POST"], type="json", auth="user")
     def discuss_channel_mute(self, channel_id, minutes):
@@ -113,13 +121,27 @@ class ChannelController(http.Controller):
         }
         request.env["bus.bus"]._sendone(member.partner_id, "mail.record/insert", {"Thread": channel_data})
 
-    @http.route("/discuss/channel/set_last_seen_message", methods=["POST"], type="json", auth="public")
+    @http.route("/discuss/channel/mark_as_read", methods=["POST"], type="json", auth="public")
     @add_guest_to_context
-    def discuss_channel_mark_as_seen(self, channel_id, last_message_id, allow_older=False):
-        channel = request.env["discuss.channel"].search([("id", "=", channel_id)])
-        if not channel:
+    def discuss_channel_mark_as_read(self, channel_id, last_message_id, sync=False):
+        member = request.env["discuss.channel.member"].search([
+            ("channel_id", "=", channel_id),
+            ("is_self", "=", True),
+        ])
+        if not member:
+            return  # ignore if the member left in the meantime
+        member._mark_as_read(last_message_id, sync=sync)
+
+    @http.route("/discuss/channel/mark_as_unread", methods=["POST"], type="json", auth="public")
+    @add_guest_to_context
+    def discuss_channel_mark_as_unread(self, channel_id, message_id):
+        member = request.env["discuss.channel.member"].search([
+            ("channel_id", "=", channel_id),
+            ("is_self", "=", True),
+        ])
+        if not member:
             raise NotFound()
-        return channel._channel_seen(last_message_id, allow_older=allow_older)
+        return member._set_new_message_separator(message_id, sync=True)
 
     @http.route("/discuss/channel/notify_typing", methods=["POST"], type="json", auth="public")
     @add_guest_to_context
@@ -151,7 +173,9 @@ class ChannelController(http.Controller):
         if before:
             domain.append(["id", "<", before])
         # sudo: ir.attachment - reading attachments of a channel that the current user can access
-        return request.env["ir.attachment"].sudo().search(domain, limit=limit, order="id DESC")._attachment_format()
+        return Store(
+            request.env["ir.attachment"].sudo().search(domain, limit=limit, order="id DESC")
+        ).get_result()
 
     @http.route("/discuss/channel/fold", methods=["POST"], type="json", auth="public")
     @add_guest_to_context

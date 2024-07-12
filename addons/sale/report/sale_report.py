@@ -33,7 +33,7 @@ class SaleReport(models.Model):
             ('invoiced', "Fully Invoiced"),
             ('to invoice', "To Invoice"),
             ('no', "Nothing to Invoice"),
-        ], string="Invoice Status", readonly=True)
+        ], string="Order Invoice Status", readonly=True)
 
     campaign_id = fields.Many2one(comodel_name='utm.campaign', string="Campaign", readonly=True)
     medium_id = fields.Many2one(comodel_name='utm.medium', string="Medium", readonly=True)
@@ -50,7 +50,11 @@ class SaleReport(models.Model):
     state_id = fields.Many2one(comodel_name='res.country.state', string="Customer State", readonly=True)
 
     # sale.order.line fields
-    order_reference = fields.Reference(string='Related Order', selection=[('sale.order', 'Sales Order')], aggregator="count_distinct")
+    order_reference = fields.Reference(
+        string='Order',
+        selection=[('sale.order', 'Sales Order')],
+        aggregator="count_distinct",
+    )
 
     categ_id = fields.Many2one(
         comodel_name='product.category', string="Product Category", readonly=True)
@@ -68,10 +72,17 @@ class SaleReport(models.Model):
     price_total = fields.Monetary(string="Total", readonly=True)
     untaxed_amount_to_invoice = fields.Monetary(string="Untaxed Amount To Invoice", readonly=True)
     untaxed_amount_invoiced = fields.Monetary(string="Untaxed Amount Invoiced", readonly=True)
+    line_invoice_status = fields.Selection(
+        selection=[
+            ('upselling', "Upselling Opportunity"),
+            ('invoiced', "Fully Invoiced"),
+            ('to invoice', "To Invoice"),
+            ('no', "Nothing to Invoice"),
+        ], string="Invoice Status", readonly=True)
 
     weight = fields.Float(string="Gross Weight", readonly=True)
     volume = fields.Float(string="Volume", readonly=True)
-
+    price_unit = fields.Float(string="Unit Price", aggregator='avg', readonly=True)
     discount = fields.Float(string="Discount %", readonly=True, aggregator='avg')
     discount_amount = fields.Monetary(string="Discount Amount", readonly=True)
 
@@ -90,12 +101,18 @@ class SaleReport(models.Model):
         select_ = f"""
             MIN(l.id) AS id,
             l.product_id AS product_id,
+            l.invoice_status AS line_invoice_status,
             t.uom_id AS product_uom,
             CASE WHEN l.product_id IS NOT NULL THEN SUM(l.product_uom_qty / u.factor * u2.factor) ELSE 0 END AS product_uom_qty,
             CASE WHEN l.product_id IS NOT NULL THEN SUM(l.qty_delivered / u.factor * u2.factor) ELSE 0 END AS qty_delivered,
             CASE WHEN l.product_id IS NOT NULL THEN SUM((l.product_uom_qty - l.qty_delivered) / u.factor * u2.factor) ELSE 0 END AS qty_to_deliver,
             CASE WHEN l.product_id IS NOT NULL THEN SUM(l.qty_invoiced / u.factor * u2.factor) ELSE 0 END AS qty_invoiced,
             CASE WHEN l.product_id IS NOT NULL THEN SUM(l.qty_to_invoice / u.factor * u2.factor) ELSE 0 END AS qty_to_invoice,
+            CASE WHEN l.product_id IS NOT NULL THEN SUM(l.price_unit
+                / {self._case_value_or_one('s.currency_rate')}
+                * {self._case_value_or_one('currency_table.rate')}
+                ) ELSE 0
+            END AS price_unit,
             CASE WHEN l.product_id IS NOT NULL THEN SUM(l.price_total
                 / {self._case_value_or_one('s.currency_rate')}
                 * {self._case_value_or_one('currency_table.rate')}
@@ -167,7 +184,9 @@ class SaleReport(models.Model):
         return {}
 
     def _from_sale(self):
-        return """
+        currency_table_sql = self.env['res.currency']._get_query_currency_table(self.env.companies.ids, fields.Date.today())
+        currency_table = self.env.cr.mogrify(currency_table_sql).decode(self.env.cr.connection.encoding)
+        return f"""
             sale_order_line l
             LEFT JOIN sale_order s ON s.id=l.order_id
             JOIN res_partner partner ON s.partner_id = partner.id
@@ -176,9 +195,7 @@ class SaleReport(models.Model):
             LEFT JOIN uom_uom u ON u.id=l.product_uom
             LEFT JOIN uom_uom u2 ON u2.id=t.uom_id
             JOIN {currency_table} ON currency_table.company_id = s.company_id
-            """.format(
-            currency_table=self.env['res.currency']._get_query_currency_table(self.env.companies.ids, fields.Date.today())
-            )
+            """
 
     def _where_sale(self):
         return """
@@ -188,6 +205,8 @@ class SaleReport(models.Model):
         return """
             l.product_id,
             l.order_id,
+            l.price_unit,
+            l.invoice_status,
             t.uom_id,
             t.categ_id,
             s.name,
@@ -227,3 +246,12 @@ class SaleReport(models.Model):
     @property
     def _table_query(self):
         return self._query()
+
+    def action_open_order(self):
+        self.ensure_one()
+        return {
+            'res_model': self.order_reference._name,
+            'type': 'ir.actions.act_window',
+            'views': [[False, 'form']],
+            'res_id': self.order_reference.id,
+        }

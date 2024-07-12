@@ -1,4 +1,3 @@
-/** @odoo-module */
 import { registry } from "@web/core/registry";
 import { constructFullProductName, uuidv4 } from "@point_of_sale/utils";
 import { Base } from "./related_models";
@@ -7,7 +6,6 @@ import { formatFloat, roundDecimals, roundPrecision, floatIsZero } from "@web/co
 import { roundCurrency, formatCurrency } from "./utils/currency";
 import { _t } from "@web/core/l10n/translation";
 import {
-    getPriceUnitAfterFiscalPosition,
     getTaxesAfterFiscalPosition,
     getTaxesValues,
 } from "@point_of_sale/app/models/utils/tax_utils";
@@ -23,8 +21,7 @@ export class PosOrderline extends Base {
 
         // Data that are not saved in the backend
         this.uiState = {
-            price_type: "original",
-            hasChange: false,
+            hasChange: true,
         };
 
         // this.set_unit_price(this.price_unit);
@@ -49,7 +46,7 @@ export class PosOrderline extends Base {
                 this.set_quantity(code.value);
             } else if (code.type === "price") {
                 this.set_unit_price(code.value);
-                this.uiState.price_type = "manual";
+                this.price_type = "manual";
             }
 
             if (product_packaging_by_barcode[code.code]) {
@@ -58,6 +55,11 @@ export class PosOrderline extends Base {
         }
 
         this.set_unit_price(this.price_unit);
+    }
+
+    get preparationKey() {
+        const note = this.getNote();
+        return `${this.uuid} - ${note}`;
     }
 
     get quantityStr() {
@@ -82,17 +84,16 @@ export class PosOrderline extends Base {
         return qtyStr;
     }
 
-    get pos() {
-        //REVIEW - will this works with self order ?
-        return this.models["pos.store"].getFirst().pos;
-    }
-
     get company() {
         return this.models["res.company"].getFirst();
     }
 
     get config() {
         return this.models["pos.config"].getFirst();
+    }
+
+    get session() {
+        return this.models["pos.session"].getFirst();
     }
 
     get currency() {
@@ -195,8 +196,13 @@ export class PosOrderline extends Base {
         const quant =
             typeof quantity === "number" ? quantity : parseFloat("" + (quantity ? quantity : 0));
 
-        if (this.refunded_orderline_id?.uuid in this.pos.lineToRefund) {
-            const refundDetails = this.pos.lineToRefund[this.refunded_orderline_id.uuid];
+        const allLineToRefundUuids = this.models["pos.order"].reduce((acc, order) => {
+            Object.assign(acc, order.uiState.lineToRefund);
+            return acc;
+        }, {});
+
+        if (this.refunded_orderline_id?.uuid in allLineToRefundUuids) {
+            const refundDetails = allLineToRefundUuids[this.refunded_orderline_id.uuid];
             const maxQtyToRefund = refundDetails.line.qty - refundDetails.line.refunded_qty;
             if (quant > 0) {
                 return {
@@ -234,7 +240,7 @@ export class PosOrderline extends Base {
         }
 
         // just like in sale.order changing the qty will recompute the unit price
-        if (!keep_price && this.uiState.price_type === "original") {
+        if (!keep_price && this.price_type === "original") {
             this.set_unit_price(
                 this.product_id.get_price(
                     this.order_id.pricelist_id,
@@ -286,16 +292,13 @@ export class PosOrderline extends Base {
         const productPriceUnit = this.models["decimal.precision"].find(
             (dp) => dp.name === "Product Price"
         ).digits;
-        const price = parseFloat(
+        const price = window.parseFloat(
             roundDecimals(this.price_unit || 0, productPriceUnit).toFixed(productPriceUnit)
         );
         let order_line_price = orderline
             .get_product()
             .get_price(orderline.order_id.pricelist_id, this.get_quantity());
-        order_line_price = roundDecimals(
-            orderline.compute_fixed_price(order_line_price),
-            this.currency.decimal_places
-        );
+        order_line_price = roundDecimals(order_line_price, this.currency.decimal_places);
 
         const isSameCustomerNote =
             (Boolean(orderline.get_customer_note()) === false &&
@@ -340,11 +343,9 @@ export class PosOrderline extends Base {
             : isNaN(parseFloat(price))
             ? 0
             : parseFloat("" + price);
-        this.price_unit = this.compute_fixed_price(
-            roundDecimals(
-                parsed_price || 0,
-                this.models["decimal.precision"].find((dp) => dp.name === "Product Price").digits
-            )
+        this.price_unit = roundDecimals(
+            parsed_price || 0,
+            this.models["decimal.precision"].find((dp) => dp.name === "Product Price").digits
         );
     }
 
@@ -353,7 +354,7 @@ export class PosOrderline extends Base {
             (dp) => dp.name === "Product Price"
         ).digits;
         // round and truncate to mimic _symbol_set behavior
-        return parseFloat(roundDecimals(this.price_unit || 0, digits).toFixed(digits));
+        return window.parseFloat(roundDecimals(this.price_unit || 0, digits).toFixed(digits));
     }
 
     get_unit_display_price() {
@@ -389,7 +390,7 @@ export class PosOrderline extends Base {
     }
 
     get_taxed_lst_unit_price() {
-        const priceUnit = this.compute_fixed_price(this.get_lst_price());
+        const priceUnit = this.get_lst_price();
         const product = this.get_product();
 
         let taxes = product.taxes_id;
@@ -400,7 +401,15 @@ export class PosOrderline extends Base {
             taxes = getTaxesAfterFiscalPosition(taxes, order.fiscal_position_id, this.models);
         }
 
-        const taxesData = getTaxesValues(taxes, priceUnit, 1, product, this.company, this.currency);
+        const taxesData = getTaxesValues(
+            taxes,
+            priceUnit,
+            1,
+            product,
+            this.config._product_default_values,
+            this.company,
+            this.currency
+        );
         if (this.config.iface_tax_included === "total") {
             return taxesData.total_included;
         } else {
@@ -473,6 +482,7 @@ export class PosOrderline extends Base {
             priceUnitAfterDiscount,
             qty,
             product,
+            this.config._product_default_values,
             this.company,
             this.currency
         );
@@ -481,16 +491,17 @@ export class PosOrderline extends Base {
             priceUnit,
             qty,
             product,
+            this.config._product_default_values,
             this.company,
             this.currency
         );
 
         // Tax details.
         const taxDetails = {};
-        for (const taxValues of taxesData.tax_values_list) {
-            taxDetails[taxValues.taxId] = {
-                amount: taxValues.tax_amount_factorized,
-                base: taxValues.display_base,
+        for (const taxData of taxesData.taxes_data) {
+            taxDetails[taxData.id] = {
+                amount: taxData.tax_amount_factorized,
+                base: taxData.display_base,
             };
         }
 
@@ -501,37 +512,27 @@ export class PosOrderline extends Base {
             priceWithoutTaxBeforeDiscount: taxesDataBeforeDiscount.total_excluded,
             tax: taxesData.total_included - taxesData.total_excluded,
             taxDetails: taxDetails,
-            taxValuesList: taxesData.tax_values_list,
+            taxesData: taxesData.taxes_data,
         };
     }
 
-    compute_fixed_price(price) {
-        const product = this.get_product();
-        const taxes = this.tax_ids || product.taxes_id;
-
-        // Fiscal position.
-        const order = this.order_id;
-        if (order && order.fiscal_position_id) {
-            price = getPriceUnitAfterFiscalPosition(
-                taxes,
-                price,
-                order.fiscal_position_id,
-                this.models
-            );
-        }
-        return price;
-    }
-
     display_discount_policy() {
-        return this.order_id.pricelist_id
-            ? this.order_id.pricelist_id.discount_policy
-            : "with_discount";
+        // Sales dropped `discount_policy`, and we only show discount if applied pricelist rule
+        // is a percentage discount. However we don't have that information in pos
+        // so this is heuristic used to imitate the same behavior.
+        if (
+            this.order_id.pricelist_id &&
+            this.order_id.pricelist_id.item_ids
+                .map((rule) => rule.compute_price)
+                .includes("percentage")
+        ) {
+            return "without_discount";
+        }
+        return "with_discount";
     }
 
     get_lst_price() {
-        return this.compute_fixed_price(
-            this.product_id.get_price(this.config.pricelist_id, 1, this.price_extra)
-        );
+        return this.product_id.get_price(this.config.pricelist_id, 1, this.price_extra);
     }
 
     is_last_line() {
@@ -592,13 +593,20 @@ export class PosOrderline extends Base {
         );
     }
 
+    getPriceString() {
+        return this.get_discount_str() === "100"
+            ? // free if the discount is 100
+              _t("Free")
+            : this.combo_line_ids.length > 0
+            ? // empty string if it is a combo parent line
+              ""
+            : formatCurrency(this.get_display_price(), this.currency);
+    }
+
     getDisplayData() {
         return {
             productName: this.get_full_product_name(),
-            price:
-                this.get_discount_str() === "100"
-                    ? "free"
-                    : formatCurrency(this.get_display_price(), this.currency),
+            price: this.getPriceString(),
             qty: this.get_quantity_str(),
             unit: this.product_id.uom_id ? this.product_id.uom_id.name : "",
             unitPrice: formatCurrency(this.get_unit_display_price(), this.currency),
@@ -606,16 +614,26 @@ export class PosOrderline extends Base {
                 ? formatCurrency(this.get_old_unit_display_price(), this.currency)
                 : "",
             discount: this.get_discount_str(),
-            customerNote: this.get_customer_note(),
+            customerNote: this.get_customer_note() || "",
             internalNote: this.getNote(),
-            combo_parent_id: this.combo_parent_id
-                ? this.combo_parent_id.get_full_product_name()
-                : "",
-            pack_lot_lines: this.get_lot_lines(),
+            comboParent: this.combo_parent_id?.get_full_product_name?.() || "",
+            packLotLines: this.pack_lot_ids.map(
+                (l) =>
+                    `${l.pos_order_line_id.product_id.tracking == "lot" ? "Lot Number" : "SN"} ${
+                        l.lot_name
+                    }`
+            ),
             price_without_discount: formatCurrency(
                 this.getUnitDisplayPriceBeforeDiscount(),
                 this.currency
             ),
+            taxGroupLabels: [
+                ...new Set(
+                    this.product_id.taxes_id
+                        ?.map((tax) => tax._pos_receipt_label)
+                        .filter((label) => label)
+                ),
+            ].join(" "),
         };
     }
 
@@ -629,9 +647,6 @@ export class PosOrderline extends Base {
             return item.lot_name;
         });
     }
-    get_lot_lines() {
-        return this.pack_lot_ids && this.pack_lot_ids;
-    }
     // FIXME what is the use of this ?
     updateSavedQuantity() {
         this.saved_quantity = this.qty;
@@ -643,7 +658,7 @@ export class PosOrderline extends Base {
         this.price_extra = parseFloat(price_extra) || 0.0;
     }
     getNote() {
-        return this.note;
+        return this.note || "";
     }
     setNote(note) {
         this.note = note;

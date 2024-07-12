@@ -56,20 +56,12 @@ export class Test extends Job {
     static FAILED = 2;
     static ABORTED = 3;
 
+    code = "";
     /** @type {import("./expect").TestResult[]} */
     results = reactive([]);
     /** @type {() => MaybePromise<void> | null} */
-    runFn = null;
+    run = null;
     status = Test.SKIPPED;
-
-    #formattedCode = "";
-
-    get code() {
-        if (!this.#formattedCode) {
-            this.#formattedCode = formatFunctionSource(this.runFn);
-        }
-        return this.#formattedCode;
-    }
 
     /** @returns {typeof Test["prototype"]["results"][number]} */
     get lastResults() {
@@ -89,17 +81,12 @@ export class Test extends Job {
     }
 
     /**
-     * @param {...unknown} args
-     */
-    async run(...args) {
-        return this.runFn(...args);
-    }
-
-    /**
      * @param {() => MaybePromise<void>} fn
      */
     setRunFn(fn) {
-        this.runFn = fn;
-        this.#formattedCode = "";
+        this.run = fn ? async () => fn() : null;
+        if (fn) {
+            this.code = formatFunctionSource(fn);
+        }
     }
 }

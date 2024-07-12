@@ -1,17 +1,34 @@
-import { MEDIAS_BREAKPOINTS, utils as uiUtils } from "@web/core/ui/ui_service";
-export { SIZES } from "@web/core/ui/ui_service";
-export * from "./mail_test_helpers_contains";
 import { busModels } from "@bus/../tests/bus_test_helpers";
+import { mailGlobal } from "@mail/utils/common/misc";
+import { after, before, getFixture } from "@odoo/hoot";
+import { hover as hootHover, resize } from "@odoo/hoot-dom";
+import { Component, onRendered, onWillDestroy, status } from "@odoo/owl";
 import {
     MockServer,
+    authenticate,
     defineModels,
+    defineParams,
+    getMockEnv,
+    getService,
+    makeMockEnv,
     makeMockServer,
     mountWithCleanup,
+    parseViewProps,
     patchWithCleanup,
+    restoreRegistry,
     serverState,
     webModels,
 } from "@web/../tests/web_test_helpers";
+import { browser } from "@web/core/browser/browser";
+import { registry } from "@web/core/registry";
+import { MEDIAS_BREAKPOINTS, utils as uiUtils } from "@web/core/ui/ui_service";
+import { useServiceProtectMethodHandling } from "@web/core/utils/hooks";
+import { session } from "@web/session";
+import { WebClient } from "@web/webclient/webclient";
+import { DISCUSS_ACTION_ID, authenticateGuest, mailDataHelpers } from "./mock_server/mail_mock_server";
 import { Base } from "./mock_server/mock_models/base";
+import { DEFAULT_MAIL_VIEW_ID } from "./mock_server/mock_models/constants";
+
 import { DiscussChannel } from "./mock_server/mock_models/discuss_channel";
 import { DiscussChannelMember } from "./mock_server/mock_models/discuss_channel_member";
 import { DiscussChannelRtcSession } from "./mock_server/mock_models/discuss_channel_rtc_session";
@@ -23,8 +40,8 @@ import { M2xAvatarUser } from "./mock_server/mock_models/m2x_avatar_user";
 import { MailActivity } from "./mock_server/mock_models/mail_activity";
 import { MailActivitySchedule } from "./mock_server/mock_models/mail_activity_schedule";
 import { MailActivityType } from "./mock_server/mock_models/mail_activity_type";
-import { MailComposeMessage } from "./mock_server/mock_models/mail_composer_message";
 import { MailCannedResponse } from "./mock_server/mock_models/mail_canned_response";
+import { MailComposeMessage } from "./mock_server/mock_models/mail_composer_message";
 import { MailFollowers } from "./mock_server/mock_models/mail_followers";
 import { MailGuest } from "./mock_server/mock_models/mail_guest";
 import { MailLinkPreview } from "./mock_server/mock_models/mail_link_preview";
@@ -41,23 +58,11 @@ import { ResPartner } from "./mock_server/mock_models/res_partner";
 import { ResUsers } from "./mock_server/mock_models/res_users";
 import { ResUsersSettings } from "./mock_server/mock_models/res_users_settings";
 import { ResUsersSettingsVolumes } from "./mock_server/mock_models/res_users_settings_volumes";
-import { WebClient } from "@web/webclient/webclient";
-import { browser } from "@web/core/browser/browser";
-import {
-    getMockEnv,
-    makeMockEnv,
-    restoreRegistryFromBeforeTest,
-} from "@web/../tests/_framework/env_test_helpers";
-import { cancelAllTimers } from "@odoo/hoot-mock";
-import { after, before, getFixture } from "@odoo/hoot";
-import { registry } from "@web/core/registry";
-import { authenticate } from "@web/../tests/_framework/mock_server/mock_server";
-import { session } from "@web/session";
-import { DEFAULT_MAIL_VIEW_ID } from "./mock_server/mock_models/constants";
-import { parseViewProps } from "@web/../tests/_framework/view_test_helpers";
-import { mailGlobal } from "@mail/utils/common/misc";
-import { useServiceProtectMethodHandling } from "@web/core/utils/hooks";
-import { DISCUSS_ACTION_ID } from "./mock_server/mail_mock_server";
+
+import { contains } from "./mail_test_helpers_contains";
+
+export { SIZES } from "@web/core/ui/ui_service";
+export * from "./mail_test_helpers_contains";
 
 before(prepareRegistriesWithCleanup);
 export const registryNamesToCloneWithCleanup = [];
@@ -71,10 +76,13 @@ useServiceProtectMethodHandling.fn = useServiceProtectMethodHandling.mocked; // 
 //-----------------------------------------------------------------------------
 
 export function defineMailModels() {
-    return defineModels({ ...webModels, ...busModels, ...mailModels });
+    defineParams({ suite: "mail" }, "replace");
+    return defineModels(mailModels);
 }
 
 export const mailModels = {
+    ...webModels,
+    ...busModels,
     Base,
     DiscussChannel,
     DiscussChannelMember,
@@ -107,6 +115,15 @@ export const mailModels = {
     ResUsersSettingsVolumes,
 };
 
+/**
+ * Register a callback to be executed before an RPC request is processed.
+ *
+ * @param {Function|string} route
+ * - If a function is provided, it will be executed for every RPC call.
+ * - If a string is provided, the callback will only be executed if the RPC
+ *   route matches the provided string.
+ * @param {Function} callback - The function to execute before the RPC call.
+ */
 export function onRpcBefore(route, callback) {
     if (typeof route === "string") {
         const handler = registry.category("mock_rpc").get(route);
@@ -124,8 +141,8 @@ export function registerArchs(newArchs) {
 }
 
 export async function openDiscuss(activeId, { target } = {}) {
-    const env = target ?? getMockEnv();
-    await env.services.action.doAction({
+    const actionService = target?.services.action ?? getService("action");
+    await actionService.doAction({
         context: { active_id: activeId },
         id: DISCUSS_ACTION_ID,
         tag: "mail.action_discuss",
@@ -158,10 +175,11 @@ export async function openListView(resModel, params) {
     });
 }
 
-export async function openView({ res_model, res_id, views, ...params }) {
-    const env = getMockEnv();
+export async function openView({ context, res_model, res_id, views, domain, ...params }) {
     const [[viewId, type]] = views;
     const action = {
+        context,
+        domain,
         res_model,
         res_id,
         views: [[viewId, type]],
@@ -178,7 +196,7 @@ export async function openView({ res_model, res_id, views, ...params }) {
         viewId: params?.arch || viewId,
         ...params,
     });
-    await env.services.action.doAction(action, { props: options });
+    await getService("action").doAction(action, { props: options });
 }
 /** @type {import("@web/../tests/_framework/mock_server/mock_server").MockServerEnvironment} */
 let pyEnv;
@@ -241,66 +259,61 @@ async function addSwitchTabDropdownItem(rootTarget, tabTarget) {
     dropdownDiv.querySelector(".dropdown-menu").appendChild(li);
 }
 
-let NEXT_ENV_ID = 1;
-
-export async function start({ asTab = false } = {}) {
+/**
+ * @param {{
+ *  asTab?: boolean;
+ *  authenticateAs?: any | { login: string; password: string; };
+ *  env?: Partial<OdooEnv>;
+ * }} [options]
+ */
+export async function start(options) {
     if (!MockServer.current) {
         await startServer();
     }
     let target = getFixture();
-    const pyEnv = MockServer.current.env;
+    const pyEnv = MockServer.env;
+    if (options?.authenticateAs !== undefined) {
+        if (options.authenticateAs === false) {
+            // no authentication => new guest
+            const guestId = pyEnv["mail.guest"].create({});
+            authenticateGuest(pyEnv["mail.guest"].read(guestId)[0]);
+        } else if (options.authenticateAs._name === "mail.guest") {
+            authenticateGuest(options.authenticateAs);
+        } else {
+            authenticate(options.authenticateAs.login, options.authenticateAs.password);
+        }
+    } else if ("res.users" in pyEnv) {
+        if (pyEnv.cookie.get("dgid")) {
+            // already authenticated as guest
+        } else {
+            const adminUser = pyEnv["res.users"].search_read([["id", "=", serverState.userId]])[0];
+            authenticate(adminUser.login, adminUser.password);
+        }
+    }
     if ("res.users" in pyEnv) {
-        const adminUser = pyEnv["res.users"].search_read([["id", "=", serverState.userId]])[0];
-        authenticate(adminUser.login, adminUser.password);
         /** @type {import("mock_models").ResUsers} */
         const ResUsers = pyEnv["res.users"];
+        const store = new mailDataHelpers.Store();
+        ResUsers._init_store_data(store);
         patchWithCleanup(session, {
-            storeData: ResUsers._init_store_data(),
+            storeData: store.get_result(),
         });
     }
     let env;
-    if (asTab) {
-        restoreRegistryFromBeforeTest(registry, { withSubRegistries: true });
+    if (options?.asTab) {
+        restoreRegistry(registry);
         const rootTarget = target;
         target = document.createElement("div");
         target.style.width = "100%";
         rootTarget.appendChild(target);
         addSwitchTabDropdownItem(rootTarget, target);
-        const envId = NEXT_ENV_ID++;
-        mailGlobal.elligibleEnvs.add(envId);
-        env = await makeMockEnv({ envId }, { makeNew: true });
+        env = await makeMockEnv({}, { makeNew: true });
     } else {
-        const envId = NEXT_ENV_ID++;
-        mailGlobal.elligibleEnvs.add(envId);
-        try {
-            env = await makeMockEnv({ envId });
-        } catch {
-            env = Object.assign(getMockEnv(), { envId });
-        }
+        env = getMockEnv() || (await makeMockEnv({}));
     }
-    const wc = await mountWithCleanup(WebClient, { target, env });
-    // Let fixture behave like web client, so it has expected display flex for scrollable
-    target.classList.add("o_web_client");
-    target.style.display = "flex";
-    target.style.position = "fixed";
-    target.style.overflow = "auto";
-    target.style.top = "30px"; // just a bit so HOOT toolbar can be interacted while tests are running
-    target.style.height = "calc(100% - 30px)";
-    target.style.bottom = "0";
-    target.style.left = "0";
-    target.style.transform = "unset";
-    after(() => {
-        target.classList.remove("o_web_client");
-        target.style.display = "";
-        target.style.position = "";
-        target.style.overflow = "";
-        target.style.top = "";
-        target.style.left = "";
-        cancelAllTimers(); // prevent any RPCs at end of test
-        mailGlobal.elligibleEnvs.clear();
-    });
-    odoo.__WOWL_DEBUG__ = { root: wc };
-    return Object.assign(getMockEnv(), { target });
+    env.testEnv = true;
+    await mountWithCleanup(WebClient, { env, target });
+    return Object.assign(env, { ...options?.env, target });
 }
 
 export async function startServer() {
@@ -359,10 +372,7 @@ export function patchUiSize({ height, size, width }) {
     size = size === undefined ? getSizeFromWidth(width) : size;
     width = width || getWidthFromSize(size);
 
-    patchWithCleanup(browser, {
-        innerWidth: width,
-        innerHeight: height || browser.innerHeight,
-    });
+    resize({ width, height });
     patchWithCleanup(uiUtils, {
         getSize() {
             return size;
@@ -510,4 +520,77 @@ export function prepareRegistriesWithCleanup() {
     registryNamesToCloneWithCleanup.forEach((registryName) =>
         cloneRegistryWithCleanup(registry.category(registryName))
     );
+}
+
+const observeRenderResults = new Map();
+let nextObserveRenderResults = 0;
+/**
+ * Patch component `onWillRender` to track amount of renders.
+ * This only prepares with the patching. To effectively observe the amount of renders,
+ * should call @see observeRenders
+ * Having both function allow to track renders as side-effect on specific actions, rather
+ * than aggregate all renders including setup: as this value requires some thinking on
+ * which render comes from what, usually the less with brief explanations the better.
+ */
+export function prepareObserveRenders() {
+    patchWithCleanup(Component.prototype, {
+        setup(...args) {
+            onRendered(() => {
+                for (const result of observeRenderResults.values()) {
+                    if (!result.has(this.constructor)) {
+                        result.set(this.constructor, 0);
+                    }
+                    result.set(this.constructor, result.get(this.constructor) + 1);
+                }
+            });
+            onWillDestroy(() => {
+                for (const result of observeRenderResults.values()) {
+                    // owl could invoke onrendered and cancel immediately to re-render, so should compensate
+                    if (result.has(this.constructor) && status(this) === "cancelled") {
+                        result.set(this.constructor, result.get(this.constructor) - 1);
+                    }
+                }
+            });
+            return super.setup(...args);
+        },
+    });
+    after(() => observeRenderResults.clear());
+}
+
+/**
+ * This function tracks renders of components.
+ * Should be prepared before mounting affected components with @see prepareObserveRenders
+ * This function returns a function to stop observing, which itself returns
+ * a Map of amount of renders per component. Key of map is Component constructor.
+ *
+ * @returns {() => Map<Component.constructor, number>}
+ */
+export function observeRenders() {
+    const id = nextObserveRenderResults++;
+    observeRenderResults.set(id, new Map());
+    return () => {
+        const result = observeRenderResults.get(id);
+        observeRenderResults.delete(id);
+        return result;
+    };
+}
+
+/**
+ * Determine if the child element is in the view port of the parent.
+ *
+ * @param {HTMLElement} parent
+ * @param {HTMLElement} child
+ */
+export function isInViewportOf(parent, child) {
+    const childRect = child.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+
+    return childRect.top <= parentRect.top
+        ? parentRect.top - childRect.top <= childRect.height
+        : childRect.bottom - parentRect.bottom <= childRect.height;
+}
+
+export async function hover(selector) {
+    await contains(selector);
+    hootHover(selector);
 }

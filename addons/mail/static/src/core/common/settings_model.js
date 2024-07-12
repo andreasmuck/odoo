@@ -1,16 +1,26 @@
+import { _t } from "@web/core/l10n/translation";
+import { sprintf } from "@web/core/utils/strings";
 import { browser } from "@web/core/browser/browser";
 import { Record } from "./record";
+import { debounce } from "@web/core/utils/timing";
 
 export class Settings extends Record {
     id;
 
     setup() {
         super.setup();
+        this.saveVoiceThresholdDebounce = debounce(() => {
+            browser.localStorage.setItem(
+                "mail_user_setting_voice_threshold",
+                this.voiceActivationThreshold.toString()
+            );
+        }, 2000);
         this.hasCanvasFilterSupport =
             typeof document.createElement("canvas").getContext("2d").filter !== "undefined";
         this._loadLocalSettings();
     }
     volumes = Record.many("Volume");
+    showOnlyVideo = false;
     /**
      * DeviceId of the audio input selected by the user
      */
@@ -24,13 +34,23 @@ export class Settings extends Record {
     logRtc = false;
     push_to_talk_key;
     use_push_to_talk = false;
-    voice_active_duration = 0;
+    voice_active_duration = 200;
     useBlur = false;
     volumeSettingsTimeouts = new Map();
     /**
      * Normalized [0, 1] volume at which the voice activation system must consider the user as "talking".
      */
     voiceActivationThreshold = 0.05;
+    /**
+     * General notification settings for channels
+     * @type {"mentions"|"all"|"no_notif"}
+     */
+    channel_notifications = Record.attr("mentions", {
+        compute() {
+            return this.channel_notifications === false ? "mentions" : this.channel_notifications;
+        },
+    });
+    mute_until_dt = Record.attr(false, { type: "datetime" });
     /**
      * @returns {Object} MediaTrackConstraints
      */
@@ -45,19 +65,91 @@ export class Settings extends Record {
         return constraints;
     }
 
-    getVolume(rtcSession) {
-        return (
-            rtcSession.volume ||
-            this.volumes.find(
-                (volume) =>
-                    (volume.type === "partner" && volume.persona.id === rtcSession.partnerId) ||
-                    (volume.type === "guest" && volume.persona.id === rtcSession.guestId)
-            )?.volume ||
-            0.5
+    get NOTIFICATIONS() {
+        return [
+            {
+                id: "all",
+                name: _t("All Messages"),
+            },
+            {
+                id: "mentions",
+                name: _t("Mentions Only"),
+            },
+            {
+                id: "no_notif",
+                name: _t("Nothing"),
+            },
+        ];
+    }
+
+    get MUTES() {
+        return [
+            {
+                id: "15_mins",
+                value: 15,
+                name: _t("For 15 minutes"),
+            },
+            {
+                id: "1_hour",
+                value: 60,
+                name: _t("For 1 hour"),
+            },
+            {
+                id: "3_hours",
+                value: 180,
+                name: _t("For 3 hours"),
+            },
+            {
+                id: "8_hours",
+                value: 480,
+                name: _t("For 8 hours"),
+            },
+            {
+                id: "24_hours",
+                value: 1440,
+                name: _t("For 24 hours"),
+            },
+            {
+                id: "forever",
+                value: -1,
+                name: _t("Until I turn it back on"),
+            },
+        ];
+    }
+
+    getMuteUntilText(dt) {
+        if (dt) {
+            return dt.year <= luxon.DateTime.now().year + 2
+                ? sprintf(_t(`Until %s`), dt.toLocaleString(luxon.DateTime.DATETIME_MED))
+                : _t("Until I turn it back on");
+        }
+        return undefined;
+    }
+
+    /**
+     * @param {string} notif
+     */
+    setChannelNotifications(notif) {
+        this.store.env.services.orm.call(
+            "res.users.settings",
+            "set_res_users_settings",
+            [[this.id]],
+            {
+                new_settings: {
+                    channel_notifications: notif === "mentions" ? false : notif,
+                },
+            }
         );
     }
 
-    // "setters"
+    /**
+     * @param {integer|false} minutes
+     */
+    setMuteDuration(minutes) {
+        this.store.env.services.orm.call("res.users.settings", "mute", [[this.id]], {
+            minutes: minutes,
+        });
+    }
 
     /**
      * @param {String} audioInputDeviceId
@@ -94,7 +186,7 @@ export class Settings extends Record {
      * @param {number} param0.volume
      */
     async saveVolumeSetting({ partnerId, guestId, volume }) {
-        if (this._store.self.type !== "partner") {
+        if (this.store.self.type !== "partner") {
             return;
         }
         const key = `${partnerId}_${guestId}`;
@@ -114,10 +206,7 @@ export class Settings extends Record {
      */
     setThresholdValue(voiceActivationThreshold) {
         this.voiceActivationThreshold = voiceActivationThreshold;
-        browser.localStorage.setItem(
-            "mail_user_setting_voice_threshold",
-            voiceActivationThreshold.toString()
-        );
+        this.saveVoiceThresholdDebounce();
     }
 
     // methods
@@ -172,8 +261,8 @@ export class Settings extends Record {
             key: key || false,
         };
     }
-    togglePushToTalk() {
-        this.use_push_to_talk = !this.use_push_to_talk;
+    setPushToTalk(value) {
+        this.use_push_to_talk = value;
         this._saveSettings();
     }
     /**
@@ -206,7 +295,7 @@ export class Settings extends Record {
      */
     async _onSaveGlobalSettingsTimeout() {
         this.globalSettingsTimeout = undefined;
-        await this._store.env.services.orm.call(
+        await this.store.env.services.orm.call(
             "res.users.settings",
             "set_res_users_settings",
             [[this.id]],
@@ -227,20 +316,18 @@ export class Settings extends Record {
      */
     async _onSaveVolumeSettingTimeout({ key, partnerId, guestId, volume }) {
         this.volumeSettingsTimeouts.delete(key);
-        await this._store.env.services.orm.call(
+        await this.store.env.services.orm.call(
             "res.users.settings",
             "set_volume_setting",
             [[this.id], partnerId, volume],
-            {
-                guest_id: guestId,
-            }
+            { guest_id: guestId }
         );
     }
     /**
      * @private
      */
     async _saveSettings() {
-        if (this._store.self.type !== "partner") {
+        if (this.store.self.type !== "partner") {
             return;
         }
         browser.clearTimeout(this.globalSettingsTimeout);

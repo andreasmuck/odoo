@@ -15,6 +15,11 @@ from odoo.tools.float_utils import float_compare
 @tagged('-at_install', 'post_install')
 class TestProjectPurchaseProfitability(TestProjectProfitabilityCommon, TestPurchaseToInvoiceCommon, AccountTestInvoicingCommon):
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.company_data_2 = cls.setup_other_company()
+
     def test_bills_without_purchase_order_are_accounted_in_profitability_project_purchase(self):
         """
         A bill that has an AAL on one of its line should be taken into account
@@ -197,7 +202,7 @@ class TestProjectPurchaseProfitability(TestProjectProfitabilityCommon, TestPurch
         )
         # Create a vendor bill linked to the PO
         purchase_order.action_create_invoice()
-        self.assertEqual(purchase_order.invoice_ids.state, 'draft')
+        self.assertEqual(purchase_order.account_move_ids.state, 'draft')
         # now the bill has been created and set to draft so the section "purchase_order" should appear, its costs should be accounted in the "to bill" part
         # of the purchase_order section, but should touch in the other_purchase_costs
         self.assertDictEqual(
@@ -227,10 +232,10 @@ class TestProjectPurchaseProfitability(TestProjectProfitabilityCommon, TestPurch
             },
         )
         # Post the vendor bill linked to the PO
-        purchase_bill = purchase_order.invoice_ids
+        purchase_bill = purchase_order.account_move_ids
         purchase_bill.invoice_date = datetime.today()
         purchase_bill.action_post()
-        self.assertEqual(purchase_order.invoice_ids.state, 'posted')
+        self.assertEqual(purchase_order.account_move_ids.state, 'posted')
         # now the bill has been posted so the costs of the section "purchase_order" should be accounted in the "billed" part
         # and the total should be updated accordingly
         self.assertDictEqual(
@@ -533,6 +538,160 @@ class TestProjectPurchaseProfitability(TestProjectProfitabilityCommon, TestPurch
 
     def _create_invoice_for_po(self, purchase_order):
         purchase_order.action_create_invoice()
-        purchase_bill = purchase_order.invoice_ids  # get the bill from the purchase
+        purchase_bill = purchase_order.account_move_ids  # get the bill from the purchase
         purchase_bill.invoice_date = datetime.today()
         purchase_bill.action_post()
+
+    def test_project_purchase_order_smart_button(self):
+        project = self.env['project.project'].create({
+            'name': 'Test Project'
+        })
+        project._create_analytic_account()
+        account = project.analytic_account_id
+
+        purchase_order = self.env['purchase.order'].create({
+            "name": "A purchase order",
+            "partner_id": self.partner_a.id,
+            "company_id": self.env.company.id,
+            "order_line": [Command.create({
+                "analytic_distribution": {account.id: 100},
+                "product_id": self.product_order.id,
+                "product_qty": 1,
+                "price_unit": self.product_order.standard_price,
+                "currency_id": self.foreign_currency.id,
+            })],
+        })
+
+        action = project.action_open_project_purchase_orders()
+        self.assertTrue(action)
+        self.assertEqual(action['res_id'], purchase_order.id)
+
+    def test_analytic_distribution_with_included_tax(self):
+        """When calculating the profitability of a project, included taxes should not be calculated"""
+        included_tax = self.env['account.tax'].create({
+            'name': 'included tax',
+            'amount': '15.0',
+            'amount_type': 'percent',
+            'type_tax_use': 'purchase',
+            'price_include': True
+        })
+
+        # create a purchase.order with the project account in analytic_distribution
+        purchase_order = self.env['purchase.order'].create({
+            'name': "A purchase order",
+            'partner_id': self.partner_a.id,
+            'order_line': [Command.create({
+                'analytic_distribution': {self.analytic_account.id: 100},
+                'product_id': self.product_order.id,
+                'product_qty': 2,  # plural value to check if the price is multiplied more than once
+                'tax_ids': [included_tax.id],  # set the included tax
+                'price_unit': self.product_order.standard_price,
+                'currency_id': self.env.company.currency_id.id,
+            })],
+        })
+        purchase_order.button_confirm()
+        purchase_order.action_create_invoice()
+        # the profitability should not take taxes into account
+        self.assertDictEqual(
+            self.project._get_profitability_items(False)['costs'],
+            {
+                'data': [{
+                    'id': 'purchase_order',
+                    'sequence': self.project._get_profitability_sequence_per_invoice_type()['purchase_order'],
+                    'to_bill': -(purchase_order.amount_untaxed),
+                    'billed': 0.0,
+                }],
+                'total': {
+                    'to_bill': -(purchase_order.amount_untaxed),
+                    'billed': 0.0,
+                },
+            },
+        )
+
+        purchase_bill = purchase_order.account_move_ids  # get the bill from the purchase
+        purchase_bill.invoice_date = datetime.today()
+        purchase_bill.action_post()
+        # same here, taxes should not be calculated in the profitability
+        self.assertDictEqual(
+            self.project._get_profitability_items(False)['costs'],
+            {
+                'data': [{
+                    'id': 'purchase_order',
+                    'sequence': self.project._get_profitability_sequence_per_invoice_type()['purchase_order'],
+                    'to_bill': 0.0,
+                    'billed': -(purchase_bill.amount_untaxed),
+                }],
+                'total': {
+                    'to_bill': 0.0,
+                    'billed': -(purchase_bill.amount_untaxed),
+                },
+            },
+        )
+
+    def test_analytic_distribution_with_mismatched_uom(self):
+        """When changing the unit of measure, the profitability should still match the price_subtotal of the order line"""
+        # create a purchase.order with the project account in analytic_distribution
+        purchase_order = self.env['purchase.order'].create({
+            'name': "A purchase order",
+            'partner_id': self.partner_a.id,
+            'order_line': [Command.create({
+                'analytic_distribution': {self.analytic_account.id: 100},
+                'product_id': self.product_order.id,
+                'product_qty': 1,
+                'price_unit': self.product_order.standard_price,
+                'currency_id': self.env.company.currency_id.id,
+            })],
+        })
+        purchase_order.button_confirm()
+        # changing the uom to a higher number
+        purchase_order.order_line.product_uom = self.env.ref("uom.product_uom_dozen")
+        purchase_order.action_create_invoice()
+        self.assertDictEqual(
+            self.project._get_profitability_items(False)['costs'],
+            {
+                'data': [{
+                    'id': 'purchase_order',
+                    'sequence': self.project._get_profitability_sequence_per_invoice_type()['purchase_order'],
+                    'to_bill': -(purchase_order.amount_untaxed),
+                    'billed': 0.0,
+                }],
+                'total': {
+                    'to_bill': -(purchase_order.amount_untaxed),
+                    'billed': 0.0,
+                },
+            },
+        )
+
+    def test_cross_analytics_contribution(self):
+        cross_plan = self.env['account.analytic.plan'].create({'name': 'Cross Plan'})
+        cross_account = self.env['account.analytic.account'].create({
+            'name': "Cross Analytic Account",
+            'plan_id': cross_plan.id,
+            "company_id": self.env.company.id,
+        })
+        cross_distribution = 42
+
+        cross_order = self.env['purchase.order'].create({
+            'name': 'Cross Purchase Order',
+            "partner_id": self.partner_a.id,
+            "company_id": self.env.company.id,
+            'order_line': [
+                Command.create({
+                    'analytic_distribution': {
+                        f"{self.project.analytic_account_id.id},{cross_account.id}": cross_distribution,
+                    },
+                    "product_id": self.product_order.id,
+                    "product_qty": 1,
+                    "price_unit": self.product_order.standard_price,
+                    "currency_id": self.env.company.currency_id.id,
+                }),
+            ],
+        })
+
+        cross_order.button_confirm()
+        cross_order.action_create_invoice()
+        items = self.project._get_profitability_items(with_action=False)['costs']
+        self.assertEqual(
+            items['data'][0]['to_bill'],
+            -(self.product_order.standard_price * cross_distribution / 100)
+        )

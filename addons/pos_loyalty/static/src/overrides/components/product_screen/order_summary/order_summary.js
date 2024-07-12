@@ -1,5 +1,3 @@
-/** @odoo-module **/
-
 import { _t } from "@web/core/l10n/translation";
 import { OrderSummary } from "@point_of_sale/app/screens/product_screen/order_summary/order_summary";
 import { patch } from "@web/core/utils/patch";
@@ -14,7 +12,7 @@ patch(OrderSummary.prototype, {
     async updateSelectedOrderline({ buffer, key }) {
         const selectedLine = this.currentOrder.get_selected_orderline();
         if (key === "-") {
-            if (selectedLine && selectedLine.e_wallet_program_id) {
+            if (selectedLine && selectedLine._e_wallet_program_id) {
                 // Do not allow negative quantity or price in a gift card or ewallet orderline.
                 // Refunding gift card or ewallet is not supported.
                 this.notification.add(
@@ -71,7 +69,7 @@ patch(OrderSummary.prototype, {
             if (
                 coupon &&
                 coupon.id > 0 &&
-                this.currentOrder.code_activated_coupon_ids.find((c) => c.code === coupon.code)
+                this.currentOrder._code_activated_coupon_ids.find((c) => c.code === coupon.code)
             ) {
                 coupon.delete();
             }
@@ -84,14 +82,14 @@ patch(OrderSummary.prototype, {
             super._setValue(val);
         }
         if (!selectedLine.is_reward_line || (selectedLine.is_reward_line && val === "remove")) {
-            this.currentOrder._updateRewards();
+            this.pos.updateRewards();
         }
     },
 
     async _showDecreaseQuantityPopup() {
         const result = await super._showDecreaseQuantityPopup();
         if (result) {
-            this.currentOrder._updateRewards();
+            this.pos.updateRewards();
         }
     },
 });

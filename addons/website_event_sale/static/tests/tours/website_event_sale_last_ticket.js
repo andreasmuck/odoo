@@ -9,25 +9,33 @@ registry.category("web_tour.tours").add('event_buy_last_ticket', {
     steps: () => [{
         content: "Open the Last ticket test event page",
         trigger: '.o_wevent_events_list a:contains("Last ticket test")',
+        run: "click",
     },
     {
         content: "Open Registration Page",
         trigger: '.btn-primary:contains("Register")',
+        run: "click",
     },
     {
         content: "Open the register modal",
         trigger: 'button:contains("Register")',
+        run: "click",
+    },
+    {
+        trigger: '#wrap:not(:has(a[href*="/event"]:contains("Last ticket test")))',
     },
     {
         content: "Select 2 units of `VIP` ticket type",
-        extra_trigger: '#wrap:not(:has(a[href*="/event"]:contains("Last ticket test")))',
         trigger: 'select:eq(0)',
-        run: 'text 2',
+        run: "select 2",
+    },
+    {
+        trigger: "select:eq(0):has(option:contains(2):selected)",
     },
     {
         content: "Click on `Order Now` button",
-        extra_trigger: 'select:eq(0):has(option:contains(2):selected)',
         trigger: '.a-submit:contains("Register")',
+        run: "click",
     },
     {
         content: "Fill attendees details",
@@ -42,26 +50,20 @@ registry.category("web_tour.tours").add('event_buy_last_ticket', {
         },
     },
     {
+        trigger: "input[name*='1-name'], input[name*='2-name']",
+    },
+    {
         content: "Validate attendees details",
-        extra_trigger: "input[name*='1-name'], input[name*='2-name']",
         trigger: "button[type=submit]:contains(Go to Payment)",
+        run: "click",
     },
-    {
-        content: "Fill address",
-        trigger: 'form.checkout_autoformat',
-        run: function () {
-            document.querySelector("input[name='name']").value = "test1";
-            document.querySelector("input[name='email']").value = "test@example.com";
-            document.querySelector("input[name='phone']").value = "111 111";
-            document.querySelector("input[name='street']").value = "street test 1";
-            document.querySelector("input[name='city']").value = "testCity";
-            document.querySelector("input[name='zip']").value = "123";
-            document.querySelectorAll("#country_id option")[1].selected = true;
-        },
-    },
-    {
-        content: "Validate address",
-        trigger: 'a.a-submit.btn-primary',
-    },
+    ...wsTourUtils.fillAdressForm({
+        name: "test1",
+        phone: "111 111",
+        email: "test@example.com",
+        street: "street test 1",
+        city: "testCity",
+        zip: "123",
+    }),
     ...wsTourUtils.payWithTransfer(true),
 ]});

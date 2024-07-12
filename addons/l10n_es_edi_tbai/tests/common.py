@@ -12,8 +12,10 @@ from pytz import timezone
 class TestEsEdiTbaiCommon(AccountEdiTestCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref='es_full', edi_format_ref='l10n_es_edi_tbai.edi_es_tbai'):
-        super().setUpClass(chart_template_ref=chart_template_ref, edi_format_ref=edi_format_ref)
+    @AccountEdiTestCommon.setup_edi_format('l10n_es_edi_tbai.edi_es_tbai')
+    @AccountEdiTestCommon.setup_country('es')
+    def setUpClass(cls):
+        super().setUpClass()
 
         cls.frozen_today = datetime(year=2022, month=1, day=1, hour=0, minute=0, second=0, tzinfo=timezone('utc'))
 
@@ -24,7 +26,6 @@ class TestEsEdiTbaiCommon(AccountEdiTestCommon):
 
         cls.company_data['company'].write({
             'name': 'EUS Company',
-            'country_id': cls.env.ref('base.es').id,
             'state_id': cls.env.ref('base.state_es_ss').id,
             'vat': 'ES09760433S',
             'l10n_es_edi_test_env': True,
@@ -254,10 +255,10 @@ class TestEsEdiTbaiCommon(AccountEdiTestCommon):
                     <DetalleIVA>
                         <CompraBienesCorrientesGastosBienesInversion>C</CompraBienesCorrientesGastosBienesInversion>
                         <InversionSujetoPasivo>N</InversionSujetoPasivo>
-                        <BaseImponible>4000.0</BaseImponible>
+                        <BaseImponible>4000.00</BaseImponible>
                         <TipoImpositivo>21.0</TipoImpositivo>
-                        <CuotaIVASoportada>840.0</CuotaIVASoportada>
-                        <CuotaIVADeducible>840.0</CuotaIVADeducible>
+                        <CuotaIVASoportada>840.00</CuotaIVASoportada>
+                        <CuotaIVADeducible>840.00</CuotaIVADeducible>
                     </DetalleIVA>
                 </IVA>
         </FacturaRecibida>
@@ -303,17 +304,17 @@ class TestEsEdiTbaiCommon(AccountEdiTestCommon):
                     <DetalleIVA>
                         <CompraBienesCorrientesGastosBienesInversion>C</CompraBienesCorrientesGastosBienesInversion>
                         <InversionSujetoPasivo>N</InversionSujetoPasivo>
-                        <BaseImponible>4000.0</BaseImponible>
+                        <BaseImponible>4000.00</BaseImponible>
                         <TipoImpositivo>21.0</TipoImpositivo>
-                        <CuotaIVASoportada>840.0</CuotaIVASoportada>
-                        <CuotaIVADeducible>840.0</CuotaIVADeducible>
+                        <CuotaIVASoportada>840.00</CuotaIVASoportada>
+                        <CuotaIVADeducible>840.00</CuotaIVADeducible>
                     </DetalleIVA><DetalleIVA>
                         <CompraBienesCorrientesGastosBienesInversion>G</CompraBienesCorrientesGastosBienesInversion>
                         <InversionSujetoPasivo>N</InversionSujetoPasivo>
-                        <BaseImponible>8000.0</BaseImponible>
+                        <BaseImponible>8000.00</BaseImponible>
                         <TipoImpositivo>21.0</TipoImpositivo>
-                        <CuotaIVASoportada>1680.0</CuotaIVASoportada>
-                        <CuotaIVADeducible>1680.0</CuotaIVADeducible>
+                        <CuotaIVASoportada>1680.00</CuotaIVASoportada>
+                        <CuotaIVADeducible>1680.00</CuotaIVADeducible>
                     </DetalleIVA>
                 </IVA>
             </FacturaRecibida>

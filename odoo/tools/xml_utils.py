@@ -1,17 +1,47 @@
 # -*- coding: utf-8 -*-
 """Utilities for generating, parsing and checking XML/XSD files on top of the lxml.etree module."""
 
+import base64
+import contextlib
 import logging
-import requests
+import re
 import zipfile
 from io import BytesIO
+
+import requests
 from lxml import etree
-import contextlib
 
 from odoo.exceptions import UserError
+from odoo.tools.misc import file_open
 
+__all__ = [
+    "cleanup_xml_node",
+    "load_xsd_files_from_url",
+    "validate_xml_from_attachment",
+]
 
 _logger = logging.getLogger(__name__)
+
+
+def remove_control_characters(byte_node):
+    """
+    The characters to be escaped are the control characters #x0 to #x1F and #x7F (most of which cannot appear in XML)
+    [...] XML processors must accept any character in the range specified for Char:
+    `Char	   :: =   	#x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]`
+    source:https://www.w3.org/TR/xml/
+    """
+    return re.sub(
+        '[^'
+        '\u0009'
+        '\u000A'
+        '\u000D'
+        '\u0020-\uD7FF'
+        '\uE000-\uFFFD'
+        '\U00010000-\U0010FFFF'
+        ']'.encode(),
+        b'',
+        byte_node,
+    )
 
 
 class odoo_resolver(etree.Resolver):
@@ -31,6 +61,29 @@ class odoo_resolver(etree.Resolver):
         attachment = self.env['ir.attachment'].search([('name', '=', attachment_name)])
         if attachment:
             return self.resolve_string(attachment.raw, context)
+
+
+def _validate_xml(env, url, path, xmls):
+    # Get the XSD data
+    xsd_attachment = env['ir.attachment']
+    if path:
+        with file_open(path, filter_ext=('.xsd',)) as file:
+            content = file.read()
+        attachment_vals = {
+            'name': path.split('/')[-1],
+            'datas': base64.b64encode(content.encode()),
+        }
+        xsd_attachment = env['ir.attachment'].create(attachment_vals)
+    elif url:
+        xsd_attachment = load_xsd_files_from_url(env, url)
+
+    # Validate the XML against the XSD
+    if not isinstance(xmls, list):
+        xmls = [xmls]
+
+    for xml in xmls:
+        validate_xml_from_attachment(env, xml, xsd_attachment.name)
+    xsd_attachment.unlink()
 
 
 def _check_with_xsd(tree_or_str, stream, env=None, prefix=None):
@@ -118,7 +171,7 @@ def cleanup_xml_node(xml_node_or_string, remove_blank_text=True, remove_blank_no
     if isinstance(xml_node, str):
         xml_node = xml_node.encode()  # misnomer: fromstring actually reads bytes
     if isinstance(xml_node, bytes):
-        xml_node = etree.fromstring(xml_node)
+        xml_node = etree.fromstring(remove_control_characters(xml_node))
 
     # Process leaf nodes iteratively
     # Depth-first, so any inner node may become a leaf too (if children are removed)
@@ -262,7 +315,6 @@ def load_xsd_files_from_url(env, url, file_name=None, force_reload=False,
 def validate_xml_from_attachment(env, xml_content, xsd_name, reload_files_function=None, prefix=None):
     """Try and validate the XML content with an XSD attachment.
     If the XSD attachment cannot be found in database, skip validation without raising.
-    If the skip_xsd context key is truthy, skip validation.
 
     :param odoo.api.Environment env: environment of calling module
     :param xml_content: the XML content to validate
@@ -270,8 +322,6 @@ def validate_xml_from_attachment(env, xml_content, xsd_name, reload_files_functi
     :param reload_files_function: Deprecated.
     :return: the result of the function :func:`odoo.tools.xml_utils._check_with_xsd`
     """
-    if env.context.get('skip_xsd', False):
-        return
 
     prefixed_xsd_name = f"{prefix}.{xsd_name}" if prefix else xsd_name
     try:
@@ -280,6 +330,10 @@ def validate_xml_from_attachment(env, xml_content, xsd_name, reload_files_functi
         _logger.info("XSD validation successful!")
     except FileNotFoundError:
         _logger.info("XSD file not found, skipping validation")
+    except etree.XMLSchemaParseError as e:
+        _logger.error("XSD file not valid: ")
+        for arg in e.args:
+            _logger.error(arg)
 
 
 def find_xml_value(xpath, xml_element, namespaces=None):

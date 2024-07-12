@@ -5,11 +5,12 @@ import base64
 import datetime
 
 from freezegun import freeze_time
+from unittest.mock import patch
 
 from odoo.addons.mail.tests.common import MailCommon
 from odoo.addons.test_mail.tests.common import TestRecipients
 from odoo.tests import tagged, users
-from odoo.tools import mute_logger
+from odoo.tools import mute_logger, safe_eval
 
 
 class TestMailTemplateCommon(MailCommon, TestRecipients):
@@ -83,14 +84,28 @@ class TestMailTemplate(TestMailTemplateCommon):
     @users('employee')
     def test_template_schedule_email(self):
         """ Test scheduling email sending from template. """
-        now = datetime.datetime.now()
+        now = datetime.datetime(2024, 4, 29, 10, 49, 59)
         test_template = self.test_template.with_env(self.env)
 
-        # schedule the mail in 3 days
-        test_template.scheduled_date = '{{datetime.datetime.now() + datetime.timedelta(days=3)}}'
-        with freeze_time(now):
-            mail_id = test_template.send_mail(self.test_record.id)
-        mail = self.env['mail.mail'].sudo().browse(mail_id)
+        # schedule the mail in 3 days -> patch safe_eval.datetime access
+        safe_eval_orig = safe_eval.safe_eval
+
+        def _safe_eval_hacked(*args, **kwargs):
+            """ safe_eval wraps 'datetime' and freeze_time does not mock it;
+            simplest solution found so far is to directly hack safe_eval just
+            for this test """
+            if args[0] == "datetime.datetime.now() + datetime.timedelta(days=3)":
+                return now + datetime.timedelta(days=3)
+            return safe_eval_orig(*args, **kwargs)
+
+        # patch datetime and safe_eval.datetime, as otherwise using standard 'now'
+        # might lead to errors due to test running right before minute switch it
+        # sometimes ends at minute+1 and assert fails - see runbot-54946
+        with patch.object(safe_eval, "safe_eval", autospec=True, side_effect=_safe_eval_hacked):
+            test_template.scheduled_date = '{{datetime.datetime.now() + datetime.timedelta(days=3)}}'
+            with freeze_time(now):
+                mail_id = test_template.send_mail(self.test_record.id)
+            mail = self.env['mail.mail'].sudo().browse(mail_id)
         self.assertEqual(
             mail.scheduled_date.replace(second=0, microsecond=0),
             (now + datetime.timedelta(days=3)).replace(second=0, microsecond=0),
@@ -167,12 +182,17 @@ class TestMailTemplateLanguages(TestMailTemplateCommon):
 
         cls.env.flush_all()
 
+    def setUp(self):
+        super().setUp()
+        # warm up group access cache: 5 queries + 1 query per user
+        self.user_employee.has_group('base.group_user')
+
     @mute_logger('odoo.addons.mail.models.mail_mail')
     def test_template_send_email(self):
         """ Test 'send_email' on template on a given record, used notably as
         contextual action. """
         self.env.invalidate_all()
-        with self.with_user(self.user_employee.login), self.assertQueryCount(28):  # test_mail: 28
+        with self.with_user(self.user_employee.login), self.assertQueryCount(26):  # runbot 25
             mail_id = self.test_template.with_env(self.env).send_mail(self.test_record.id)
             mail = self.env['mail.mail'].sudo().browse(mail_id)
 
@@ -189,7 +209,7 @@ class TestMailTemplateLanguages(TestMailTemplateCommon):
         """ Test without layout, just to check impact """
         self.test_template.email_layout_xmlid = False
         self.env.invalidate_all()
-        with self.with_user(self.user_employee.login), self.assertQueryCount(21):  # test_mail: 21
+        with self.with_user(self.user_employee.login), self.assertQueryCount(19):
             mail_id = self.test_template.with_env(self.env).send_mail(self.test_record.id)
             mail = self.env['mail.mail'].sudo().browse(mail_id)
 
@@ -206,7 +226,7 @@ class TestMailTemplateLanguages(TestMailTemplateCommon):
         """ Test 'send_email' on template in batch """
         self.env.invalidate_all()
         mails = self.env['mail.mail'].sudo()
-        with self.with_user(self.user_employee.login), self.assertQueryCount(933):  # test_mail: 933
+        with self.with_user(self.user_employee.login), self.assertQueryCount(932):  # runbot: 928
             template = self.test_template.with_env(self.env)
             for record in self.test_records_batch:
                 mails += mails.browse(template.send_mail(record.id))
@@ -227,7 +247,7 @@ class TestMailTemplateLanguages(TestMailTemplateCommon):
         """ Test 'send_email' on template on a given record, used notably as
         contextual action, with dynamic reports involved """
         self.env.invalidate_all()
-        with self.with_user(self.user_employee.login), self.assertQueryCount(107):  # test_mail: 106
+        with self.with_user(self.user_employee.login), self.assertQueryCount(101):  # runbot 98
             mail_id = self.test_template_wreports.with_env(self.env).send_mail(self.test_record.id)
             mail = self.env['mail.mail'].sudo().browse(mail_id)
 
@@ -243,7 +263,7 @@ class TestMailTemplateLanguages(TestMailTemplateCommon):
         """ Test 'send_email' on template in batch with dynamic reports """
         self.env.invalidate_all()
         mails = self.env['mail.mail'].sudo()
-        with self.with_user(self.user_employee.login), self.assertQueryCount(1645):  # test_mail: 1641
+        with self.with_user(self.user_employee.login), self.assertQueryCount(1634):  # runbot 1611
             template = self.test_template_wreports.with_env(self.env)
             for record in self.test_records_batch:
                 mails += mails.browse(template.send_mail(record.id))
@@ -302,7 +322,7 @@ class TestMailTemplateLanguages(TestMailTemplateCommon):
 
         self.env.invalidate_all()
         mails = self.env['mail.mail'].sudo()
-        with self.with_user(self.user_employee.login), self.assertQueryCount(51):
+        with self.with_user(self.user_employee.login), self.assertQueryCount(48):  # runbot 44
             template = self.test_template.with_env(self.env)
             for record in self.test_records:
                 mails += mails.browse(

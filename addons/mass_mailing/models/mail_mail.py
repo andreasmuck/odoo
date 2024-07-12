@@ -43,7 +43,7 @@ class MailMail(models.Model):
         body = super()._prepare_outgoing_body()
 
         if body and self.mailing_id and self.mailing_trace_ids:
-            for match in set(re.findall(tools.URL_REGEX, body)):
+            for match in set(re.findall(tools.mail.URL_REGEX, body)):
                 href = match[0]
                 url = match[1]
 
@@ -55,18 +55,19 @@ class MailMail(models.Model):
 
             # generate tracking URL
             tracking_url = self._get_tracking_url()
-            body = tools.append_content_to_html(
+            body = tools.mail.append_content_to_html(
                 body,
                 f'<img src="{tracking_url}"/>',
                 plaintext=False,
             )
         return body
 
-    def _prepare_outgoing_list(self, recipients_follower_status=None):
+    def _prepare_outgoing_list(self, mail_server=False, recipients_follower_status=None):
         """ Update mailing specific links to replace generic unsubscribe and
         view links by email-specific links. Also add headers to allow
         unsubscribe from email managers. """
-        email_list = super()._prepare_outgoing_list(recipients_follower_status)
+        email_list = super()._prepare_outgoing_list(mail_server=mail_server,
+                                                    recipients_follower_status=recipients_follower_status)
         if not self.res_id or not self.mailing_id:
             return email_list
 
@@ -78,11 +79,14 @@ class MailMail(models.Model):
             emails = tools.email_split(email_values['email_to'][0])
             email_to = emails[0] if emails else False
             unsubscribe_url = self.mailing_id._get_unsubscribe_url(email_to, self.res_id)
+            unsubscribe_oneclick_url = self.mailing_id._get_unsubscribe_oneclick_url(email_to, self.res_id)
             view_url = self.mailing_id._get_view_url(email_to, self.res_id)
 
             # replace links in body
             if not tools.is_html_empty(email_values['body']):
-                if f'{base_url}/unsubscribe_from_list' in email_values['body']:
+                # replace generic link by recipient-specific one, except if we know
+                # by advance it won't work (i.e. testing mailing scenario)
+                if f'{base_url}/unsubscribe_from_list' in email_values['body'] and not self.env.context.get('mailing_test_mail'):
                     email_values['body'] = email_values['body'].replace(
                         f'{base_url}/unsubscribe_from_list',
                         unsubscribe_url,
@@ -95,7 +99,7 @@ class MailMail(models.Model):
 
             # add headers
             email_values['headers'].update({
-                'List-Unsubscribe': f'<{unsubscribe_url}>',
+                'List-Unsubscribe': f'<{unsubscribe_oneclick_url}>',
                 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
                 'Precedence': 'list',
                 'X-Auto-Response-Suppress': 'OOF',  # avoid out-of-office replies from MS Exchange

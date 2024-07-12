@@ -15,7 +15,7 @@ class ResCompany(models.Model):
             ('other', "Other"),
         ])
 
-    def _run_payment_onboarding_step(self, menu_id):
+    def _run_payment_onboarding_step(self, menu_id=None):
         """ Install the suggested payment modules and configure the providers.
 
         It's checked that the current company has a Chart of Account.
@@ -40,10 +40,9 @@ class ResCompany(models.Model):
         if not stripe_provider:
             base_provider = self.env.ref('payment.payment_provider_stripe')
             # Use sudo to access payment provider record that can be in different company.
-            stripe_provider = base_provider.sudo().copy(default={
-                'company_id': self.env.company.id,
-                'website_id': False,
-            })
+            stripe_provider = base_provider.sudo().with_context(
+                stripe_connect_onboarding=True,
+            ).copy(default={'company_id': self.env.company.id})
 
         return stripe_provider.action_stripe_connect_account(menu_id=menu_id)
 

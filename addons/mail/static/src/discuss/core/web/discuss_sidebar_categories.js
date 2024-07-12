@@ -27,9 +27,9 @@ export class DiscussSidebarCategories extends Component {
     static components = { ChannelSelector, ImStatus, ThreadIcon };
 
     setup() {
+        super.setup();
         this.store = useState(useService("mail.store"));
         this.discussCoreWebService = useState(useService("discuss.core.web"));
-        this.threadService = useState(useService("mail.thread"));
         this.state = useState({
             editing: false,
             quickSearchVal: "",
@@ -66,7 +66,7 @@ export class DiscussSidebarCategories extends Component {
             return (
                 (thread.displayToSelf || thread.isLocallyPinned) &&
                 (!this.state.quickSearchVal ||
-                    cleanTerm(thread.name).includes(cleanTerm(this.state.quickSearchVal)))
+                    cleanTerm(thread.displayName).includes(cleanTerm(this.state.quickSearchVal)))
             );
         });
     }
@@ -83,7 +83,7 @@ export class DiscussSidebarCategories extends Component {
      * @param {import("models").Thread} thread
      */
     async leaveChannel(thread) {
-        if (thread.channel_type !== "group" && thread.isAdmin) {
+        if (thread.channel_type !== "group" && thread.create_uid === thread.store.self.userId) {
             await this.askConfirmation(
                 _t("You are the administrator of this channel. Are you sure you want to leave?")
             );
@@ -95,7 +95,7 @@ export class DiscussSidebarCategories extends Component {
                 )
             );
         }
-        this.threadService.leaveChannel(thread);
+        thread.leave();
     }
 
     openCategory(category) {
@@ -134,7 +134,7 @@ export class DiscussSidebarCategories extends Component {
      */
     openThread(ev, thread) {
         markEventHandled(ev, "sidebar.openThread");
-        this.threadService.setDiscussThread(thread);
+        thread.setAsDiscussThread();
     }
 
     stopEditing() {
@@ -146,6 +146,9 @@ export class DiscussSidebarCategories extends Component {
      * @param {import("models").DiscussAppCategory} category
      */
     toggleCategory(category) {
+        if (this.store.channels.status === "fetching") {
+            return;
+        }
         category.open = !category.open;
         this.discussCoreWebService.broadcastCategoryState(category);
     }

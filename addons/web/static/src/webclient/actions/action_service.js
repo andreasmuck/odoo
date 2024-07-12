@@ -27,8 +27,9 @@ import {
     reactive,
 } from "@odoo/owl";
 import { downloadReport, getReportUrl } from "./reports/utils";
-import { pick } from "@web/core/utils/objects";
+import { omit, pick, shallowEqual } from "@web/core/utils/objects";
 import { zip } from "@web/core/utils/arrays";
+import { session } from "@web/session";
 
 class BlankComponent extends Component {
     static props = ["onMounted", "withControlPanel", "*"];
@@ -48,7 +49,6 @@ class BlankComponent extends Component {
 
 const actionHandlersRegistry = registry.category("action_handlers");
 const actionRegistry = registry.category("actions");
-const viewRegistry = registry.category("views");
 
 /** @typedef {number|false} ActionId */
 /** @typedef {Object} ActionDescription */
@@ -84,7 +84,7 @@ export const standardActionServiceProps = {
     globalState: { type: Object, optional: true }, // prop added by _updateUI
     state: { type: Object, optional: true }, // prop added by _updateUI
     resId: { type: [Number, Boolean], optional: true },
-    updateResId: { type: Function, optional: true },
+    updateActionState: { type: Function, optional: true },
 };
 
 function parseActiveIds(ids) {
@@ -131,14 +131,9 @@ export function makeActionManager(env, router = _router) {
     let dialogCloseProm;
     let actionCache = {};
     let dialog = null;
+    let nextDialog = null;
 
-    // The state action (or default user action if none) is loaded as soon as possible
-    // so that the next "doAction" will have its action ready when needed.
-    const actionParams = _getActionParams();
-    if (actionParams && typeof actionParams.actionRequest === "number") {
-        const { actionRequest, options } = actionParams;
-        _loadAction(actionRequest, options.additionalContext);
-    }
+    router.hideKeyFromUrl("globalState");
 
     env.bus.addEventListener("CLEAR-CACHES", () => {
         actionCache = {};
@@ -176,6 +171,7 @@ export function makeActionManager(env, router = _router) {
                     action: {},
                     props: {},
                     state: { ...actionState, actionStack: state.actionStack.slice(0, index + 1) },
+                    currentState: {},
                 };
                 if (actionState.action) {
                     controller.action.id = actionState.action;
@@ -198,6 +194,7 @@ export function makeActionManager(env, router = _router) {
                     }
                     if (actionState.active_id) {
                         controller.action.context = { active_id: actionState.active_id };
+                        controller.currentState.active_id = actionState.active_id;
                     }
                 }
                 if (actionState.model) {
@@ -207,7 +204,7 @@ export function makeActionManager(env, router = _router) {
                 if (actionState.resId) {
                     controller.action.type ||= "ir.actions.act_window";
                     controller.props.resId = actionState.resId;
-                    controller.resId = () => actionState.resId;
+                    controller.currentState.resId = actionState.resId;
                     controller.props.type = "form";
                 }
                 return controller;
@@ -353,31 +350,19 @@ export function makeActionManager(env, router = _router) {
 
         if (typeof actionRequest === "string" || typeof actionRequest === "number") {
             // actionRequest is an id or an xmlid
-            const additional_context = {
-                active_id: context.active_id,
-                active_ids: context.active_ids,
-                active_model: context.active_model,
-            };
-            const key = `${JSON.stringify(actionRequest)},${JSON.stringify(additional_context)}`;
-            let action;
-            if (!actionCache[key]) {
+            const ctx = makeContext([user.context, context]);
+            delete ctx.params;
+            const key = `${JSON.stringify(actionRequest)},${JSON.stringify(ctx)}`;
+            let action = await actionCache[key];
+            if (!action) {
                 actionCache[key] = rpc("/web/action/load", {
                     action_id: actionRequest,
-                    additional_context,
+                    context: ctx,
                 });
                 action = await actionCache[key];
                 if (action.help) {
                     action.help = markup(action.help);
                 }
-            } else {
-                action = await actionCache[key];
-            }
-            if (!action) {
-                return {
-                    type: "ir.actions.client",
-                    tag: "invalid_action",
-                    id: actionRequest,
-                };
             }
             return Object.assign({}, action);
         }
@@ -507,8 +492,14 @@ export function makeActionManager(env, router = _router) {
                     viewType: state.resId ? "form" : state.view_type,
                 });
             }
-            if (state.resId && state.resId !== "new") {
-                options.props = { resId: state.resId };
+            if ((state.resId && state.resId !== "new") || state.globalState) {
+                options.props = {};
+                if (state.resId && state.resId !== "new") {
+                    options.props.resId = state.resId;
+                }
+                if (state.globalState) {
+                    options.props.globalState = state.globalState;
+                }
             }
         } else if (state.model) {
             if (state.resId || state.view_type === "form") {
@@ -566,19 +557,21 @@ export function makeActionManager(env, router = _router) {
      */
     function _getActionInfo(action, props) {
         const actionProps = Object.assign({}, props, { action, actionId: action.id });
-        actionProps.updateResId = (newId) => {
-            const changed = resId !== newId;
-            resId = newId;
-            if (changed && action.target !== "new") {
-                // It's possible that the ControllerComponent is not mounted yet, so we
-                // need to wait for the next microtask to push the state.
-                Promise.resolve().then(() => pushState());
+        const currentState = {
+            resId: actionProps.resId || false,
+            active_id: action.context.active_id || false,
+        };
+        actionProps.updateActionState = (controller, patchState) => {
+            const oldState = { ...currentState };
+            Object.assign(currentState, patchState);
+            const changed = !shallowEqual(currentState, oldState);
+            if (changed && action.target !== "new" && controller.isMounted) {
+                pushState();
             }
         };
-        let resId = actionProps.resId || false;
         return {
             props: actionProps,
-            resId: () => resId,
+            currentState,
             config: {
                 actionId: action.id,
                 actionType: "ir.actions.client",
@@ -604,8 +597,7 @@ export function makeActionManager(env, router = _router) {
                 return clientAction.target;
             }
         }
-        if (controllerStack.some((c) => c.action.target === "fullscreen")) {
-            // Force fullscreen when one of the controllers is set to fullscreen
+        if (action.target === "fullscreen") {
             return "fullscreen";
         }
         // Default: current
@@ -625,7 +617,7 @@ export function makeActionManager(env, router = _router) {
             .map((v) => {
                 const viewSwitcherEntry = {
                     icon: v.icon,
-                    name: v.display_name.toString(),
+                    name: v.display_name,
                     type: v.type,
                     multiRecord: v.multiRecord,
                 };
@@ -659,15 +651,19 @@ export function makeActionManager(env, router = _router) {
                 }
             },
         });
-
+        const currentState = {
+            resId: viewProps.resId,
+            active_id: action.context.active_id || false,
+        };
+        viewProps.updateActionState = (controller, patchState) => {
+            const oldState = { ...currentState };
+            Object.assign(currentState, patchState);
+            const changed = !shallowEqual(currentState, oldState);
+            if (changed && target !== "new" && controller.isMounted) {
+                pushState();
+            }
+        };
         if (view.type === "form") {
-            viewProps.updateResId = (newId) => {
-                const changed = resId !== newId;
-                resId = newId;
-                if (changed && target !== "new") {
-                    pushState();
-                }
-            };
             if (target === "new") {
                 viewProps.mode = "edit";
                 if (!viewProps.onSave) {
@@ -711,13 +707,22 @@ export function makeActionManager(env, router = _router) {
             "no_breadcrumbs" in action.context ? action.context.no_breadcrumbs : target === "new";
         delete action.context.no_breadcrumbs;
 
-        let resId = viewProps.resId;
+        const embeddedActions =
+            view.type === "form"
+                ? []
+                : context.parent_action_embedded_actions || action.embedded_action_ids;
+        const parentActionId = (view.type !== "form" && context.parent_action_id) || false;
+        const currentEmbeddedActionId = context.current_embedded_action_id || false;
         return {
             props: viewProps,
-            resId: () => resId,
+            currentState,
             config: {
                 actionId: action.id,
+                actionName: action.name,
                 actionType: "ir.actions.act_window",
+                embeddedActions,
+                parentActionId,
+                currentEmbeddedActionId,
                 actionFlags: action.flags,
                 views: action.views,
                 viewSwitcherEntries,
@@ -785,6 +790,9 @@ export function makeActionManager(env, router = _router) {
             reject = _rej;
         });
         const action = controller.action;
+        if (action.target !== "new" && "newStack" in options) {
+            controllerStack = options.newStack;
+        }
         const index = _computeStackIndex(options);
         const nextStack = [...controllerStack.slice(0, index), controller];
         // Compute breadcrumbs
@@ -803,6 +811,12 @@ export function makeActionManager(env, router = _router) {
                 controller.config.breadcrumbs.push(undefined);
                 controller.config.breadcrumbs.pop();
             }
+        };
+        controller.config.setCurrentEmbeddedAction = (embeddedActionId) => {
+            controller.currentEmbeddedActionId = embeddedActionId;
+        };
+        controller.config.setEmbeddedActions = (embeddedActions) => {
+            controller.embeddedActions = embeddedActions;
         };
         controller.config.historyBack = () => {
             const previousController = controllerStack[controllerStack.length - 2];
@@ -872,13 +886,16 @@ export function makeActionManager(env, router = _router) {
                 }
                 const lastController = controllerStack.at(-1);
                 if (lastController) {
-                    // the error occurred while rendering a new controller,
-                    // so go back to the last non faulty controller
-                    // (the error will be shown anyway as the promise
-                    // has been rejected)
-                    return restore(lastController.jsId);
+                    if (lastController.jsId !== controller.jsId) {
+                        // the error occurred while rendering a new controller,
+                        // so go back to the last non faulty controller
+                        // (the error will be shown anyway as the promise
+                        // has been rejected)
+                        return restore(lastController.jsId);
+                    }
+                } else {
+                    env.bus.trigger("ACTION_MANAGER:UPDATE", {});
                 }
-                env.bus.trigger("ACTION_MANAGER:UPDATE", {});
             }
             onMounted() {
                 if (action.target === "new") {
@@ -915,12 +932,15 @@ export function makeActionManager(env, router = _router) {
                 this.isMounted = true;
             }
             onWillUnmount() {
+                this.isMounted = false;
                 if (action.target === "new" && dialogCloseResolve) {
                     dialogCloseResolve();
                 }
             }
             get componentProps() {
                 const componentProps = { ...this.props };
+                const updateActionState = componentProps.updateActionState;
+                componentProps.updateActionState = (newState) => updateActionState(this, newState);
                 if (this.constructor.Component === View) {
                     componentProps.__beforeLeave__ = this.__beforeLeave__;
                     componentProps.__getGlobalState__ = this.__getGlobalState__;
@@ -929,7 +949,6 @@ export function makeActionManager(env, router = _router) {
                 return componentProps;
             }
         }
-        let nextDialog = null;
         if (action.target === "new") {
             const actionDialogProps = {
                 ActionComponent: ControllerComponent,
@@ -943,7 +962,7 @@ export function makeActionManager(env, router = _router) {
             if (size) {
                 actionDialogProps.size = size;
             }
-
+            actionDialogProps.footer = action.context.footer ?? actionDialogProps.footer;
             const onClose = _removeDialog();
             removeDialogFn = env.services.dialog.add(ActionDialog, actionDialogProps, {
                 onClose: () => {
@@ -953,6 +972,9 @@ export function makeActionManager(env, router = _router) {
                     }
                 },
             });
+            if (nextDialog) {
+                nextDialog.remove();
+            }
             nextDialog = {
                 remove: removeDialogFn,
                 onClose: onClose || options.onClose,
@@ -975,11 +997,23 @@ export function makeActionManager(env, router = _router) {
         // if globalState is not useful for client actions --> maybe use that thing in useSetupView instead of useSetupAction?
         // a good thing: the Object.assign seems to reflect the use of "externalState" in legacy Model class --> things should be fine.
         if (currentController && currentController.getGlobalState) {
-            currentController.action.globalState = Object.assign(
+            const globalState = Object.assign(
                 {},
                 currentController.action.globalState,
                 currentController.getGlobalState() // what if this = {}?
             );
+
+            currentController.action.globalState = globalState;
+            // Avoid pushing the globalState, if the state on the router was changed.
+            // For instance, if a link was clicked, the state of the router will be the one of the link and not the one of the currentController.
+            // Or when using the back or forward buttons on the browser.
+            if (
+                currentController.state.action === router.current.action &&
+                currentController.state.active_id === router.current.active_id &&
+                currentController.state.resId === router.current.resId
+            ) {
+                router.pushState({ globalState }, { sync: true });
+            }
         }
         if (controller.action.globalState) {
             controller.props.globalState = controller.action.globalState;
@@ -1068,8 +1102,9 @@ export function makeActionManager(env, router = _router) {
     async function _executeActWindowAction(action, options) {
         const views = [];
         for (const [, type] of action.views) {
-            if (type !== "search" && viewRegistry.contains(type)) {
-                views.push(viewRegistry.get(type));
+            if (type !== "search" && session.view_info[type]) {
+                const { icon, display_name, multi_record: multiRecord } = session.view_info[type];
+                views.push({ icon, display_name, multiRecord, type });
             }
         }
         if (!views.length) {
@@ -1091,14 +1126,7 @@ export function makeActionManager(env, router = _router) {
         };
         action.controllers[view.type] = controller;
 
-        return _updateUI(controller, {
-            index: options.index,
-            clearBreadcrumbs: options.clearBreadcrumbs,
-            onClose: options.onClose,
-            stackPosition: options.stackPosition,
-            onActionReady: options.onActionReady,
-            noEmptyTransition: options.noEmptyTransition,
-        });
+        return _updateUI(controller, options);
     }
 
     /**
@@ -1143,15 +1171,7 @@ export function makeActionManager(env, router = _router) {
                 ..._getActionInfo(action, options.props),
             };
             controller.displayName ||= clientAction.displayName?.toString() || "";
-            const updateUIOptions = {
-                index: options.index,
-                clearBreadcrumbs: options.clearBreadcrumbs,
-                stackPosition: options.stackPosition,
-                onClose: options.onClose,
-                onActionReady: options.onActionReady,
-                noEmptyTransition: options.noEmptyTransition,
-            };
-            return _updateUI(controller, updateUIOptions);
+            return _updateUI(controller, options);
         } else {
             const next = await clientAction(env, action);
             if (next) {
@@ -1182,13 +1202,7 @@ export function makeActionManager(env, router = _router) {
             ..._getActionInfo(action, props),
         };
 
-        const updateUIOptions = {
-            clearBreadcrumbs: options.clearBreadcrumbs,
-            stackPosition: options.stackPosition,
-            onClose: options.onClose,
-            index: options.index,
-        };
-        return _updateUI(controller, updateUIOptions);
+        return _updateUI(controller, options);
     }
 
     /**
@@ -1317,10 +1331,10 @@ export function makeActionManager(env, router = _router) {
                 return _executeCloseAction({ onClose: options.onClose, onCloseInfo: action.infos });
             case "ir.actions.client":
                 return _executeClientAction(action, options);
-            case "ir.actions.report":
-                return _executeReportAction(action, options);
             case "ir.actions.server":
                 return _executeServerAction(action, options);
+            case "ir.actions.report":
+                return _executeReportAction(action, options);
             default: {
                 const handler = actionHandlersRegistry.get(action.type, null);
                 if (handler !== null) {
@@ -1404,7 +1418,8 @@ export function makeActionManager(env, router = _router) {
         // in case an effect is returned from python and there is already an effect
         // attribute on the button, the priority is given to the button attribute
         const effect = params.effect ? evaluateExpr(params.effect) : action.effect;
-        const options = { onClose: params.onClose };
+        const { onClose, stackPosition, viewType } = params;
+        const options = { onClose, stackPosition, viewType };
         await doAction(action, options);
         if (params.close) {
             await _executeCloseAction();
@@ -1522,17 +1537,21 @@ export function makeActionManager(env, router = _router) {
      * @returns {Promise<boolean>} true if doAction was performed
      */
     async function loadState() {
-        controllerStack = await _controllersFromState();
+        const newStack = await _controllersFromState();
         const actionParams = _getActionParams();
         if (actionParams) {
             // Params valid => performs a "doAction"
             const { actionRequest, options } = actionParams;
+            options.newStack = newStack;
             await doAction(actionRequest, options);
             return true;
         }
     }
 
     function pushState() {
+        if (!controllerStack.length) {
+            return;
+        }
         const actions = controllerStack.map((controller) => {
             const { action, props, displayName } = controller;
             const actionState = { displayName };
@@ -1546,38 +1565,35 @@ export function makeActionManager(env, router = _router) {
             if (action.type === "ir.actions.act_window") {
                 actionState.view_type = props.type;
                 if (props.type === "form" && action.res_model !== "res.config.settings") {
-                    actionState.resId = controller.resId() || "new";
+                    actionState.resId = controller.currentState.resId || "new";
                 }
             }
-            if (action.type === "ir.actions.client" && controller.resId?.()) {
-                actionState.resId = controller.resId();
+            if (action.type === "ir.actions.client" && controller.currentState?.resId) {
+                actionState.resId = controller.currentState.resId;
             }
 
-            if (action.context) {
-                const activeId = action.context.active_id;
+            if (controller.currentState?.active_id) {
+                const activeId = controller.currentState.active_id;
                 if (activeId) {
                     actionState.active_id = activeId;
                 }
-                const activeIds = action.context.active_ids;
-                // we don't push active_ids if it's a single element array containing
-                // the active_id to make the url shorter in most cases
-                if (activeIds && !(activeIds.length === 1 && activeIds[0] === activeId)) {
-                    actionState.active_ids = activeIds.join(",");
-                }
             }
+            Object.assign(actionState, omit(controller.currentState || {}, ...PATH_KEYS));
             return actionState;
         });
-        const newState = {};
-        if (actions.length) {
-            newState.actionStack = actions;
-            const stateKeys = [...PATH_KEYS, "active_ids"];
-            const { action, props } = controllerStack.at(-1);
-            if (props.type !== "form" && props.type !== action.views?.[0][1]) {
-                // add view_type only when it's not already known implicitly
-                stateKeys.push("view_type");
-            }
-            Object.assign(newState, pick(newState.actionStack.at(-1), ...stateKeys));
+        const newState = {
+            actionStack: actions,
+        };
+        const stateKeys = [...PATH_KEYS];
+        const { action, props, currentState } = controllerStack.at(-1);
+        if (props.type !== "form" && props.type !== action.views?.[0][1]) {
+            // add view_type only when it's not already known implicitly
+            stateKeys.push("view_type");
         }
+        if (currentState) {
+            stateKeys.push(...Object.keys(omit(currentState, ...PATH_KEYS)));
+        }
+        Object.assign(newState, pick(newState.actionStack.at(-1), ...stateKeys));
 
         controllerStack.at(-1).state = newState;
         router.pushState(newState, { replace: true });

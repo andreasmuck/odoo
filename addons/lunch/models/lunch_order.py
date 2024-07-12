@@ -23,9 +23,10 @@ class LunchOrder(models.Model):
     supplier_id = fields.Many2one(
         string='Vendor', related='product_id.supplier_id', store=True, index=True)
     available_today = fields.Boolean(related='supplier_id.available_today')
-    order_deadline_passed = fields.Boolean(related='supplier_id.order_deadline_passed')
-    user_id = fields.Many2one('res.users', 'User', readonly=False,
-                              default=lambda self: self.env.uid)
+
+    available_on_date = fields.Boolean(compute='_compute_available_on_date')
+    order_deadline_passed = fields.Boolean(compute='_compute_order_deadline_passed')
+    user_id = fields.Many2one('res.users', 'User', default=lambda self: self.env.uid)
     lunch_location_id = fields.Many2one('lunch.location', default=lambda self: self.env.user.last_lunch_location_id)
     note = fields.Text('Notes')
     price = fields.Monetary('Total Price', compute='_compute_total_price', readonly=True, store=True)
@@ -78,29 +79,48 @@ class LunchOrder(models.Model):
         for order in self:
             order.display_reorder_button = show_button and order.state == 'confirmed' and order.supplier_id.available_today
 
+    @api.depends('date', 'supplier_id')
+    def _compute_available_on_date(self):
+        for order in self:
+            order.available_on_date = order.supplier_id._available_on_date(order.date)
+
+    @api.depends('supplier_id', 'date')
+    def _compute_order_deadline_passed(self):
+        today = fields.Date.context_today(self)
+        for order in self:
+            if order.date < today:
+                order.order_deadline_passed = True
+            elif order.date == today:
+                order.order_deadline_passed = order.supplier_id.order_deadline_passed
+            else:
+                order.order_deadline_passed = False
+
     def init(self):
         self._cr.execute("""CREATE INDEX IF NOT EXISTS lunch_order_user_product_date ON %s (user_id, product_id, date)"""
             % self._table)
+
+    def _get_topping_ids(self, field, values):
+        return list(self._fields[field].convert_to_cache(values, self))
 
     def _extract_toppings(self, values):
         """
             If called in api.multi then it will pop topping_ids_1,2,3 from values
         """
-        topping_1_values = values.get('topping_ids_1', False)
-        topping_2_values = values.get('topping_ids_2', False)
-        topping_3_values = values.get('topping_ids_3', False)
-        if self.ids:
-            # TODO This is not taking into account all the toppings for each individual order, this is usually not a problem
-            # since in the interface you usually don't update more than one order at a time but this is a bug nonetheless
-            topping_1 = values.pop('topping_ids_1')[0][2] if topping_1_values else self[:1].topping_ids_1.ids
-            topping_2 = values.pop('topping_ids_2')[0][2] if topping_2_values else self[:1].topping_ids_2.ids
-            topping_3 = values.pop('topping_ids_3')[0][2] if topping_3_values else self[:1].topping_ids_3.ids
-        else:
-            topping_1 = values['topping_ids_1'][0][2] if topping_1_values else []
-            topping_2 = values['topping_ids_2'][0][2] if topping_2_values else []
-            topping_3 = values['topping_ids_3'][0][2] if topping_3_values else []
+        topping_ids = []
 
-        return topping_1 + topping_2 + topping_3
+        for i in range(1, 4):
+            topping_field = f'topping_ids_{i}'
+            topping_values = values.get(topping_field, False)
+
+            if self.ids:
+                # TODO This is not taking into account all the toppings for each individual order, this is usually not a problem
+                # since in the interface you usually don't update more than one order at a time but this is a bug nonetheless
+                topping_ids += self._get_topping_ids(topping_field, values.pop(topping_field)) \
+                    if topping_values else self[:1][topping_field].ids
+            else:
+                topping_ids += self._get_topping_ids(topping_field, topping_values) if topping_values else []
+
+        return topping_ids
 
     @api.constrains('topping_ids_1', 'topping_ids_2', 'topping_ids_3')
     def _check_topping_quantity(self):
@@ -172,7 +192,7 @@ class LunchOrder(models.Model):
         domain = [
             ('user_id', '=', values.get('user_id', self.default_get(['user_id'])['user_id'])),
             ('product_id', '=', values.get('product_id', False)),
-            ('date', '=', fields.Date.today()),
+            ('date', '=', values.get('date', fields.Date.today())),
             ('note', '=', values.get('note', False)),
             ('lunch_location_id', '=', values.get('lunch_location_id', default_location_id)),
         ]
@@ -215,15 +235,13 @@ class LunchOrder(models.Model):
 
     def action_order(self):
         for order in self:
-            if not order.supplier_id.available_today:
-                raise UserError(_('The vendor related to this order is not available today.'))
+            if not order.available_on_date:
+                raise UserError(_('The vendor related to this order is not available at the selected date.'))
         if self.filtered(lambda line: not line.product_id.active):
             raise ValidationError(_('Product is no longer available.'))
         self.write({
             'state': 'ordered',
         })
-        for order in self:
-            order.lunch_location_id = order.user_id.last_lunch_location_id
         self._check_wallet()
 
     def action_reorder(self):

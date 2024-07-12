@@ -8,8 +8,8 @@ from odoo.tests import Form, tagged
 class StockMoveInvoice(AccountTestInvoicingCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
         cls.ProductProduct = cls.env['product.product']
         cls.SaleOrder = cls.env['sale.order']
@@ -65,11 +65,11 @@ class StockMoveInvoice(AccountTestInvoicingCommon):
         self.sale_prepaid._create_invoices()
 
         # I check that the invoice was created
-        self.assertEqual(len(self.sale_prepaid.invoice_ids), 1, "Invoice not created.")
+        self.assertEqual(len(self.sale_prepaid.account_move_ids), 1, "Invoice not created.")
 
         # I confirm the invoice
 
-        self.invoice = self.sale_prepaid.invoice_ids
+        self.invoice = self.sale_prepaid.account_move_ids
         self.invoice.action_post()
 
         # I pay the invoice.
@@ -207,7 +207,7 @@ class StockMoveInvoice(AccountTestInvoicingCommon):
         # Return picking
         return_form = Form(self.env["stock.return.picking"].with_context(active_id=sale_order.picking_ids.id, active_model="stock.picking"))
         return_wizard = return_form.save()
-        action = return_wizard.create_returns()
+        action = return_wizard.action_create_returns()
         return_picking = self.env["stock.picking"].browse(action["res_id"])
 
         # add new product so new picking is created
@@ -236,3 +236,25 @@ class StockMoveInvoice(AccountTestInvoicingCommon):
         done_delivery = sale_order.picking_ids.filtered(lambda p: p.state == "done")
         self.assertFalse(done_delivery.carrier_id.id, "The shipping method should not be set in done deliveries.")
         self.assertFalse(return_picking.carrier_id.id, "The shipping method should not set in return pickings")
+
+    def test_picking_weight(self):
+        """Test if the picking weight is correctly computed when the product of the move changes."""
+        self.product_cable_management_box.weight = 1.0
+        self.product_a.weight = 2.0
+        so = self.SaleOrder.create({
+            "partner_id": self.partner_18.id,
+            "order_line": [(0, 0, {
+                "name": "Cable Management Box",
+                "product_id": self.product_cable_management_box.id,
+                "product_uom_qty": 1,
+                "product_uom": self.product_uom_unit.id,
+                "price_unit": 750.00,
+            })],
+        })
+        so.action_confirm()
+        picking = so.picking_ids
+        self.assertEqual(picking.weight, 1.0, "The weight of the picking should be 1.0")
+        self.product_cable_management_box.weight = 2.0
+        self.assertEqual(picking.weight, 1.0, "The weight of the picking should not change")
+        picking.move_ids.product_id = self.product_a
+        self.assertEqual(picking.weight, 2.0, "The weight of the picking should be 2.0")

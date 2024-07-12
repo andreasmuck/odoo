@@ -2,7 +2,6 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from odoo import _, api, fields, models
-
 from odoo.addons.account.models.company import PEPPOL_LIST
 
 
@@ -149,6 +148,11 @@ class ResConfigSettings(models.TransientModel):
         related='company_id.display_invoice_amount_total_words',
         readonly=False
     )
+    display_invoice_tax_company_currency = fields.Boolean(
+        string="Taxes in company currency",
+        related='company_id.display_invoice_tax_company_currency',
+        readonly=False,
+    )
     preview_ready = fields.Boolean(string="Display preview button", compute='_compute_terms_preview')
 
     use_invoice_terms = fields.Boolean(
@@ -176,7 +180,7 @@ class ResConfigSettings(models.TransientModel):
 
     account_journal_early_pay_discount_loss_account_id = fields.Many2one(
         comodel_name='account.account',
-        string='Cash Discount Loss',
+        string='Early Discount Loss',
         help='Account for the difference amount after the expense discount has been granted',
         readonly=False,
         related='company_id.account_journal_early_pay_discount_loss_account_id',
@@ -185,7 +189,7 @@ class ResConfigSettings(models.TransientModel):
     )
     account_journal_early_pay_discount_gain_account_id = fields.Many2one(
         comodel_name='account.account',
-        string='Cash Discount Gain',
+        string='Early Discount Gain',
         help='Account for the difference amount after the income discount has been granted',
         readonly=False,
         check_company=True,
@@ -215,6 +219,9 @@ class ResConfigSettings(models.TransientModel):
         compute='_compute_is_account_peppol_eligible',
     ) # technical field used for showing the Peppol settings conditionally
 
+    # Audit trail
+    check_account_audit_trail = fields.Boolean(string='Audit Trail', related='company_id.check_account_audit_trail', readonly=False)
+
     @api.depends('country_code')
     def _compute_is_account_peppol_eligible(self):
         # we want to show Peppol settings only to customers that are eligible for Peppol,
@@ -243,7 +250,7 @@ class ResConfigSettings(models.TransientModel):
                 'credit_limit',
                 'res.partner',
                 setting.account_default_credit_limit,
-                self.company_id.id
+                setting.company_id.id
             )
 
     @api.depends('company_id')

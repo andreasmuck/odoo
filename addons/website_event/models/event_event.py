@@ -36,9 +36,6 @@ class Event(models.Model):
         })
         return res
 
-    def _default_question_ids(self):
-        return self.env['event.type']._default_question_ids()
-
     # description
     subtitle = fields.Char('Event Subtitle', translate=True)
     # registration
@@ -58,9 +55,6 @@ class Event(models.Model):
         compute='_compute_website_menu', precompute=True, readonly=False, store=True,
         help="Allows to display and manage event-specific menus on website.")
     menu_id = fields.Many2one('website.menu', 'Event Menu', copy=False)
-    menu_register_cta = fields.Boolean(
-        'Extra Register Button', compute='_compute_menu_register_cta',
-        readonly=False, store=True)
     # sub-menus management
     introduction_menu = fields.Boolean(
         "Introduction Menu", compute="_compute_website_menu_data",
@@ -100,14 +94,6 @@ class Event(models.Model):
     start_remaining = fields.Integer(
         'Remaining before start', compute='_compute_time_data',
         help="Remaining time before event starts (minutes)")
-    # questions
-    question_ids = fields.One2many(
-        'event.question', 'event_id', 'Questions', copy=True,
-        compute='_compute_question_ids', readonly=False, store=True)
-    general_question_ids = fields.One2many('event.question', 'event_id', 'General Questions',
-                                           domain=[('once_per_order', '=', True)])
-    specific_question_ids = fields.One2many('event.question', 'event_id', 'Specific Questions',
-                                            domain=[('once_per_order', '=', False)])
 
     @api.depends('registration_ids')
     @api.depends_context('uid')
@@ -225,17 +211,6 @@ class Event(models.Model):
             event.location_menu = event.website_menu
             event.register_menu = event.website_menu
 
-    @api.depends("event_type_id", "website_menu")
-    def _compute_menu_register_cta(self):
-        """ At type onchange: synchronize. At website_menu update: synchronize. """
-        for event in self:
-            if event.event_type_id and event.event_type_id != event._origin.event_type_id:
-                event.menu_register_cta = event.event_type_id.menu_register_cta
-            elif event.website_menu and (event.website_menu != event._origin.website_menu or not event.menu_register_cta):
-                event.menu_register_cta = True
-            elif not event.website_menu:
-                event.menu_register_cta = False
-
     @api.depends('date_begin', 'date_end')
     def _compute_time_data(self):
         """ Compute start and remaining time. Do everything in UTC as we compute only
@@ -259,42 +234,6 @@ class Event(models.Model):
         for event in self:
             if event.id:  # avoid to perform a slug on a not yet saved record in case of an onchange.
                 event.website_url = '/event/%s' % slug(event)
-
-    @api.depends('event_type_id')
-    def _compute_question_ids(self):
-        """ Update event questions from its event type. Depends are set only on
-        event_type_id itself to emulate an onchange. Changing event type content
-        itself should not trigger this method.
-
-        When synchronizing questions:
-
-          * lines with no registered answers are removed;
-          * type lines are added;
-        """
-        if self._origin.question_ids:
-            # lines to keep: those with already given answers
-            questions_tokeep_ids = self.env['event.registration.answer'].search(
-                [('question_id', 'in', self._origin.question_ids.ids)]
-            ).question_id.ids
-        else:
-            questions_tokeep_ids = []
-        for event in self:
-            if not event.event_type_id and not event.question_ids:
-                event.question_ids = self._default_question_ids()
-                continue
-
-            if questions_tokeep_ids:
-                questions_toremove = event._origin.question_ids.filtered(
-                    lambda question: question.id not in questions_tokeep_ids)
-                command = [(3, question.id) for question in questions_toremove]
-            else:
-                command = [(5, 0)]
-            event.question_ids = command
-
-            # copy questions so changes in the event don't affect the event type
-            event.question_ids += event.event_type_id.question_ids.copy({
-                'event_type_id': False,
-            })
 
     # -------------------------------------------------------------------------
     # CONSTRAINT METHODS
@@ -406,7 +345,7 @@ class Event(models.Model):
         return [
             (_('Introduction'), False, 'website_event.template_intro', 1, 'introduction'),
             (_('Location'), False, 'website_event.template_location', 50, 'location'),
-            (_('Register'), '/event/%s/register' % slug(self), False, 100, 'register'),
+            (_('Info'), '/event/%s/register' % slug(self), False, 100, 'register'),
             (_('Community'), '/event/%s/community' % slug(self), False, 80, 'community'),
         ]
 
@@ -481,8 +420,9 @@ class Event(models.Model):
             page_result = self.env['website'].sudo().new_page(
                 name=f'{name} {self.name}', template=xml_id,
                 add_menu=False, ispage=False)
-            url = f"/event/{slug(self)}/page{page_result['url']}"  # url contains starting "/"
             view_id = page_result['view_id']
+            view = self.env["ir.ui.view"].browse(view_id)
+            url = f"/event/{slug(self)}/page/{view.key.split('.')[-1]}"  # url contains starting "/"
 
         website_menu = self.env['website.menu'].sudo().create({
             'name': name,
@@ -521,6 +461,13 @@ class Event(models.Model):
             return self.env.ref('website_event.mt_event_unpublished', raise_if_not_found=False)
         return super(Event, self)._track_subtype(init_values)
 
+    def _get_external_description(self):
+        """ Adding the URL of the event into the description """
+        self.ensure_one()
+        event_url = f'<a href="{self.event_register_url}">{self.name}</a>'
+        description = event_url + '\n' + super()._get_external_description()
+        return description
+
     def _get_event_resource_urls(self):
         url_date_start = self.date_begin.astimezone(timezone(self.date_tz)).strftime('%Y%m%dT%H%M%S')
         url_date_stop = self.date_end.astimezone(timezone(self.date_tz)).strftime('%Y%m%dT%H%M%S')
@@ -529,7 +476,7 @@ class Event(models.Model):
             'text': self.name,
             'dates': f'{url_date_start}/{url_date_stop}',
             'ctz': self.date_tz,
-            'details': self.name,
+            'details': self._get_external_description(),
         }
         if self.address_id:
             params.update(location=self.address_inline)

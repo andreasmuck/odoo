@@ -2,6 +2,8 @@
 from odoo import models, fields, api, _, Command
 from odoo.exceptions import UserError, ValidationError
 from odoo.tools.misc import format_date, formatLang
+from odoo.tools import create_index
+from odoo.tools import SQL
 
 
 class AccountPayment(models.Model):
@@ -16,9 +18,22 @@ class AccountPayment(models.Model):
     move_id = fields.Many2one(
         comodel_name='account.move',
         string='Journal Entry', required=True, readonly=True, ondelete='cascade',
-        index='btree_not_null',
+        index=True,
         check_company=True)
-
+    journal_id = fields.Many2one(
+        comodel_name='account.journal',
+        inherited=True,
+        related='move_id.journal_id', store=True, readonly=False, precompute=True,
+        index=False,  # covered by account_payment_journal_id_company_id_idx
+        required=True,
+    )
+    company_id = fields.Many2one(
+        comodel_name='res.company',
+        inherited=True,
+        related='move_id.company_id', store=True, readonly=False, precompute=True,
+        index=False,  # covered by account_payment_journal_id_company_id_idx
+        required=True
+    )
     is_reconciled = fields.Boolean(string="Is Reconciled", store=True,
         compute='_compute_reconciliation_status')
     is_matched = fields.Boolean(string="Is Matched With a Bank Statement", store=True,
@@ -41,6 +56,7 @@ class AccountPayment(models.Model):
     qr_code = fields.Html(string="QR Code URL",
         compute="_compute_qr_code")
     paired_internal_transfer_payment_id = fields.Many2one('account.payment',
+        index='btree_not_null',
         help="When an internal transfer is posted, a paired payment is created. "
         "They are cross referenced through this field", copy=False)
 
@@ -159,6 +175,8 @@ class AccountPayment(models.Model):
         help='Negative value of amount field if payment_type is outbound')
     amount_company_currency_signed = fields.Monetary(
         currency_field='company_currency_id', compute='_compute_amount_company_currency_signed', store=True)
+    # used to get and display duplicate move warning if partner, amount and date match existing payments
+    duplicate_move_ids = fields.Many2many(comodel_name='account.move', compute='_compute_duplicate_move_ids')
 
     _sql_constraints = [
         (
@@ -167,6 +185,22 @@ class AccountPayment(models.Model):
             "The payment amount cannot be negative.",
         ),
     ]
+
+    def init(self):
+        super().init()
+        create_index(
+            self.env.cr,
+            indexname='account_payment_journal_id_company_id_idx',
+            tablename='account_payment',
+            expressions=['journal_id', 'company_id']
+        )
+        create_index(
+            self.env.cr,
+            indexname='account_payment_unmatched_idx',
+            tablename='account_payment',
+            expressions=['journal_id', 'company_id'],
+            where="NOT is_matched OR is_matched IS NULL"
+        )
 
     # -------------------------------------------------------------------------
     # HELPERS
@@ -207,7 +241,7 @@ class AccountPayment(models.Model):
         return lines
 
     def _get_valid_liquidity_accounts(self):
-        journal_comp = self.journal_id.company_id
+        journal_comp = self.journal_id.company_id or self.env.company
         accessible_branches = journal_comp.with_company(journal_comp)._accessible_branches()
         return (
             self.journal_id.default_account_id |
@@ -285,12 +319,13 @@ class AccountPayment(models.Model):
         else:
             return self._get_aml_default_display_name_list()
 
-    def _prepare_move_line_default_vals(self, write_off_line_vals=None):
+    def _prepare_move_line_default_vals(self, write_off_line_vals=None, force_balance=None):
         ''' Prepare the dictionary to create the default account.move.lines for the current payment.
         :param write_off_line_vals: Optional list of dictionaries to create a write-off account.move.line easily containing:
             * amount:       The amount to be added to the counterpart amount.
             * name:         The label to set on the line.
             * account_id:   The account on which create the write-off.
+        :param force_balance: Optional balance.
         :return: A list of python dictionary to be passed to the account.move.line's 'create' method.
         '''
         self.ensure_one()
@@ -298,8 +333,8 @@ class AccountPayment(models.Model):
 
         if not self.outstanding_account_id:
             raise UserError(_(
-                "You can't create a new payment without an outstanding payments/receipts account set either on the company or the %s payment method in the %s journal.",
-                self.payment_method_line_id.name, self.journal_id.display_name))
+                "You can't create a new payment without an outstanding payments/receipts account set either on the company or the %(payment_method)s payment method in the %(journal)s journal.",
+                payment_method=self.payment_method_line_id.name, journal=self.journal_id.display_name))
 
         # Compute amounts.
         write_off_line_vals_list = write_off_line_vals or []
@@ -315,12 +350,16 @@ class AccountPayment(models.Model):
         else:
             liquidity_amount_currency = 0.0
 
-        liquidity_balance = self.currency_id._convert(
-            liquidity_amount_currency,
-            self.company_id.currency_id,
-            self.company_id,
-            self.date,
-        )
+        if not write_off_line_vals and force_balance is not None:
+            sign = 1 if liquidity_amount_currency > 0 else -1
+            liquidity_balance = sign * abs(force_balance)
+        else:
+            liquidity_balance = self.currency_id._convert(
+                liquidity_amount_currency,
+                self.company_id.currency_id,
+                self.company_id,
+                self.date,
+            )
         counterpart_amount_currency = -liquidity_amount_currency - write_off_amount_currency
         counterpart_balance = -liquidity_balance - write_off_balance
         currency_id = self.currency_id.id
@@ -434,7 +473,8 @@ class AccountPayment(models.Model):
     def _compute_partner_bank_id(self):
         ''' The default partner_bank_id will be the first available on the partner. '''
         for pay in self:
-            pay.partner_bank_id = pay.available_partner_bank_ids[:1]._origin
+            if pay.partner_bank_id not in pay.available_partner_bank_ids:
+                pay.partner_bank_id = pay.available_partner_bank_ids[:1]._origin
 
     @api.depends('partner_id', 'journal_id', 'destination_journal_id')
     def _compute_is_internal_transfer(self):
@@ -667,6 +707,126 @@ class AccountPayment(models.Model):
         """ To override in order to change the title displayed on the payment receipt report """
         self.payment_receipt_title = _('Payment Receipt')
 
+    @api.depends('partner_id', 'amount', 'date', 'payment_type')
+    def _compute_duplicate_move_ids(self):
+        """ Retrieve move ids with same partner_id, amount and date as the current payment """
+        payment_to_duplicate_move = self._fetch_duplicate_reference()
+        for payment in self:
+            # Uses payment._origin.id to handle records in edition/existing records and 0 for new records
+            payment.duplicate_move_ids = payment_to_duplicate_move.get(payment._origin.id, self.env['account.move'])
+
+    def _fetch_duplicate_reference(self, matching_states=('draft', 'posted')):
+        """ Retrieve move ids for possible duplicates of payments. Duplicates moves:
+        - Have the same partner_id, amount and date as the payment
+        - Are not reconciled
+        - Represent a credit in the same account receivable or a debit in the same account payable as the payment, or
+        - Represent a credit in outstanding receipts or debit in outstanding payments, so bank statement lines with an
+         outstanding counterpart can be matched, or
+        - Are in the suspense account
+        """
+        def build_query(move_table_and_alias, outstanding_account_ids, payments):
+            suspense_account_id = self.company_id.account_journal_suspense_account_id.id
+
+            return SQL(
+                """
+                SELECT
+                       move_line.payment_id,
+                       array_agg(DISTINCT dup_move_line.move_id) AS duplicate_move_ids
+                  FROM %(move_table_and_alias)s
+                  JOIN account_move_line AS dup_move_line
+                    ON move_line.move_id != dup_move_line.move_id
+                   AND move_line.partner_id = dup_move_line.partner_id
+                   AND move_line.company_id = dup_move_line.company_id
+                   AND move_line.date = dup_move_line.date
+                   AND dup_move_line.parent_state IN %(matching_states)s
+                   AND (
+                       move_line.account_id = dup_move_line.account_id
+                       OR dup_move_line.account_id = %(suspense_account_id)s
+                       OR dup_move_line.account_id IN %(outstanding_account_ids)s
+                   )
+                   AND NOT dup_move_line.reconciled
+                 WHERE move_line.payment_id IN %(payments)s
+                   AND (
+                       -- Case 1: a move is a credit in same account receivable or debit in same acc payable as the payment
+                       (dup_move_line.account_id NOT IN %(outstanding_account_ids)s AND move_line.balance = dup_move_line.balance)
+                       OR
+                       -- Case 2: a move is a credit in outstanding receipts or debit in outstanding payments
+                       (dup_move_line.account_id IN %(outstanding_account_ids)s AND move_line.balance = -1.0 * dup_move_line.balance)
+                   )
+                   AND (
+                       move_line.payment_type = 'inbound' AND dup_move_line.balance < 0.0
+                       OR move_line.payment_type = 'outbound' AND dup_move_line.balance > 0.0
+                   )
+              GROUP BY move_line.payment_id
+            """,
+                move_table_and_alias=move_table_and_alias,
+                matching_states=tuple(matching_states),
+                suspense_account_id=suspense_account_id,
+                outstanding_account_ids=outstanding_account_ids,
+                payments=tuple(payments),
+            )
+
+        # Does not perform unnecessary check if partner_id or amount are not set, nor if payment is posted
+        if not self.filtered(lambda p: p.partner_id and p.amount and p.state != 'posted'):
+            return {}
+        # Separate inbound and outbound payments, as their outstanding accounts differ and need to be checked separately
+        payments_inbound = self.filtered(lambda p: p.payment_type == 'inbound')
+        payments_outbound = self.filtered(lambda p: p.payment_type == 'outbound')
+        if self.journal_id:
+            inbound_outstanding_account_ids = tuple(self.journal_id._get_journal_inbound_outstanding_payment_accounts().ids)
+            outbound_outstanding_account_ids = tuple(self.journal_id._get_journal_outbound_outstanding_payment_accounts().ids)
+        else:
+            inbound_outstanding_account_ids = tuple(self.company_id.account_journal_payment_debit_account_id.ids)
+            outbound_outstanding_account_ids = tuple(self.company_id.account_journal_payment_credit_account_id.ids)
+
+        # Update tables involved in the query
+        self.env['account.move.line'].flush_model(('move_id', 'payment_id', 'balance', 'account_id', 'company_id', 'date', 'partner_id'))
+        self.env['account.payment'].flush_model(('move_id', 'payment_type'))
+
+        if not self[0].id:  # if record is under creation/edition in UI, safely inject values in the query
+            # Necessary since new record aren't searchable in the DB and record in edition aren't up to date yet
+            place_holders = {
+                'move_id': self._origin.move_id.id or 0,
+                'payment_id': self._origin.id or 0,
+                'payment_type': self.payment_type,
+                'balance': self.amount if self.payment_type == 'outbound' else -self.amount,
+                'account_id': self.destination_account_id.id,
+                'company_id': self.company_id.id or None,
+                'date': self.date or None,
+                'partner_id': self.partner_id.id,
+            }
+            # In case of null values, postgres may have issues with the column type, so we cast the columns
+            move_table_and_alias = SQL("""
+                (VALUES (%(move_id)s::int4, %(payment_id)s::int4, %(payment_type)s::varchar, %(balance)s::numeric,%(account_id)s::int4, %(company_id)s::int4, %(date)s::date, %(partner_id)s::int4))
+                AS move_line(move_id, payment_id, payment_type, balance, account_id, company_id, date, partner_id)
+            """, **place_holders)
+            outstanding_account_ids = inbound_outstanding_account_ids if self.payment_type == 'inbound' else outbound_outstanding_account_ids
+            query = build_query(move_table_and_alias, outstanding_account_ids, [0])
+
+        else:
+            move_table_and_alias = SQL("""
+                (SELECT account_move_line.*, account_payment.payment_type
+                   FROM account_move_line
+                   JOIN account_payment
+                     ON account_payment.move_id = account_move_line.move_id) AS move_line
+            """)
+            if payments_inbound and payments_outbound:
+                query_inbound = build_query(move_table_and_alias, inbound_outstanding_account_ids, payments_inbound.ids)
+                query_outbound = build_query(move_table_and_alias, outbound_outstanding_account_ids, payments_outbound.ids)
+                query = SQL(
+                    "%(query_inbound)s UNION %(query_outbound)s",
+                    query_inbound=query_inbound,
+                    query_outbound=query_outbound,
+                )
+            else:
+                outstanding_account_ids = inbound_outstanding_account_ids if payments_inbound else outbound_outstanding_account_ids
+                query = build_query(move_table_and_alias, outstanding_account_ids, self.ids)
+
+        return {
+            payment_id: self.env['account.move'].browse(duplicate_ids)
+            for payment_id, duplicate_ids in self.env.execute_query(query)
+        }
+
     # -------------------------------------------------------------------------
     # ONCHANGE METHODS
     # -------------------------------------------------------------------------
@@ -697,54 +857,64 @@ class AccountPayment(models.Model):
     # LOW-LEVEL METHODS
     # -------------------------------------------------------------------------
 
+    def default_get(self, fields_list):
+        self_ctx = self.with_context(is_payment=True)
+        defaults = super(AccountPayment, self_ctx).default_get(fields_list)
+        if 'journal_id' in fields_list and not defaults.get('journal_id'):
+            defaults['journal_id'] = self_ctx.env['account.move']._search_default_journal().id
+        return defaults
+
     def new(self, values=None, origin=None, ref=None):
-        payment = super().new(values, origin, ref)
-        if not any(values.values()) and not payment.journal_id and not payment.default_get(['journal_id']):  # might not be computed because declared by inheritance
-            payment.move_id.payment_id = payment
-            payment.move_id._compute_journal_id()
-        return payment
+        return super(AccountPayment, self.with_context(is_payment=True)).new(values, origin, ref)
 
     @api.model_create_multi
     def create(self, vals_list):
         # OVERRIDE
         write_off_line_vals_list = []
+        force_balance_vals_list = []
 
         for vals in vals_list:
 
             # Hack to add a custom write-off line.
             write_off_line_vals_list.append(vals.pop('write_off_line_vals', None))
 
+            # Hack to force a custom balance.
+            force_balance_vals_list.append(vals.pop('force_balance', None))
+
             # Force the move_type to avoid inconsistency with residual 'default_move_type' inside the context.
             vals['move_type'] = 'entry'
-            vals['journal_id'] = vals.get('journal_id') or self.move_id.with_context(is_payment=True)._search_default_journal().id
 
-        payments = super().create([{
+        payments = super(AccountPayment, self.with_context(is_payment=True)).create([{
             'name': False,
             **vals,
         } for vals in vals_list])
 
-        for i, pay in enumerate(payments):
-            write_off_line_vals = write_off_line_vals_list[i]
-
+        for i, (pay, vals) in enumerate(zip(payments, vals_list)):
             # Write payment_id on the journal entry plus the fields being stored in both models but having the same
             # name, e.g. partner_bank_id. The ORM is currently not able to perform such synchronization and make things
             # more difficult by creating related fields on the fly to handle the _inherits.
             # Then, when partner_bank_id is in vals, the key is consumed by account.payment but is never written on
             # account.move.
-            to_write = {'payment_id': pay.id}
+            to_write = {'payment_id': pay.id, 'name': False}
             for k, v in vals_list[i].items():
                 if k in self._fields and self._fields[k].store and k in pay.move_id._fields and pay.move_id._fields[k].store:
                     to_write[k] = v
 
             if 'line_ids' not in vals_list[i]:
-                to_write['line_ids'] = [(0, 0, line_vals) for line_vals in pay._prepare_move_line_default_vals(write_off_line_vals=write_off_line_vals)]
-
-            pay.move_id.write(to_write)
+                to_write['line_ids'] = [
+                    Command.create(line_vals)
+                    for line_vals in pay._prepare_move_line_default_vals(
+                        write_off_line_vals=write_off_line_vals_list[i],
+                        force_balance=force_balance_vals_list[i],
+                    )
+                ]
+            with self.env.protecting(self.env['account.move']._get_protected_vals(vals, pay)):
+                pay.move_id.write(to_write)
             self.env.add_to_compute(self.env['account.move']._fields['name'], pay.move_id)
 
         # We need to reset the cached name, since it was recomputed on the delegate account.move model
         payments.invalidate_recordset(fnames=['name'])
-        return payments
+        return payments.with_env(self.env)  # clear the context
 
     def write(self, vals):
         # OVERRIDE
@@ -763,6 +933,15 @@ class AccountPayment(models.Model):
     def _compute_display_name(self):
         for payment in self:
             payment.display_name = payment.move_id.name if payment.move_id.name != '/' else _('Draft Payment')
+
+    def copy(self, default=None):
+        if not self.is_internal_transfer:
+            default = {
+                'journal_id': self.journal_id.id,
+                'payment_method_line_id': self.payment_method_line_id.id,
+                **(default or {}),
+            }
+        return super().copy(default=default)
 
     # -------------------------------------------------------------------------
     # SYNCHRONIZATION account.payment <-> account.move
@@ -918,6 +1097,7 @@ class AccountPayment(models.Model):
 
             paired_payment = payment.copy({
                 'journal_id': payment.destination_journal_id.id,
+                'company_id': payment.company_id.id,
                 'destination_journal_id': payment.journal_id.id,
                 'payment_type': payment.payment_type == 'outbound' and 'inbound' or 'outbound',
                 'move_id': None,
@@ -961,10 +1141,15 @@ class AccountPayment(models.Model):
 
     def action_post(self):
         ''' draft -> posted '''
-        # Do not allow to post if the account is required but not trusted
+        # Do not allow posting if the account is required but not trusted
         for payment in self:
             if payment.require_partner_bank_account and not payment.partner_bank_id.allow_out_payment:
-                raise UserError(_('To record payments with %s, the recipient bank account must be manually validated. You should go on the partner bank account in order to validate it.', self.payment_method_line_id.name))
+                raise UserError(_(
+                    "To record payments with %(method_name)s, the recipient bank account must be manually validated. "
+                    "You should go on the partner bank account of %(partner)s in order to validate it.",
+                    method_name=self.payment_method_line_id.name,
+                    partner=payment.partner_id.display_name,
+                ))
 
         self.move_id._post(soft=False)
 

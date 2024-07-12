@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Events Organization',
-    'version': '1.8',
+    'version': '1.9',
     'website': 'https://www.odoo.com/app/events',
     'category': 'Marketing/Events',
     'summary': 'Trainings, Conferences, Meetings, Exhibitions, Registrations',
@@ -37,7 +37,9 @@ Key Features
         'views/res_config_settings_views.xml',
         'views/event_templates.xml',
         'views/res_partner_views.xml',
-        'views/event_tag_views.xml'
+        'views/event_tag_views.xml',
+        'views/event_question_views.xml',
+        'views/event_registration_answer_views.xml',
     ],
     'demo': [
         'data/res_users_demo.xml',
@@ -53,6 +55,7 @@ Key Features
             'event/static/src/scss/event.scss',
             'event/static/src/icon_selection_field/icon_selection_field.js',
             'event/static/src/icon_selection_field/icon_selection_field.xml',
+            'event/static/src/template_reference_field/*',
             'event/static/src/js/tours/**/*',
         ],
         'web.assets_frontend': [

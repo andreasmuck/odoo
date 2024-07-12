@@ -1,4 +1,3 @@
-import { describe, expect, test } from "@odoo/hoot";
 import {
     assertSteps,
     click,
@@ -10,12 +9,11 @@ import {
     start,
     startServer,
     step,
-} from "../../mail_test_helpers";
-import { mockService, onRpc, patchWithCleanup } from "@web/../tests/web_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
+import { MailThread } from "@mail/../tests/mock_server/mock_models/mail_thread";
+import { describe, expect, test } from "@odoo/hoot";
 import { Deferred } from "@odoo/hoot-mock";
-import { MailThread } from "../../mock_server/mock_models/mail_thread";
-import { getMockEnv } from "@web/../tests/_framework/env_test_helpers";
-import { actionService } from "@web/webclient/actions/action_service";
+import { mockService, onRpc, patchWithCleanup } from "@web/../tests/web_test_helpers";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -30,11 +28,10 @@ test("base rendering not editable", async () => {
         res_model: "res.partner",
     });
     patchWithCleanup(MailThread.prototype, {
-        _get_mail_thread_data() {
+        _thread_to_store(ids, store) {
             // mimic user without write access
-            const res = super._get_mail_thread_data(...arguments);
-            res["hasWriteAccess"] = false;
-            return res;
+            super._thread_to_store(...arguments);
+            store.add("Thread", { hasWriteAccess: false, id: ids[0], model: this._name });
         },
     });
     await start();
@@ -76,22 +73,17 @@ test("click on partner follower details", async () => {
         res_model: "res.partner",
     });
     const openFormDef = new Deferred();
-    mockService("action", () => {
-        const ogService = actionService.start(getMockEnv());
-        return {
-            ...ogService,
-            doAction(action) {
-                if (action?.res_id === partnerId) {
-                    step("do_action");
-                    expect(action.res_id).toBe(partnerId);
-                    expect(action.res_model).toBe("res.partner");
-                    expect(action.type).toBe("ir.actions.act_window");
-                    openFormDef.resolve();
-                    return;
-                }
-                return ogService.doAction.call(this, ...arguments);
-            },
-        };
+    mockService("action", {
+        doAction(action) {
+            if (action?.res_id !== partnerId) {
+                return super.doAction(...arguments);
+            }
+            step("do_action");
+            expect(action.res_id).toBe(partnerId);
+            expect(action.res_model).toBe("res.partner");
+            expect(action.type).toBe("ir.actions.act_window");
+            openFormDef.resolve();
+        },
     });
     await start();
     await openFormView("res.partner", threadId);
@@ -186,11 +178,7 @@ test("removing a follower should reload form view", async function () {
         res_id: threadId,
         res_model: "res.partner",
     });
-    onRpc((route, args) => {
-        if (route === "/web/dataset/call_kw/res.partner/web_read") {
-            step(`read ${args.args[0][0]}`);
-        }
-    });
+    onRpc("res.partner", "web_read", ({ args }) => step(`read ${args[0][0]}`));
     await start();
     await openFormView("res.partner", threadId);
     await contains(".o-mail-Followers-button");

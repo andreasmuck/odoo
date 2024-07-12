@@ -1,8 +1,7 @@
+import { EventBus } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { registry } from "@web/core/registry";
 import { Deferred } from "@web/core/utils/concurrency";
-
-let nextId = -1;
 
 export class AttachmentUploadService {
     constructor(env, services) {
@@ -15,14 +14,14 @@ export class AttachmentUploadService {
         /** @type {import("@mail/core/common/store_service").Store} */
         this.store = services["mail.store"];
         this.notificationService = services["notification"];
-        /** @type {import("@mail/core/common/attachment_service").AttachmentService} */
-        this.attachmentService = services["mail.attachment"];
 
+        this.nextId = -1;
         this.abortByAttachmentId = new Map();
         this.deferredByAttachmentId = new Map();
         this.uploadingAttachmentIds = new Set();
-        this.hookersByTmpId = new Map();
-
+        this._fileUploadBus = new EventBus();
+        /** @type {Map<number, {composer: import("models").Composer, thread: import("models").Thread}>} */
+        this.targetsByTmpId = new Map();
         this.fileUploadService.bus.addEventListener(
             "FILE_UPLOAD_ADDED",
             ({ detail: { upload } }) => {
@@ -30,26 +29,13 @@ export class AttachmentUploadService {
                 if (!this.uploadingAttachmentIds.has(tmpId)) {
                     return;
                 }
-                const hooker = this.hookersByTmpId.get(tmpId);
-                const threadId = parseInt(upload.data.get("thread_id"));
-                const threadModel = upload.data.get("thread_model");
+                const { thread, composer } = this.targetsByTmpId.get(tmpId);
                 const tmpUrl = upload.data.get("tmp_url");
-                const thread = this.store.Thread.insert({
-                    model: threadModel,
-                    id: threadId,
-                });
                 this.abortByAttachmentId.set(tmpId, upload.xhr.abort.bind(upload.xhr));
                 const attachment = this.store.Attachment.insert(
-                    this._makeAttachmentData(
-                        upload,
-                        tmpId,
-                        hooker.composer ? undefined : thread,
-                        tmpUrl
-                    )
+                    this._makeAttachmentData(upload, tmpId, composer ? undefined : thread, tmpUrl)
                 );
-                if (hooker.composer) {
-                    hooker.composer.attachments.push(attachment);
-                }
+                composer?.attachments.push(attachment);
             }
         );
         this.fileUploadService.bus.addEventListener(
@@ -59,52 +45,30 @@ export class AttachmentUploadService {
                 if (!this.uploadingAttachmentIds.has(tmpId)) {
                     return;
                 }
-                this.uploadingAttachmentIds.delete(tmpId);
-                this.abortByAttachmentId.delete(tmpId);
-                const hooker = this.hookersByTmpId.get(tmpId);
+                const def = this.deferredByAttachmentId.get(tmpId);
                 if (upload.xhr.status === 413) {
                     this.notificationService.add(_t("File too large"), { type: "danger" });
-                    this.hookersByTmpId.delete(tmpId);
+                    def.resolve();
+                    this._cleanupUploading(tmpId);
                     return;
                 }
                 if (upload.xhr.status !== 200) {
                     this.notificationService.add(_t("Server error"), { type: "danger" });
-                    this.hookersByTmpId.delete(tmpId);
+                    def.resolve();
+                    this._cleanupUploading(tmpId);
                     return;
                 }
                 const response = JSON.parse(upload.xhr.response);
                 if (response.error) {
                     this.notificationService.add(response.error, { type: "danger" });
-                    this.hookersByTmpId.delete(tmpId);
+                    def.resolve();
+                    this._cleanupUploading(tmpId);
                     return;
                 }
-                const threadId = parseInt(upload.data.get("thread_id"));
-                const threadModel = upload.data.get("thread_model");
-                const thread = this.store.Thread.get({ model: threadModel, id: threadId });
-                const attachment = this.store.Attachment.insert({
-                    ...(response?.result ?? response), // FIXME: this should be only response. HOOT tests returns wrong data {result, error}
-                    extension: upload.title.split(".").pop(),
-                    thread: hooker.composer ? undefined : thread,
-                });
-                if (hooker.composer) {
-                    const index = hooker.composer.attachments.findIndex(({ id }) => id === tmpId);
-                    if (index >= 0) {
-                        hooker.composer.attachments[index] = attachment;
-                    } else {
-                        hooker.composer.attachments.push(attachment);
-                    }
-                }
-                const def = this.deferredByAttachmentId.get(tmpId);
-                const tmpAttachment = this.store.Attachment.get(tmpId);
-                if (tmpAttachment) {
-                    this.unlink(tmpAttachment);
-                }
-                if (def) {
-                    def.resolve(attachment);
-                    this.deferredByAttachmentId.delete(tmpId);
-                }
-                hooker.onFileUploaded?.();
-                this.hookersByTmpId.delete(tmpId);
+                const { thread, composer } = this.targetsByTmpId.get(tmpId);
+                // FIXME: this should be only response. HOOT tests returns wrong data {result, error}
+                const attachmentData = response?.result ?? response;
+                this._processLoaded(thread, composer, attachmentData, tmpId, def);
             }
         );
         this.fileUploadService.bus.addEventListener(
@@ -114,38 +78,65 @@ export class AttachmentUploadService {
                 if (!this.uploadingAttachmentIds.has(tmpId)) {
                     return;
                 }
-                this.abortByAttachmentId.delete(tmpId);
-                this.deferredByAttachmentId.delete(tmpId);
-                this.uploadingAttachmentIds.delete(parseInt(tmpId));
-                this.hookersByTmpId.delete(tmpId);
+                this.deferredByAttachmentId.get(tmpId).resolve();
+                this._cleanupUploading(tmpId);
             }
         );
     }
 
-    get uploadURL() {
+    _processLoaded(thread, composer, { data }, tmpId, def) {
+        const { Attachment } = this.store.insert(data);
+        const [attachment] = Attachment;
+        if (composer) {
+            const index = composer.attachments.findIndex(({ id }) => id === tmpId);
+            if (index >= 0) {
+                composer.attachments[index] = attachment;
+            } else {
+                composer.attachments.push(attachment);
+            }
+        }
+        def.resolve(attachment);
+        this._fileUploadBus.trigger("UPLOAD", thread);
+        this._cleanupUploading(tmpId);
+    }
+
+    _cleanupUploading(tmpId) {
+        this.abortByAttachmentId.delete(tmpId);
+        this.deferredByAttachmentId.delete(tmpId);
+        this.uploadingAttachmentIds.delete(tmpId);
+        this.targetsByTmpId.delete(tmpId);
+        this.store.Attachment.get(tmpId).remove();
+    }
+
+    getUploadURL(thread) {
         return "/mail/attachment/upload";
     }
 
     async unlink(attachment) {
-        const abort = this.abortByAttachmentId.get(attachment.id);
-        const def = this.deferredByAttachmentId.get(attachment.id);
-        if (abort) {
+        if (this.uploadingAttachmentIds.has(attachment.id)) {
+            const deferred = this.deferredByAttachmentId.get(attachment.id);
+            const abort = this.abortByAttachmentId.get(attachment.id);
+            this._cleanupUploading(attachment.id);
+            deferred.resolve();
             abort();
-            def.resolve();
+            return;
         }
-        this.abortByAttachmentId.delete(attachment.id);
-        this.deferredByAttachmentId.delete(attachment.id);
-        await this.attachmentService.delete(attachment);
+        await attachment.remove();
     }
 
-    async uploadFile(hooker, file, options) {
-        const tmpId = nextId--;
-        this.hookersByTmpId.set(tmpId, hooker);
+    async upload(thread, composer, file, options) {
+        const tmpId = this.nextId--;
+        const tmpURL = URL.createObjectURL(file);
+        return this._upload(thread, composer, file, options, tmpId, tmpURL);
+    }
+
+    async _upload(thread, composer, file, options, tmpId, tmpURL) {
+        this.targetsByTmpId.set(tmpId, { composer, thread });
         this.uploadingAttachmentIds.add(tmpId);
         await this.fileUploadService
-            .upload(this.uploadURL, [file], {
+            .upload(this.getUploadURL(thread), [file], {
                 buildFormData: (formData) => {
-                    this._makeFormData(formData, file, hooker, tmpId, options);
+                    this._buildFormData(formData, tmpURL, thread, composer, tmpId, options);
                 },
             })
             .catch((e) => {
@@ -158,12 +149,27 @@ export class AttachmentUploadService {
         return uploadDoneDeferred;
     }
 
-    _makeFormData(formData, file, hooker, tmpId, options) {
-        formData.append("thread_id", hooker.thread.id);
-        formData.append("tmp_url", URL.createObjectURL(file));
-        formData.append("thread_model", hooker.thread.model);
-        formData.append("is_pending", Boolean(hooker.composer));
+    /**
+     * @param {import("models").Thread} thread
+     * @param {() => void} onFileUploaded
+     */
+    onFileUploaded(thread, onFileUploaded) {
+        this._fileUploadBus.addEventListener("UPLOAD", ({ detail }) => {
+            if (thread.eq(detail)) {
+                onFileUploaded();
+            }
+        });
+    }
+
+    _buildFormData(formData, tmpURL, thread, composer, tmpId, options) {
+        formData.append("thread_id", thread.id);
+        formData.append("tmp_url", tmpURL);
+        formData.append("thread_model", thread.model);
+        formData.append("is_pending", Boolean(composer));
         formData.append("temporary_id", tmpId);
+        if (options?.activity) {
+            formData.append("activity_id", options.activity.id);
+        }
         return formData;
     }
 
@@ -183,7 +189,7 @@ export class AttachmentUploadService {
 }
 
 export const attachmentUploadService = {
-    dependencies: ["file_upload", "mail.attachment", "mail.store", "notification"],
+    dependencies: ["file_upload", "mail.store", "notification"],
     start(env, services) {
         return new AttachmentUploadService(env, services);
     },

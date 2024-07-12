@@ -1,4 +1,3 @@
-import { describe, test } from "@odoo/hoot";
 import {
     assertSteps,
     contains,
@@ -7,14 +6,12 @@ import {
     startServer,
     step,
 } from "@mail/../tests/mail_test_helpers";
-import { Command, mockService, serverState } from "@web/../tests/web_test_helpers";
-import { rpcWithEnv } from "@mail/utils/common/misc";
-import { presenceService } from "@bus/services/presence_service";
-import { defineLivechatModels } from "./livechat_test_helpers";
 import { withGuest } from "@mail/../tests/mock_server/mail_mock_server";
+import { describe, test } from "@odoo/hoot";
+import { Command, mockService, serverState } from "@web/../tests/web_test_helpers";
 
-/** @type {ReturnType<import("@mail/utils/common/misc").rpcWithEnv>} */
-let rpc;
+import { rpc } from "@web/core/network/rpc";
+import { defineLivechatModels } from "./livechat_test_helpers";
 
 describe.current.tags("desktop");
 defineLivechatModels();
@@ -35,12 +32,8 @@ test("Notify message received out of focus", async () => {
             step(`/mail/action - ${JSON.stringify(args)}`);
         }
     });
-    mockService("presence", () => ({
-        ...presenceService.start(),
-        isOdooFocused: () => false,
-    }));
-    const env = await start();
-    rpc = rpcWithEnv(env);
+    mockService("presence", { isOdooFocused: () => false });
+    await start();
     await assertSteps([
         `/mail/action - ${JSON.stringify({
             init_messaging: {},

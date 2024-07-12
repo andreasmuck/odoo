@@ -21,7 +21,7 @@ class TestStockLandedCosts(TestStockLandedCostsCommon):
             'weight': 10,
             'volume': 1,
             'categ_id': self.stock_account_product_categ.id,
-            'type': 'product',
+            'is_storable': True,
         })
 
         product_landed_cost_2 = self.env['product.product'].create({
@@ -29,7 +29,7 @@ class TestStockLandedCosts(TestStockLandedCostsCommon):
             'weight': 20,
             'volume': 1.5,
             'categ_id': self.stock_account_product_categ.id,
-            'type': 'product',
+            'is_storable': True,
         })
 
         self.assertEqual(product_landed_cost_1.value_svl, 0)
@@ -185,7 +185,7 @@ class TestStockLandedCosts(TestStockLandedCostsCommon):
                         'product_qty': 1.0,
                         'product_uom': self.product_a.uom_po_id.id,
                         'price_unit': 100.0,
-                        'taxes_id': False,
+                        'tax_ids': False,
                     }),
                     (0, 0, {
                         'name': self.landed_cost.name,
@@ -203,8 +203,15 @@ class TestStockLandedCosts(TestStockLandedCostsCommon):
             po.order_line[1].qty_received = 1
 
             po.action_create_invoice()
-            bill = po.invoice_ids
+            bill = po.account_move_ids
             bill.invoice_date = fields.Date.today()
+
+            self.env['account.move.line'].create({
+                'move_id': bill.id,
+                'display_type': 'line_section',
+                'name': 'Great Section',
+            })
+
             bill._post()
 
             landed_cost_aml = bill.invoice_line_ids.filtered(lambda l: l.product_id == self.landed_cost)

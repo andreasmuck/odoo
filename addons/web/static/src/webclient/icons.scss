@@ -81,19 +81,17 @@ $oi-sizes: (
     background-color: $o-brand-primary;
 }
 
-// RTL adaptations.
-// ----------------------------------------------------------------------------
-.o_rtl {
-    
-    // Flip directional icons by 180 degree.
-    .oi-chevron-left,
-    .oi-chevron-right,
-    .oi-arrow-down-left,
-    .oi-arrow-down-right,
-    .oi-arrow-left,
-    .oi-arrow-right,
-    .oi-arrow-up-left,
-    .oi-arrow-up-right {
-        transform: rotate(180deg);
+.o_fa_stack {
+    display: grid;
+    align-items: baseline;
+    justify-items: center;
+
+    > * {
+        grid-column: 1/-1;
+        grid-row: 1/-1;
+    }
+
+    > :first-child {
+        font-size: 2em;
     }
 }

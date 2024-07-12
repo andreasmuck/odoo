@@ -1,10 +1,10 @@
 import { SESSION_STATE } from "@im_livechat/embed/common/livechat_service";
+import { rpc } from "@web/core/network/rpc";
 
 import { EventBus, reactive } from "@odoo/owl";
 
 import { browser } from "@web/core/browser/browser";
 import { _t } from "@web/core/l10n/translation";
-import { rpc } from "@web/core/network/rpc";
 import { registry } from "@web/core/registry";
 
 const STEP_DELAY = 500;
@@ -22,8 +22,6 @@ export class ChatBotService {
      * @param {import("@web/env").OdooEnv} env
      * @param {{
      * "im_livechat.livechat": import("@im_livechat/embed/common/livechat_service").LivechatService,
-     * "mail.message": import("@mail/core/common/message_service").MessageService,
-     * "mail.messaging": import("@mail/core/common/messaging_service").Messaging,
      * "mail.store": import("@mail/core/common/store_service").Store,
      * }} services
      */
@@ -31,9 +29,8 @@ export class ChatBotService {
         this.env = env;
         this.bus = new EventBus();
         this.livechatService = services["im_livechat.livechat"];
-        this.messageService = services["mail.message"];
         this.store = services["mail.store"];
-        services["mail.messaging"].isReady.then(async () => {
+        services["mail.store"].isReady.then(async () => {
             if (this.chatbot) {
                 await this.livechatService.thread.isLoadedDeferred;
                 // wait for messages to be fully inserted
@@ -82,16 +79,15 @@ export class ChatBotService {
         if (!this.chatbot?.completed) {
             return;
         }
-        const message = this.store.Message.insert(
-            await rpc("/chatbot/restart", {
-                channel_id: this.chatbot.thread.id,
-                chatbot_script_id: this.chatbot.script.id,
-            }),
-            { html: true }
-        );
+        const data = await rpc("/chatbot/restart", {
+            channel_id: this.chatbot.thread.id,
+            chatbot_script_id: this.chatbot.script.id,
+        });
+        const { Message: messages = [] } = this.store.insert(data, { html: true });
         if (!this.livechatService.thread) {
             return;
         }
+        const [message] = messages;
         this.livechatService.thread.messages.add(message);
         this.chatbot.restart();
         this._triggerNextStep();
@@ -161,7 +157,7 @@ export class ChatBotService {
 }
 
 export const chatBotService = {
-    dependencies: ["im_livechat.livechat", "mail.message", "mail.messaging", "mail.store"],
+    dependencies: ["im_livechat.livechat", "mail.store"],
     start(env, services) {
         return new ChatBotService(env, services);
     },

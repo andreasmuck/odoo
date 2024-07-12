@@ -25,6 +25,7 @@ class Contract(models.Model):
     active = fields.Boolean(default=True)
     structure_type_id = fields.Many2one('hr.payroll.structure.type', string="Salary Structure Type", compute="_compute_structure_type_id", readonly=False, store=True, tracking=True)
     employee_id = fields.Many2one('hr.employee', string='Employee', tracking=True, domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]", index=True)
+    active_employee = fields.Boolean(related="employee_id.active", string="Active Employee")
     department_id = fields.Many2one('hr.department', compute='_compute_employee_contract', store=True, readonly=False,
         domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]", string="Department")
     job_id = fields.Many2one('hr.job', compute='_compute_employee_contract', store=True, readonly=False,
@@ -53,7 +54,7 @@ class Contract(models.Model):
     company_country_id = fields.Many2one('res.country', string="Company country", related='company_id.country_id', readonly=True)
     country_code = fields.Char(related='company_country_id.code', depends=['company_country_id'], readonly=True)
     contract_type_id = fields.Many2one('hr.contract.type', "Contract Type", tracking=True)
-    contracts_count = fields.Integer(related='employee_id.contracts_count')
+    contracts_count = fields.Integer(related='employee_id.contracts_count', groups="hr_contract.group_hr_contract_employee_manager")
 
     """
         kanban_state:
@@ -62,9 +63,9 @@ class Contract(models.Model):
             * red = Shows a warning on the employees kanban view
     """
     kanban_state = fields.Selection([
-        ('normal', 'Grey'),
-        ('done', 'Green'),
-        ('blocked', 'Red')
+        ('normal', 'Ongoing'),
+        ('done', 'Ready'),
+        ('blocked', 'Warning')
     ], string='Kanban State', default='normal', tracking=True, copy=False)
     currency_id = fields.Many2one(string="Currency", related='company_id.currency_id', readonly=True)
     permit_no = fields.Char('Work Permit No', related="employee_id.permit_no", readonly=False)
@@ -106,7 +107,7 @@ class Contract(models.Model):
             return default_structure
 
         for contract in self:
-            if not contract.structure_type_id or contract.structure_type_id.country_id != contract.company_id.country_id:
+            if not contract.structure_type_id or (contract.structure_type_id.country_id and contract.structure_type_id.country_id != contract.company_id.country_id):
                 contract.structure_type_id = _default_salary_structure(contract.company_id.country_id.id)
 
     @api.onchange('structure_type_id')

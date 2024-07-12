@@ -7,14 +7,15 @@ import wsTourUtils from '@website_sale/js/tours/tour_utils';
 var registerSteps = [{
     content: "Open ticket modal",
     trigger: 'button.btn-primary:contains("Register")',
+    run: "click",
 }, {
     content: "Select 2 units of 'Ticket1' ticket type",
     trigger: '#o_wevent_tickets_collapse .row.o_wevent_ticket_selector[name="Ticket1"] select',
-    run: 'text 2',
+    run: "select 2",
 }, {
     content: "Select 1 unit of 'Ticket2' ticket type",
     trigger: '#o_wevent_tickets_collapse .row.o_wevent_ticket_selector[name="Ticket2"] select',
-    run: 'text 1',
+    run: "select 1",
 }, {
     content: "Click on 'Register' button",
     trigger: '#o_wevent_tickets .btn-primary:contains("Register"):not(:disabled)',
@@ -47,9 +48,12 @@ var registerSteps = [{
             document.querySelector("textarea[name*='question_answer']").textContent =
                 "Random answer from random guy";
     },
-}, {
+}, 
+{
+    trigger: "input[name*='1-name'], input[name*='2-name'], input[name*='3-name']",
+},
+{
     content: "Validate attendees details",
-    extra_trigger: "input[name*='1-name'], input[name*='2-name'], input[name*='3-name']",
     trigger: 'button[type=submit]',
     run: 'click',
 },

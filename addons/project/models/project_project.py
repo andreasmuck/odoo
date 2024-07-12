@@ -1,14 +1,14 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import ast
 import json
-from collections import defaultdict
 from datetime import timedelta
 
 from odoo import api, Command, fields, models, _, _lt
+from odoo.addons.mail.tools.discuss import Store
 from odoo.addons.rating.models import rating_data
 from odoo.exceptions import UserError
+from odoo.osv.expression import AND
 from odoo.tools import get_lang, SQL
 from .project_update import STATUS_COLOR
 from .project_task import CLOSED_STATES
@@ -17,29 +17,46 @@ from .project_task import CLOSED_STATES
 class Project(models.Model):
     _name = "project.project"
     _description = "Project"
-    _inherit = ['portal.mixin', 'mail.alias.mixin', 'rating.parent.mixin', 'mail.thread', 'mail.activity.mixin']
+    _inherit = [
+        'portal.mixin',
+        'mail.alias.mixin',
+        'rating.parent.mixin',
+        'mail.thread',
+        'mail.activity.mixin',
+        'mail.tracking.duration.mixin',
+    ]
     _order = "sequence, name, id"
     _rating_satisfaction_days = 30  # takes 30 days by default
     _systray_view = 'activity'
+    _track_duration_field = 'stage_id'
+
+    def __compute_task_count(self, count_field='task_count', additional_domain=None):
+        count_fields = {fname for fname in self._fields if 'count' in fname}
+        if count_field not in count_fields:
+            raise ValueError(f"Parameter 'count_field' can only be one of {count_fields}, got {count_field} instead.")
+        domain = [('project_id', 'in', self.ids)]
+        if additional_domain:
+            domain = AND([domain, additional_domain])
+        tasks_count_by_project = dict(self.env['project.task'].with_context(
+            active_test=any(project.active for project in self)
+        )._read_group(domain, ['project_id'], ['__count']))
+        for project in self:
+            project.update({count_field: tasks_count_by_project.get(project, 0)})
 
     def _compute_task_count(self):
-        project_and_state_counts = self.env['project.task'].with_context(
-            active_test=any(project.active for project in self)
-        )._read_group(
-            [('project_id', 'in', self.ids)],
-            ['project_id', 'state'],
-            ['__count'],
+        self.__compute_task_count()
+
+    def _compute_open_task_count(self):
+        self.__compute_task_count(
+            count_field='open_task_count',
+            additional_domain=[('state', 'in', self.env['project.task'].OPEN_STATES)],
         )
-        task_counts_per_project_id = defaultdict(lambda: {
-            'open_task_count': 0,
-            'closed_task_count': 0,
-        })
-        for project, state, count in project_and_state_counts:
-            task_counts_per_project_id[project.id]['closed_task_count' if state in CLOSED_STATES else 'open_task_count'] += count
-        for project in self:
-            open_task_count, closed_task_count = task_counts_per_project_id[project.id].values()
-            project.open_task_count = open_task_count
-            project.task_count = open_task_count + closed_task_count
+
+    def _compute_closed_task_count(self):
+        self.__compute_task_count(
+            count_field='closed_task_count',
+            additional_domain=[('state', 'in', [*CLOSED_STATES])],
+        )
 
     def _default_stage_id(self):
         # Since project stages are order by sequence first, this should fetch the one with the lowest sequence number.
@@ -55,29 +72,20 @@ class Project(models.Model):
         for project in self:
             project.is_favorite = self.env.user in project.favorite_user_ids
 
-    def _inverse_is_favorite(self):
-        favorite_projects = not_fav_projects = self.env['project.project'].sudo()
-        for project in self:
-            if self.env.user in project.favorite_user_ids:
-                favorite_projects |= project
-            else:
-                not_fav_projects |= project
-
-        # Project User has no write access for project.
-        not_fav_projects.write({'favorite_user_ids': [(4, self.env.uid)]})
-        favorite_projects.write({'favorite_user_ids': [(3, self.env.uid)]})
-
-    def _get_default_favorite_user_ids(self):
-        return [(6, 0, [self.env.uid])]
+    def _set_favorite_user_ids(self, is_favorite):
+        self_sudo = self.sudo() # To allow project users to set projects as favorite
+        if is_favorite:
+            self_sudo.favorite_user_ids = [Command.link(self.env.uid)]
+        else:
+            self_sudo.favorite_user_ids = [Command.unlink(self.env.uid)]
 
     name = fields.Char("Name", index='trigram', required=True, tracking=True, translate=True, default_export_compatible=True)
     description = fields.Html(help="Description to provide more information and context about this project")
-    active = fields.Boolean(default=True,
-        help="If the active field is set to False, it will allow you to hide the project without removing it.")
-    sequence = fields.Integer(default=10)
+    active = fields.Boolean(default=True, copy=False, export_string_translation=False)
+    sequence = fields.Integer(default=10, export_string_translation=False)
     partner_id = fields.Many2one('res.partner', string='Customer', auto_join=True, tracking=True, domain="['|', ('company_id', '=?', company_id), ('company_id', '=', False)]")
     company_id = fields.Many2one('res.company', string='Company', compute="_compute_company_id", inverse="_inverse_company_id", store=True, readonly=False)
-    currency_id = fields.Many2one('res.currency', compute="_compute_currency_id", string="Currency", readonly=True)
+    currency_id = fields.Many2one('res.currency', compute="_compute_currency_id", string="Currency", readonly=True, export_string_translation=False)
     analytic_account_id = fields.Many2one('account.analytic.account', string="Analytic Account", copy=False, ondelete='set null',
         domain="['|', ('company_id', '=', False), ('company_id', '=?', company_id)]", check_company=True,
         help="Analytic account to which this project, its tasks and its timesheets are linked. \n"
@@ -88,21 +96,20 @@ class Project(models.Model):
 
     favorite_user_ids = fields.Many2many(
         'res.users', 'project_favorite_user_rel', 'project_id', 'user_id',
-        default=_get_default_favorite_user_ids,
-        string='Members')
-    is_favorite = fields.Boolean(compute='_compute_is_favorite', inverse='_inverse_is_favorite', search='_search_is_favorite',
-        compute_sudo=True, string='Show Project on Dashboard')
-    label_tasks = fields.Char(string='Use Tasks as', default='Tasks', translate=True,
+        string='Members', export_string_translation=False, copy=False)
+    is_favorite = fields.Boolean(compute='_compute_is_favorite', readonly=False, search='_search_is_favorite',
+        compute_sudo=True, string='Show Project on Dashboard', export_string_translation=False)
+    label_tasks = fields.Char(string='Use Tasks as', default=lambda s: _('Tasks'), translate=True,
         help="Name used to refer to the tasks of your project e.g. tasks, tickets, sprints, etc...")
     tasks = fields.One2many('project.task', 'project_id', string="Task Activities")
     resource_calendar_id = fields.Many2one(
-        'resource.calendar', string='Working Time', compute='_compute_resource_calendar_id')
-    type_ids = fields.Many2many('project.task.type', 'project_task_type_rel', 'project_id', 'type_id', string='Tasks Stages')
-    task_count = fields.Integer(compute='_compute_task_count', string="Task Count")
-    open_task_count = fields.Integer(compute='_compute_task_count', string="Open Task Count")
-    task_ids = fields.One2many('project.task', 'project_id', string='Tasks',
+        'resource.calendar', string='Working Time', compute='_compute_resource_calendar_id', export_string_translation=False)
+    type_ids = fields.Many2many('project.task.type', 'project_task_type_rel', 'project_id', 'type_id', string='Tasks Stages', export_string_translation=False)
+    task_count = fields.Integer(compute='_compute_task_count', string="Task Count", export_string_translation=False)
+    open_task_count = fields.Integer(compute='_compute_open_task_count', string="Open Task Count", export_string_translation=False)
+    task_ids = fields.One2many('project.task', 'project_id', string='Tasks', export_string_translation=False,
                                domain=lambda self: [('is_closed', '=', False)])
-    color = fields.Integer(string='Color Index')
+    color = fields.Integer(string='Color Index', export_string_translation=False)
     user_id = fields.Many2one('res.users', string='Project Manager', default=lambda self: self.env.user, tracking=True)
     alias_id = fields.Many2one(help="Internal email associated with this project. Incoming emails are automatically synchronized "
                                     "with Tasks (or optionally Issues if the Issue Tracker module is installed).")
@@ -125,8 +132,8 @@ class Project(models.Model):
             "When a project is shared in edit, the portal user is redirected to the kanban and list views of the tasks. They can modify a selected number of fields on the tasks.\n\n"
             "In any case, an internal user with no project access rights can still access a task, "
             "provided that they are given the corresponding URL (and that they are part of the followers if the project is private).")
-    privacy_visibility_warning = fields.Char('Privacy Visibility Warning', compute='_compute_privacy_visibility_warning')
-    access_instruction_message = fields.Char('Access Instruction Message', compute='_compute_access_instruction_message')
+    privacy_visibility_warning = fields.Char('Privacy Visibility Warning', compute='_compute_privacy_visibility_warning', export_string_translation=False)
+    access_instruction_message = fields.Char('Access Instruction Message', compute='_compute_access_instruction_message', export_string_translation=False)
     date_start = fields.Date(string='Start Date')
     date = fields.Date(string='Expiration Date', index=True, tracking=True,
         help="Date on which this project ends. The timeframe defined on the project is taken into account when viewing its planning.")
@@ -134,13 +141,15 @@ class Project(models.Model):
     allow_milestones = fields.Boolean('Milestones', default=lambda self: self.env.user.has_group('project.group_project_milestone'))
     tag_ids = fields.Many2many('project.tags', relation='project_project_project_tags_rel', string='Tags')
     task_properties_definition = fields.PropertiesDefinition('Task Properties')
+    closed_task_count = fields.Integer(compute="_compute_closed_task_count", export_string_translation=False)
+    task_completion_percentage = fields.Float(compute="_compute_task_completion_percentage", export_string_translation=False)
 
     # Project Sharing fields
-    collaborator_ids = fields.One2many('project.collaborator', 'project_id', string='Collaborators', copy=False)
-    collaborator_count = fields.Integer('# Collaborators', compute='_compute_collaborator_count', compute_sudo=True)
+    collaborator_ids = fields.One2many('project.collaborator', 'project_id', string='Collaborators', copy=False, export_string_translation=False)
+    collaborator_count = fields.Integer('# Collaborators', compute='_compute_collaborator_count', compute_sudo=True, export_string_translation=False)
 
     # rating fields
-    rating_request_deadline = fields.Datetime(compute='_compute_rating_request_deadline', store=True)
+    rating_request_deadline = fields.Datetime(compute='_compute_rating_request_deadline', store=True, export_string_translation=False)
     rating_active = fields.Boolean('Customer Ratings', default=lambda self: self.env.user.has_group('project.group_project_rating'))
     rating_status = fields.Selection(
         [('stage', 'when reaching a given stage'),
@@ -161,8 +170,8 @@ class Project(models.Model):
     stage_id = fields.Many2one('project.project.stage', string='Stage', ondelete='restrict', groups="project.group_project_stages",
         tracking=True, index=True, copy=False, default=_default_stage_id, group_expand='_read_group_expand_full')
 
-    update_ids = fields.One2many('project.update', 'project_id')
-    last_update_id = fields.Many2one('project.update', string='Last Update', copy=False)
+    update_ids = fields.One2many('project.update', 'project_id', export_string_translation=False)
+    last_update_id = fields.Many2one('project.update', string='Last Update', copy=False, export_string_translation=False)
     last_update_status = fields.Selection(selection=[
         ('on_track', 'On Track'),
         ('at_risk', 'At Risk'),
@@ -170,16 +179,16 @@ class Project(models.Model):
         ('on_hold', 'On Hold'),
         ('to_define', 'Set Status'),
         ('done', 'Done'),
-    ], default='to_define', compute='_compute_last_update_status', store=True, readonly=False, required=True)
-    last_update_color = fields.Integer(compute='_compute_last_update_color')
-    milestone_ids = fields.One2many('project.milestone', 'project_id', copy=True)
-    milestone_count = fields.Integer(compute='_compute_milestone_count', groups='project.group_project_milestone')
-    milestone_count_reached = fields.Integer(compute='_compute_milestone_reached_count', groups='project.group_project_milestone')
-    is_milestone_exceeded = fields.Boolean(compute="_compute_is_milestone_exceeded", search='_search_is_milestone_exceeded')
-    milestone_progress = fields.Integer("Milestones Reached", compute='_compute_milestone_reached_count', groups="project.group_project_milestone")
-    next_milestone_id = fields.Many2one('project.milestone', compute='_compute_next_milestone_id', groups="project.group_project_milestone")
-    can_mark_milestone_as_done = fields.Boolean(compute='_compute_next_milestone_id', groups="project.group_project_milestone")
-    is_milestone_deadline_exceeded = fields.Boolean(compute='_compute_next_milestone_id', groups="project.group_project_milestone")
+    ], default='to_define', compute='_compute_last_update_status', store=True, readonly=False, required=True, export_string_translation=False)
+    last_update_color = fields.Integer(compute='_compute_last_update_color', export_string_translation=False)
+    milestone_ids = fields.One2many('project.milestone', 'project_id', copy=True, export_string_translation=False)
+    milestone_count = fields.Integer(compute='_compute_milestone_count', groups='project.group_project_milestone', export_string_translation=False)
+    milestone_count_reached = fields.Integer(compute='_compute_milestone_reached_count', groups='project.group_project_milestone', export_string_translation=False)
+    is_milestone_exceeded = fields.Boolean(compute="_compute_is_milestone_exceeded", search='_search_is_milestone_exceeded', export_string_translation=False)
+    milestone_progress = fields.Integer("Milestones Reached", compute='_compute_milestone_reached_count', groups="project.group_project_milestone", export_string_translation=False)
+    next_milestone_id = fields.Many2one('project.milestone', compute='_compute_next_milestone_id', groups="project.group_project_milestone", export_string_translation=False)
+    can_mark_milestone_as_done = fields.Boolean(compute='_compute_next_milestone_id', groups="project.group_project_milestone", export_string_translation=False)
+    is_milestone_deadline_exceeded = fields.Boolean(compute='_compute_next_milestone_id', groups="project.group_project_milestone", export_string_translation=False)
 
     _sql_constraints = [
         ('project_date_greater', 'check(date >= date_start)', "The project's start date must be before its end date.")
@@ -222,12 +231,14 @@ class Project(models.Model):
             project.access_warning = _(
                 "This project is currently restricted to \"Invited internal users\". The project's visibility will be changed to \"invited portal users and all internal users (public)\" in order to make it accessible to the recipients.")
 
-    @api.depends('analytic_account_id.company_id')
+    @api.depends('analytic_account_id.company_id', 'partner_id.company_id')
     def _compute_company_id(self):
         for project in self:
-            # if a new restriction is put on the account, the restriction on the project is updated.
+            # if a new restriction is put on the account or the customer, the restriction on the project is updated.
             if project.analytic_account_id.company_id:
                 project.company_id = project.analytic_account_id.company_id
+            if not project.company_id and project.partner_id.company_id:
+                project.company_id = project.partner_id.company_id
 
     @api.depends_context('company')
     @api.depends('company_id', 'company_id.resource_calendar_id')
@@ -242,7 +253,7 @@ class Project(models.Model):
         """
         for project in self:
             account = project.analytic_account_id
-            if project.partner_id and project.partner_id.company_id and project.company_id and project.company_id != project.partner_id.company_id:
+            if project.partner_id and project.partner_id.company_id and project.company_id != project.partner_id.company_id:
                 raise UserError(_('The project and the associated partner must be linked to the same company.'))
             if not account or not account.company_id:
                 continue
@@ -312,19 +323,19 @@ class Project(models.Model):
         if operator not in ['=', '!=']:
             raise ValueError(_('Invalid operator: %s', operator))
 
-        query = """
+        sql = SQL("""(
             SELECT P.id
               FROM project_project P
          LEFT JOIN project_milestone M ON P.id = M.project_id
              WHERE M.is_reached IS false
                AND P.allow_milestones IS true
                AND M.deadline <= CAST(now() AS date)
-        """
+        )""")
         if (operator == '=' and value is True) or (operator == '!=' and value is False):
-            operator_new = 'inselect'
+            operator_new = 'in'
         else:
-            operator_new = 'not inselect'
-        return [('id', operator_new, (query, ()))]
+            operator_new = 'not in'
+        return [('id', operator_new, sql)]
 
     @api.depends('collaborator_ids', 'privacy_visibility')
     def _compute_collaborator_count(self):
@@ -361,12 +372,11 @@ class Project(models.Model):
                 project.access_instruction_message = ''
 
     @api.model
-    def _map_tasks_default_values(self, task, project):
-        """ get the default value for the copied task on project duplication """
+    def _map_tasks_default_values(self, project):
+        """ get the default value for the copied task on project duplication.
+        The stage_id, name field will be set for each task in the overwritten copy_data function in project.task """
         return {
-            'stage_id': task.stage_id.id,
-            'name': task.name,
-            'state': task.state,
+            'state': '01_in_progress',
             'company_id': project.company_id.id,
             'project_id': project.id,
         }
@@ -376,18 +386,22 @@ class Project(models.Model):
         project = self.browse(new_project_id)
         new_tasks = self.env['project.task']
         # We want to copy archived task, but do not propagate an active_test context key
-        task_ids = self.env['project.task'].with_context(active_test=False).search([('project_id', '=', self.id), ('parent_id', '=', False)]).ids
+        tasks = self.env['project.task'].with_context(active_test=False).search([('project_id', '=', self.id), ('parent_id', '=', False)])
         if self.allow_task_dependencies and 'task_mapping' not in self.env.context:
             self = self.with_context(task_mapping=dict())
-        for task in self.env['project.task'].browse(task_ids):
-            # preserve task name and stage, normally altered during copy
-            defaults = self._map_tasks_default_values(task, project)
-            new_tasks |= task.copy(defaults)
+        # preserve task name and stage, normally altered during copy
+        defaults = self._map_tasks_default_values(project)
+        new_tasks = tasks.with_context(copy_project=True).copy(defaults)
         all_subtasks = new_tasks._get_all_subtasks()
+        project.write({'tasks': [Command.set(new_tasks.ids)]})
         subtasks_not_displayed = all_subtasks.filtered(
             lambda task: not task.display_in_project
         )
-        project.write({'tasks': [Command.set(new_tasks.ids)]})
+        all_subtasks.filtered(
+            lambda child: child.project_id == self
+        ).write({
+            'project_id': project.id
+        })
         subtasks_not_displayed.write({
             'display_in_project': False
         })
@@ -401,9 +415,20 @@ class Project(models.Model):
 
     def copy(self, default=None):
         default = dict(default or {})
+        # Since we dont want to copy the milestones if the original project has the feature disabled, we set the milestones to False by default.
+        default['milestone_ids'] = False
         new_projects = super(Project, self.with_context(mail_auto_subscribe_no_notify=True, mail_create_nosubscribe=True)).copy(default=default)
         if 'milestone_mapping' not in self.env.context:
             self = self.with_context(milestone_mapping={})
+        actions_per_project = dict(self.env['ir.embedded.actions']._read_group(
+            domain=[
+                ('parent_res_id', 'in', self.ids),
+                ('parent_res_model', '=', 'project.project'),
+                ('user_id', '=', False),
+            ],
+            groupby=['parent_res_id'],
+            aggregates=['id:recordset'],
+        ))
         for old_project, new_project in zip(self, new_projects):
             for follower in old_project.message_follower_ids:
                 new_project.message_subscribe(partner_ids=follower.partner_id.ids, subtype_ids=follower.subtype_ids.ids)
@@ -411,6 +436,14 @@ class Project(models.Model):
                 new_project.milestone_ids = self.milestone_ids.copy().ids
             if 'tasks' not in default:
                 old_project.map_tasks(new_project.id)
+            if not old_project.active:
+                new_project.with_context(active_test=False).tasks.active = True
+            # Copy the shared embedded actions in the new project
+            shared_embedded_actions = actions_per_project.get(old_project.id)
+            if shared_embedded_actions:
+                copy_shared_embedded_actions = shared_embedded_actions.copy({'parent_res_id': new_project.id})
+                for original_action, copied_action in zip(shared_embedded_actions, copy_shared_embedded_actions):
+                    copied_action.filter_ids = original_action.filter_ids.copy({'embedded_parent_res_id': new_project.id})
         return new_projects
 
     @api.model
@@ -437,6 +470,9 @@ class Project(models.Model):
             if stage.company_id:
                 for vals in vals_list:
                     vals['company_id'] = stage.company_id.id
+        for vals in vals_list:
+            if vals.pop('is_favorite', False):
+                vals['favorite_user_ids'] = [self.env.uid]
         projects = super().create(vals_list)
         return projects
 
@@ -459,8 +495,7 @@ class Project(models.Model):
 
         # directly compute is_favorite to dodge allow write access right
         if 'is_favorite' in vals:
-            vals.pop('is_favorite')
-            self._fields['is_favorite'].determine_inverse(self)
+            self._set_favorite_user_ids(vals.pop('is_favorite'))
 
         if 'last_update_status' in vals and vals['last_update_status'] != 'to_define':
             for project in self:
@@ -512,12 +547,11 @@ class Project(models.Model):
     def unlink(self):
         # Delete the empty related analytic account
         analytic_accounts_to_delete = self.env['account.analytic.account']
-        tasks = self.with_context(active_test=False).tasks
         for project in self:
             if project.analytic_account_id and not project.analytic_account_id.line_ids:
                 analytic_accounts_to_delete |= project.analytic_account_id
+        self.with_context(active_test=False).tasks.unlink()
         result = super(Project, self).unlink()
-        tasks.unlink()
         analytic_accounts_to_delete.unlink()
         return result
 
@@ -548,6 +582,11 @@ class Project(models.Model):
                         task.message_subscribe(partner_ids=list(partners), subtype_ids=task_subtypes)
                 self.update_ids.message_subscribe(partner_ids=partner_ids, subtype_ids=subtype_ids)
         return res
+
+    def message_unsubscribe(self, partner_ids=None):
+        super().message_unsubscribe(partner_ids=partner_ids)
+        if partner_ids:
+            self.env['project.collaborator'].search([('partner_id', 'in', partner_ids), ('project_id', 'in', self.ids)]).unlink()
 
     def _alias_get_creation_values(self):
         values = super(Project, self)._alias_get_creation_values()
@@ -634,6 +673,8 @@ class Project(models.Model):
         local_context = self.env.context | {
             'default_template_id': template.id if template else False,
             'default_email_layout_xmlid': 'mail.mail_notification_light',
+            'active_id': self.id,
+            'active_model': 'project.project',
         }
         action = self.env["ir.actions.actions"]._for_xml_id("project.project_share_wizard_action")
         if self.env.context.get('default_access_mode'):
@@ -671,7 +712,7 @@ class Project(models.Model):
         action['display_name'] = _("%(name)s's Rating", name=self.name)
         action_context = ast.literal_eval(action['context']) if action['context'] else {}
         action_context.update(self._context)
-        action_context['search_default_rating_last_30_days'] = 1
+        action_context['search_default_filter_write_date'] = 'custom_create_date_last_30_days'
         action_context.pop('group_by', None)
         action['domain'] = [('consumed', '=', True), ('parent_res_model', '=', 'project.project'), ('parent_res_id', '=', self.id)]
         if self.rating_count == 1:
@@ -864,29 +905,26 @@ class Project(models.Model):
         return False
 
     @api.model
-    def _create_analytic_account_from_values(self, values):
-        company = self.env['res.company'].browse(values.get('company_id', False))
+    def _get_values_analytic_account_batch(self, project_vals):
         project_plan_id = int(self.env['ir.config_parameter'].sudo().get_param('analytic.analytic_plan_projects'))
 
         if not project_plan_id:
             project_plan, _other_plans = self.env['account.analytic.plan']._get_all_plans()
             project_plan_id = project_plan.id
+        companies = self.env['res.company'].browse([val.get('company_id', False) for val in project_vals])
 
-        analytic_account = self.env['account.analytic.account'].create({
-            'name': values.get('name', _('Unknown Analytic Account')),
+        return [{
+            'name': val.get('name', _('Unknown Analytic Account')),
             'company_id': company.id,
-            'partner_id': values.get('partner_id'),
+            'partner_id': val.get('partner_id'),
             'plan_id': project_plan_id,
-        })
-        return analytic_account
+        } for val, company in zip(project_vals, companies)]
 
     def _create_analytic_account(self):
-        for project in self:
-            project.analytic_account_id = self._create_analytic_account_from_values({
-                'company_id': project.company_id.id,
-                'name': project.name,
-                'partner_id': project.partner_id.id
-            })
+        analytic_accounts_values = self._get_values_analytic_account_batch(self._read_format(['name', 'company_id', 'partner_id'], None))
+        analytic_accounts = self.env['account.analytic.account'].create(analytic_accounts_values)
+        for project, analytic_account in zip(self, analytic_accounts):
+            project.analytic_account_id = analytic_account
 
     def _get_projects_to_make_billable_domain(self):
         return [('partner_id', '!=', False)]
@@ -941,23 +979,26 @@ class Project(models.Model):
             return self.env['project.collaborator'].search([('project_id', '=', self.sudo().id), ('partner_id', '=', self.env.user.partner_id.id)])
         return self.env.user._is_internal()
 
-    def _add_collaborators(self, partners):
+    def _add_collaborators(self, partners, limited_access=False):
         self.ensure_one()
-        user_group_id = self.env['ir.model.data']._xmlid_to_res_id('base.group_user')
-        all_collaborators = self.collaborator_ids.partner_id
-        new_collaborators = partners.filtered(
-            lambda partner:
-                partner not in all_collaborators
-                and (not partner.user_ids or user_group_id not in partner.user_ids[0].groups_id.ids)
-        )
+        new_collaborators = self._get_new_collaborators(partners)
         if not new_collaborators:
             # Then we have nothing to do
             return
         self.write({'collaborator_ids': [
             Command.create({
                 'partner_id': collaborator.id,
+                'limited_access': limited_access,
             }) for collaborator in new_collaborators],
         })
+
+    def _get_new_collaborators(self, partners):
+        self.ensure_one()
+        return partners.filtered(
+            lambda partner:
+                partner not in self.collaborator_ids.partner_id
+                and partner.partner_share
+        )
 
     def _add_followers(self, partners):
         self.ensure_one()
@@ -978,3 +1019,23 @@ class Project(models.Model):
                     dict_partner_ids_to_subscribe_per_partner[task.partner_id] = partner_ids_to_subscribe
         for partner, tasks in dict_tasks_per_partner.items():
             tasks.message_subscribe(dict_partner_ids_to_subscribe_per_partner[partner])
+
+    def _thread_to_store(self, store: Store, request_list, **kwargs):
+        super()._thread_to_store(store, request_list=request_list, **kwargs)
+        if "followers" in request_list:
+            store.add(
+                "Thread",
+                {
+                    "collaborator_ids": [
+                        {"id": partner.id, "type": "partner"}
+                        for partner in self.collaborator_ids.partner_id
+                    ],
+                    "id": self.id,
+                    "model": "project.project",
+                },
+            )
+
+    @api.depends('task_count', 'open_task_count')
+    def _compute_task_completion_percentage(self):
+        for task in self:
+            task.task_completion_percentage = task.task_count and 1 - task.open_task_count / task.task_count

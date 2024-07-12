@@ -39,14 +39,17 @@ registry.category("web_tour.tours").add('shop_cart_recovery', {
     {
         content: "click action",
         trigger: '.o_cp_action_menus .dropdown-toggle',
+        run: "click",
     },
     {
         content: "click Send a Cart Recovery Email",
         trigger: "span:contains(/^Send a Cart Recovery Email$/)",
+        run: "click",
     },
     {
         content: "click Send email",
         trigger: '.btn[name="action_send_mail"]',
+        run: "click",
     },
     {
         content: "check the mail is sent, grab the recovery link, and logout",
@@ -66,13 +69,15 @@ registry.category("web_tour.tours").add('shop_cart_recovery', {
         },
     },
     {
+        trigger: 'p:contains("This is your current cart")',
+    },
+    {
         content: "check the page is working, click on restore",
-        extra_trigger: 'p:contains("This is your current cart")',
         trigger: 'p:contains("restore") a:contains("Click here")',
+        run: "click",
     },
     {
         content: "check product is in restored cart",
         trigger: 'div>a>h6:contains("Acoustic Bloc Screens")',
-        run: function () {},
     },
 ]});

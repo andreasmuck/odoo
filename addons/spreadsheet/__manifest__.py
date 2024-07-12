@@ -18,6 +18,7 @@
             'web/static/lib/chartjs-adapter-luxon/chartjs-adapter-luxon.js',
         ],
         'spreadsheet.o_spreadsheet': [
+            'web/static/src/views/graph/graph_model.js',
             'web/static/src/polyfills/clipboard.js',
             'spreadsheet/static/src/o_spreadsheet/o_spreadsheet.js',
             'spreadsheet/static/src/**/*.js',
@@ -36,16 +37,19 @@
             'web/static/src/scss/bootstrap_overridden.scss',
             'web/static/src/scss/pre_variables.scss',
             'web/static/lib/bootstrap/scss/_variables.scss',
+            'web/static/lib/bootstrap/scss/_variables-dark.scss',
+            'web/static/lib/bootstrap/scss/_maps.scss',
             ('include', 'web._assets_bootstrap'),
             'web/static/lib/popper/popper.js',
+            'web/static/lib/bootstrap/js/dist/util/index.js',
             'web/static/lib/bootstrap/js/dist/dom/data.js',
             'web/static/lib/bootstrap/js/dist/dom/event-handler.js',
             'web/static/lib/bootstrap/js/dist/dom/manipulator.js',
             'web/static/lib/bootstrap/js/dist/dom/selector-engine.js',
+            'web/static/lib/bootstrap/js/dist/util/config.js',
             'web/static/lib/bootstrap/js/dist/base-component.js',
             'web/static/lib/bootstrap/js/dist/collapse.js',
             'web/static/lib/bootstrap/js/dist/dropdown.js',
-
             'web/static/src/libs/fontawesome/css/font-awesome.css',
             'web/static/lib/owl/owl.js',
             'web/static/lib/luxon/luxon.js',
@@ -67,6 +71,8 @@
             'spreadsheet/static/src/o_spreadsheet/icons.xml',
             'spreadsheet/static/src/o_spreadsheet/o_spreadsheet_extended.scss',
             'spreadsheet/static/src/o_spreadsheet/migration.js',
+            'spreadsheet/static/src/helpers/odoo_functions_helpers.js',
+            'spreadsheet/static/src/pivot/pivot_helpers.js',
             'spreadsheet/static/src/o_spreadsheet/odoo_module.js',
             'spreadsheet/static/src/helpers/helpers.js',
             'spreadsheet/static/src/public_readonly_app/**/*.xml',
@@ -84,13 +90,12 @@
         "web.assets_web_dark": [
             'spreadsheet/static/src/**/*.dark.scss',
         ],
-        'web.qunit_suite_tests': [
-            ('include', 'spreadsheet.dependencies'),
+        'web.assets_unit_tests': [
             'spreadsheet/static/tests/**/*',
             ('include', 'spreadsheet.o_spreadsheet'),
             'spreadsheet/static/src/public_readonly_app/**/*.xml',
             'spreadsheet/static/src/public_readonly_app/**/*.js',
             ('remove', 'spreadsheet/static/src/public_readonly_app/main.js'),
-        ]
+        ],
     }
 }

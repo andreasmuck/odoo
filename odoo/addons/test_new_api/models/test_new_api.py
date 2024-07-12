@@ -4,6 +4,7 @@
 import datetime
 import logging
 
+from odoo.tools import SQL
 from odoo.tools.float_utils import float_round
 _logger = logging.getLogger('precompute_setter')
 
@@ -968,6 +969,7 @@ class ModelImage(models.Model):
     image_512 = fields.Image("Image 512", related='image', max_width=512, max_height=512, store=True, readonly=False)
     image_256 = fields.Image("Image 256", related='image', max_width=256, max_height=256, store=False, readonly=False)
     image_128 = fields.Image("Image 128", max_width=128, max_height=128)
+    image_64 = fields.Image("Image 64", related='image', max_width=64, max_height=64, store=True, attachment=False, readonly=False)
 
 
 class BinarySvg(models.Model):
@@ -977,7 +979,10 @@ class BinarySvg(models.Model):
     name = fields.Char(required=True)
     image_attachment = fields.Binary(attachment=True)
     image_wo_attachment = fields.Binary(attachment=False)
-
+    image_wo_attachment_related = fields.Binary(
+        "image wo attachment", related="image_wo_attachment",
+        store=True, attachment=False,
+    )
 
 class MonetaryBase(models.Model):
     _name = 'test_new_api.monetary_base'
@@ -1199,6 +1204,15 @@ class ModelActiveField(models.Model):
                                        context={'active_test': False})
     active_children_ids = fields.One2many('test_new_api.model_active_field', 'parent_id',
                                           context={'active_test': True})
+    relatives_ids = fields.Many2many(
+        'test_new_api.model_active_field',
+        'model_active_field_relatives_rel', 'source_id', 'dest_id',
+    )
+    all_relatives_ids = fields.Many2many(
+        'test_new_api.model_active_field',
+        'model_active_field_relatives_rel', 'source_id', 'dest_id',
+        context={'active_test': False},
+    )
     parent_active = fields.Boolean(string='Active Parent', related='parent_id.active', store=True)
 
 
@@ -1512,6 +1526,80 @@ class Group(models.Model):
 
     name = fields.Char()
     user_ids = fields.Many2many('test_new_api.user')
+
+
+class ModelNoAccess(models.Model):
+    _name = 'test_new_api.model.no_access'
+    _description = "Testing Utilities attrs and groups: if never access rights"
+
+    ab = fields.Integer(default=1)
+    cd = fields.Integer(default=1, groups="base.group_portal")
+
+
+class ModelAllAccess(models.Model):
+    _name = 'test_new_api.model.all_access'
+    _description = "Testing Utilities attrs and groups: if free access rights"
+
+    ab = fields.Integer(default=1)
+    cd = fields.Integer(default=1, groups="base.group_portal")
+    ef = fields.Integer(default=1)
+
+    def action_full(self):
+        return
+
+
+class ModelSomeAccess(models.Model):
+    _name = 'test_new_api.model.some_access'
+    _description = 'Testing Utilities attrs and groups'
+
+    a = fields.Integer()
+    b = fields.Integer()
+    c = fields.Integer()
+    d = fields.Integer(default=1, groups="base.group_erp_manager")
+    e = fields.Integer(default=1, groups="base.group_erp_manager,base.group_multi_company")
+    f = fields.Integer(groups="base.group_erp_manager,base.group_portal")
+    g = fields.Integer(default=1, groups="base.group_erp_manager,base.group_multi_company,!base.group_portal")
+    h = fields.Integer(default=1, groups="base.group_erp_manager,!base.group_portal")
+    i = fields.Integer(default=1, groups="!base.group_portal")
+    j = fields.Integer(default=1, groups="base.group_portal")
+    k = fields.Integer(default=1, groups="base.group_public")
+    g_id = fields.Many2one("test_new_api.model.all_access", string="m2o g_id")
+
+
+class Model2SomeAccess(models.Model):
+    _name = 'test_new_api.model2.some_access'
+    _description = 'Testing Utilities attrs and groups sub'
+
+    g_id = fields.Many2one('test_new_api.model.some_access', domain='[("a", "=", g_d)]')
+    g_d = fields.Integer(related='g_id.d')
+
+
+class Model3SomeAccess(models.Model):
+    _name = 'test_new_api.model3.some_access'
+    _description = 'Testing Utilities attrs and groups sub sub'
+
+    xxx_id = fields.Many2one('test_new_api.model2.some_access')
+    xxx_sub_id = fields.Many2one(related='xxx_id.g_id')
+
+
+class ComputedModifier(models.Model):
+    _name = 'test_new_api.computed.modifier'
+    _description = 'Test onchange and compute for automatically added invisible fields'
+
+    foo = fields.Integer()
+    sub_foo = fields.Integer(compute='_compute_sub_foo')
+    bar = fields.Integer()
+    sub_bar = fields.Integer()
+    name = fields.Char()
+
+    @api.depends('foo')
+    def _compute_sub_foo(self):
+        for record in self:
+            record.sub_foo = record.foo
+
+    @api.onchange('bar')
+    def _onchange_moderator(self):
+        self.sub_bar = self.bar
 
 
 class ComputeEditable(models.Model):
@@ -1903,6 +1991,13 @@ class EmptyChar(models.Model):
     name = fields.Char('Name')
 
 
+class EmptyInt(models.Model):
+    _name = 'test_new_api.empty_int'
+    _description = 'A model to test empty int'
+
+    number = fields.Integer('Number')
+
+
 class Team(models.Model):
     _name = 'test_new_api.team'
     _description = 'Odoo Team'
@@ -2009,6 +2104,28 @@ class CustomTableQuery(models.Model):
             GROUP BY tag.id
         """
 
+class CustomTableQuerySQL(models.Model):
+    _name = _description = "test_new_api.custom.table_query_sql"
+    _auto = False
+    _depends = {
+        'test_new_api.any.tag': ['name'],
+        'test_new_api.any.child': ['quantity'],
+    }
+
+    sum_quantity = fields.Integer()
+    tag_id = fields.Many2one('test_new_api.any.tag')
+
+    @property
+    def _table_query(self):
+        return SQL(
+            """
+            SELECT tag.id AS id, SUM(child.quantity) AS sum_quantity, tag.id AS tag_id
+            FROM test_new_api_any_child AS child
+            JOIN test_new_api_any_child_test_new_api_any_tag_rel AS rel ON rel.test_new_api_any_child_id = child.id
+            JOIN test_new_api_any_tag AS tag ON tag.id = rel.test_new_api_any_tag_id
+            GROUP BY tag.id
+            """,
+        )
 
 class ModelAutovacuumed(models.Model):
     _name = _description = 'test_new_api.autovacuumed'

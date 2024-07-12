@@ -293,6 +293,20 @@ class WebsiteForum(WebsiteProfile):
             if not qs or qs.lower() in loc:
                 yield {'loc': loc, 'lastmod': forum_post.write_date.date()}
 
+    def _prepare_question_template_vals(self, forum, post, question):
+        values = self._prepare_user_values(forum=forum, searches=post)
+        values.update({
+            'main_object': question,
+            'edit_in_backend': True,
+            'question': question,
+            'seo_microdata': question._get_microdata(),
+            'header': {'question_data': True},
+            'filters': 'question',
+            'reversed': reversed,
+            'related_posts': question._get_related_posts(),
+        })
+        return values
+
     @http.route(['''/forum/<model("forum.forum"):forum>/<model("forum.post"):question>'''],
                 type='http', auth="public", website=True, sitemap=sitemap_forum_post)
     def question(self, forum, question, **post):
@@ -311,17 +325,7 @@ class WebsiteForum(WebsiteProfile):
         if question.parent_id:
             redirect_url = "/forum/%s/%s" % (slug(forum), slug(question.parent_id))
             return request.redirect(redirect_url, 301)
-        filters = 'question'
-        values = self._prepare_user_values(forum=forum, searches=post)
-        values.update({
-            'main_object': question,
-            'edit_in_backend': True,
-            'question': question,
-            'header': {'question_data': True},
-            'filters': filters,
-            'reversed': reversed,
-        })
-
+        values = self._prepare_question_template_vals(forum, post, question)
         # increment view counter
         question.sudo()._set_viewed()
 
@@ -365,7 +369,7 @@ class WebsiteForum(WebsiteProfile):
     @http.route('/forum/<model("forum.forum"):forum>/question/<model("forum.post"):question>/close', type='http', auth="user", methods=['POST'], website=True)
     def question_close(self, forum, question, **post):
         question.close(reason_id=int(post.get('reason_id', False)))
-        return request.redirect("/forum/%s/question/%s" % (slug(forum), slug(question)))
+        return request.redirect("/forum/%s/%s" % (slug(forum), slug(question)))
 
     @http.route('/forum/<model("forum.forum"):forum>/question/<model("forum.post"):question>/reopen', type='http', auth="user", methods=['POST'], website=True)
     def question_reopen(self, forum, question, **kwarg):
@@ -594,19 +598,19 @@ class WebsiteForum(WebsiteProfile):
             url = f'/forum/{slug(forum)}/closed_posts'
         else:
             url = f'/forum/{slug(forum)}/validation_queue'
-        post.validate()
+        post._validate()
         return request.redirect(url)
 
     @http.route('/forum/<model("forum.forum"):forum>/post/<model("forum.post"):post>/refuse', type='http', auth="user", website=True)
     def post_refuse(self, forum, post, **kwargs):
-        post.refuse()
+        post._refuse()
         return self.question_ask_for_close(forum, post)
 
     @http.route('/forum/<model("forum.forum"):forum>/post/<model("forum.post"):post>/flag', type='json', auth="public", website=True)
     def post_flag(self, forum, post, **kwargs):
         if not request.session.uid:
             return {'error': 'anonymous_user'}
-        return post.flag()[0]
+        return post._flag()[0]
 
     @http.route('/forum/<model("forum.post"):post>/ask_for_mark_as_offensive', type='json', auth="user", website=True)
     def post_json_ask_for_mark_as_offensive(self, post, **kwargs):
@@ -624,7 +628,7 @@ class WebsiteForum(WebsiteProfile):
 
     @http.route('/forum/<model("forum.forum"):forum>/post/<model("forum.post"):post>/mark_as_offensive', type='http', auth="user", methods=["POST"], website=True)
     def post_mark_as_offensive(self, forum, post, **kwargs):
-        post.mark_as_offensive(reason_id=int(kwargs.get('reason_id', False)))
+        post._mark_as_offensive(reason_id=int(kwargs.get('reason_id', False)))
         if post.parent_id:
             url = f'/forum/{slug(forum)}/{post.parent_id.id}/#answer-{post.id}'
         else:

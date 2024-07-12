@@ -1,7 +1,7 @@
 import { NavigableList } from "@mail/core/common/navigable_list";
 import { cleanTerm } from "@mail/utils/common/format";
 
-import { Component, onMounted, useEffect, useRef, useState } from "@odoo/owl";
+import { Component, useEffect, useRef, useState } from "@odoo/owl";
 
 import { getActiveHotkey } from "@web/core/hotkeys/hotkey_service";
 import { _t } from "@web/core/l10n/translation";
@@ -17,9 +17,9 @@ export class ChannelSelector extends Component {
     static template = "discuss.ChannelSelector";
 
     setup() {
+        super.setup();
         this.discussCoreCommonService = useState(useService("discuss.core.common"));
         this.store = useState(useService("mail.store"));
-        this.threadService = useState(useService("mail.thread"));
         this.suggestionService = useService("mail.suggestion");
         this.orm = useService("orm");
         this.sequential = useSequential();
@@ -41,9 +41,6 @@ export class ChannelSelector extends Component {
         });
         this.inputRef = useRef("input");
         this.rootRef = useRef("root");
-        if (this.props.autofocus) {
-            onMounted(() => this.inputRef.el.focus());
-        }
         this.markEventHandled = markEventHandled;
         useEffect(
             () => {
@@ -60,6 +57,14 @@ export class ChannelSelector extends Component {
                 this.fetchSuggestions();
             },
             () => [this.state.value]
+        );
+        useEffect(
+            (focus) => {
+                if (focus && this.inputRef.el) {
+                    this.inputRef.el.focus();
+                }
+            },
+            () => [this.props.autofocus]
         );
     }
 
@@ -100,28 +105,28 @@ export class ChannelSelector extends Component {
                 return;
             }
             if (this.props.category.id === "chats") {
-                const results = await this.sequential(async () => {
+                const data = await this.sequential(async () => {
                     this.state.navigableListProps.isLoading = true;
-                    const res = await this.orm.call("res.partner", "im_search", [
+                    const data = await this.orm.call("res.partner", "im_search", [
                         cleanedTerm,
                         10,
                         this.state.selectedPartners,
                     ]);
                     this.state.navigableListProps.isLoading = false;
-                    return res;
+                    return data;
                 });
-                if (!results) {
+                if (!data) {
                     this.state.navigableListProps.options = [];
                     return;
                 }
+                const { Persona: partners = [] } = this.store.insert(data);
                 const suggestions = this.suggestionService
-                    .sortPartnerSuggestions(results, cleanedTerm)
-                    .map((data) => {
-                        this.store.Persona.insert(data);
+                    .sortPartnerSuggestions(partners, cleanedTerm)
+                    .map((suggestion) => {
                         return {
                             classList: "o-discuss-ChannelSelector-suggestion",
-                            label: data.name,
-                            partner: data,
+                            label: suggestion.name,
+                            partner: suggestion,
                         };
                     });
                 if (this.store.self.name.includes(cleanedTerm)) {
@@ -155,11 +160,12 @@ export class ChannelSelector extends Component {
                         this.store.internalUserGroupId,
                     ])
                     .then((data) => {
-                        const channel = this.discussCoreCommonService.createChannelThread(data);
-                        this.threadService.open(channel);
+                        const { Thread } = this.store.insert(data);
+                        const [channel] = Thread;
+                        channel.open();
                     });
             } else {
-                this.threadService.joinChannel(option.channelId, option.label);
+                this.store.joinChannel(option.channelId, option.label);
             }
             this.onValidate();
         }
@@ -180,10 +186,7 @@ export class ChannelSelector extends Component {
             if (selectedPartnerIds.length === 0) {
                 return;
             }
-            await this.discussCoreCommonService.startChat(
-                selectedPartnerIds,
-                this.env.inChatWindow
-            );
+            await this.discussCoreCommonService.startChat(selectedPartnerIds);
         }
         if (this.props.onValidate) {
             this.props.onValidate();

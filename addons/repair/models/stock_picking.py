@@ -5,6 +5,7 @@ import time
 
 from odoo import _, api, fields, models
 from odoo.tools import DEFAULT_SERVER_DATETIME_FORMAT
+from odoo.tools.misc import clean_context
 
 
 class PickingType(models.Model):
@@ -129,6 +130,22 @@ class PickingType(models.Model):
             action['display_name'] = self.display_name
         return action
 
+    def _get_aggregated_records_by_date(self):
+        repair_picking_types = self.filtered(lambda picking: picking.code == 'repair_operation')
+        other_picking_types = (self - repair_picking_types)
+
+        records = super(PickingType, other_picking_types)._get_aggregated_records_by_date()
+        repair_records = self.env['repair.order']._read_group(
+            [
+                ('picking_type_id', 'in', repair_picking_types.ids),
+                ('state', '=', 'confirmed')
+            ],
+            ['picking_type_id'],
+            ['schedule_date' + ':array_agg'],
+        )
+        repair_records = [(r[0], r[1], _('Confirmed')) for r in repair_records]
+        return records + repair_records
+
 
 class Picking(models.Model):
     _inherit = 'stock.picking'
@@ -149,7 +166,7 @@ class Picking(models.Model):
 
     def action_repair_return(self):
         self.ensure_one()
-        ctx = self.env.context.copy()
+        ctx = clean_context(self.env.context.copy())
         ctx.update({
             'default_location_id': self.location_dest_id.id,
             'default_picking_id': self.id,

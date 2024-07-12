@@ -4,7 +4,7 @@
 from datetime import timedelta
 
 from odoo import fields
-from odoo.addons.stock.tests.common2 import TestStockCommon
+from odoo.addons.stock.tests.common import TestStockCommon
 
 from odoo.tests import Form
 
@@ -18,8 +18,8 @@ class TestSaleMrpLeadTime(TestStockCommon):
         # Update the product_1 with type, route, Manufacturing Lead Time and Customer Lead Time
         with Form(cls.product_1) as p1:
             # `type` is invisible in the view,
-            # and it's a compute field based on `detailed_type` which is the field visible in the view
-            p1.detailed_type = 'product'
+            # and it's a compute field based on `type` which is the field visible in the view
+            p1.is_storable = True
             p1.sale_delay = 5.0
             p1.route_ids.clear()
             p1.route_ids.add(cls.warehouse_1.manufacture_pull_id.route_id)
@@ -28,8 +28,8 @@ class TestSaleMrpLeadTime(TestStockCommon):
         # Update the product_2 with type
         with Form(cls.product_2) as p2:
             # `type` is invisible in the view,
-            # and it's a compute field based on `detailed_type` which is the field visible in the view
-            p2.detailed_type = 'consu'
+            # and it's a compute field based on `type` which is the field visible in the view
+            p2.type = 'consu'
 
         # Create Bill of materials for product_1
         with Form(cls.env['mrp.bom']) as bom:

@@ -34,8 +34,9 @@ class Session(http.Controller):
             request.env.cr.rollback()
         if not http.db_filter([db]):
             raise AccessError("Database not found.")
-        pre_uid = request.session.authenticate(db, login, password)
-        if pre_uid != request.session.uid:
+        credential = {'login': login, 'password': password, 'type': 'password'}
+        auth_info = request.session.authenticate(db, credential)
+        if auth_info['uid'] != request.session.uid:
             # Crapy workaround for unupdatable Odoo Mobile App iOS (Thanks Apple :@) and Android
             # Correct behavior should be to raise AccessError("Renewing an expired session for user that has multi-factor-authentication is not supported. Please use /web/login instead.")
             return {'uid': None}
@@ -44,13 +45,13 @@ class Session(http.Controller):
         registry = odoo.modules.registry.Registry(db)
         with registry.cursor() as cr:
             env = odoo.api.Environment(cr, request.session.uid, request.session.context)
-            if not request.db and not request.session.is_explicit:
+            if not request.db:
                 # request._save_session would not update the session_token
                 # as it lacks an environment, rotating the session myself
                 http.root.session_store.rotate(request.session, env)
                 request.future_response.set_cookie(
                     'session_id', request.session.sid,
-                    max_age=http.SESSION_LIFETIME, httponly=True
+                    max_age=http.get_session_max_inactivity(env), httponly=True
                 )
             return env['ir.http'].session_info()
 
@@ -86,6 +87,6 @@ class Session(http.Controller):
         request.session.logout()
 
     @http.route('/web/session/logout', type='http', auth='none', readonly=True)
-    def logout(self, redirect='/web'):
+    def logout(self, redirect='/odoo'):
         request.session.logout(keep_db=True)
         return request.redirect(redirect, 303)

@@ -136,6 +136,11 @@ export class SearchBar extends Component {
         for (const searchItem of this.searchItemsFields) {
             this.items.push(...this.getItems(searchItem, trimmedQuery));
         }
+
+        this.items.push({
+            title: _t("Add a custom filter"),
+            isAddCustomFilterButton: true,
+        });
     }
 
     /**
@@ -283,10 +288,11 @@ export class SearchBar extends Component {
      */
     async computeSubItems(searchItem, query) {
         const field = this.fields[searchItem.fieldName];
+        const context = { ...this.env.searchModel.domainEvalContext, ...field.context };
         let domain = [];
         if (searchItem.domain) {
             try {
-                domain = new Domain(searchItem.domain).toList();
+                domain = new Domain(searchItem.domain).toList(context);
             } catch {
                 // Pass
             }
@@ -298,7 +304,7 @@ export class SearchBar extends Component {
 
         const options = await this.orm.call(relation, "name_search", [], {
             args: domain,
-            context: { ...this.env.searchModel.globalContext, ...field.context },
+            context,
             limit: 8,
             name: query.trim(),
         });
@@ -358,6 +364,10 @@ export class SearchBar extends Component {
      * @param {Object} item
      */
     selectItem(item) {
+        if (item.isAddCustomFilterButton) {
+            return this.env.searchModel.spawnCustomFilterDialog();
+        }
+
         const searchItem = this.getSearchItem(item.searchItemId);
         if (
             (searchItem.type === "field" && searchItem.fieldType === "properties") ||
@@ -400,7 +410,10 @@ export class SearchBar extends Component {
 
     onFacetLabelClick(target, facet) {
         const { domain, groupId } = facet;
-        if (!domain) {
+        if (this.env.searchModel.canOrderByCount && facet.type === "groupBy") {
+            this.env.searchModel.switchGroupBySort();
+            return;
+        } else if (!domain) {
             return;
         }
         const { resModel } = this.env.searchModel;

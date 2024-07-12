@@ -8,11 +8,12 @@
         <field name="arch" type="xml">
             <xpath expr="//field[@name='job_id']" position="after">
                 <field name="employee_skill_ids"/>
-                <field name="resume_line_ids" string="Resume" filter_domain="['|', ('resume_line_ids.name', 'ilike', self), ('resume_line_ids.description', 'ilike', self)]"/>
+                <field name="resume_line_ids" string="Resume" filter_domain="
+                    ['|',
+                        ('resume_line_ids.name', 'ilike', self),
+                        ('resume_line_ids.description', 'ilike', self),
+                    ]"/>
             </xpath>
-            <filter name="group_job" position="after">
-                <filter name="group_by_skill_ids" string="Skills" domain="[]" context="{'group_by': 'skill_ids'}"/>
-            </filter>
         </field>
     </record>
 
@@ -147,6 +148,7 @@
             <xpath expr="//page[@name='public']" position="before">
                 <page name="skills_resume" string="Resume">
                     <div class="row">
+                        <field name="employee_id" invisible="1" />
                         <div class="o_hr_skills_group o_group_resume col-lg-6 d-flex margin-left: 0.1em">
                             <!-- This field uses a custom tree view rendered by the 'resume_one2many' widget.
                                 Adding fields in the tree arch below makes them accessible to the widget
@@ -163,8 +165,7 @@
                             </field>
                         </div>
                         <div class="o_hr_skills_group o_group_skills col-lg-5 d-flex flex-column">
-                            <separator string="Skills"/>
-                            <field mode="tree" nolabel="1" name="employee_skill_ids"  widget="skills_one2many" readonly="not can_edit">
+                            <field mode="tree" name="employee_skill_ids"  widget="skills_one2many" readonly="not can_edit">
                                 <tree>
                                     <field name="skill_type_id" optional="hidden"/>
                                     <field name="skill_id"/>
@@ -328,6 +329,9 @@
         <field name="model">hr.skill.type</field>
         <field name="arch" type="xml">
             <search string="Search Skill Type">
+                <field name="name"/>
+                <field name="skill_ids"/>
+                <field name="skill_level_ids"/>
                 <field name="active" invisible="1"/>
                 <filter name="inactive" string="Archived" domain="[('active', '=', False)]"/>
                 <separator/>
@@ -341,7 +345,9 @@
         <field name="arch" type="xml">
             <tree string="Skill Types">
                 <field name="name"/>
-                <field name="skill_ids" widget="many2many_tags"/>
+                <field name="color" widget="color_picker" optional="show"/>
+                <field name="skill_ids" widget="many2many_tags" options="{'color_field': 'color'}"/>
+                <field name="skill_level_ids" widget="many2many_tags_skills"/>
             </tree>
         </field>
     </record>
@@ -372,6 +378,9 @@
                     <group string="Levels">
                     </group>
                     <field name="skill_level_ids" nolabel="1" widget="auto_save_skill_type" context="{'default_skill_type_id': id}"/>
+                    <group string="Display">
+                        <field name="color" widget="color_picker"/>
+                    </group>
                 </sheet>
             </form>
         </field>

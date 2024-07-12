@@ -67,6 +67,7 @@ class Order(models.Model):
     _description = 'Sales order'
 
     line_ids = fields.One2many('test_read_group.order.line', 'order_id')
+    date = fields.Date()
 
 
 class OrderLine(models.Model):
@@ -75,6 +76,7 @@ class OrderLine(models.Model):
 
     order_id = fields.Many2one('test_read_group.order', ondelete='cascade')
     value = fields.Integer()
+    date = fields.Date(related='order_id.date')
 
 
 class User(models.Model):
@@ -103,6 +105,7 @@ class Task(models.Model):
         'user_id',
         string="Collaborators",
     )
+    date = fields.Date()
 
 
 class Partner(models.Model):
@@ -121,6 +124,10 @@ class RelatedBar(models.Model):
     foo_names_sudo = fields.Char('name_one2many_related', related='foo_ids.name')
 
     base_ids = fields.Many2many('test_read_group.related_base')
+    computed_base_ids = fields.Many2many('test_read_group.related_base', compute='_compute_computed_base_ids')
+
+    def _compute_computed_base_ids(self):
+        self.computed_base_ids = False
 
 
 class RelatedFoo(models.Model):

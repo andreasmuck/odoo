@@ -19,7 +19,7 @@ class TestStockValuationCommon(TransactionCase):
         cls.uom_unit = cls.env.ref('uom.product_uom_unit')
         cls.product1 = cls.env['product.product'].create({
             'name': 'product1',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': cls.env.ref('product.product_category_all').id,
         })
         cls.picking_type_in = cls.env.ref('stock.picking_type_in')
@@ -128,7 +128,7 @@ class TestStockValuationCommon(TransactionCase):
             .with_context(active_ids=[move.picking_id.id], active_id=move.picking_id.id, active_model='stock.picking'))
         stock_return_picking = stock_return_picking.save()
         stock_return_picking.product_return_moves.quantity = quantity_to_return
-        stock_return_picking_action = stock_return_picking.create_returns()
+        stock_return_picking_action = stock_return_picking.action_create_returns()
         return_pick = self.env['stock.picking'].browse(stock_return_picking_action['res_id'])
         return_pick.move_ids[0].move_line_ids[0].quantity = quantity_to_return
         return_pick.move_ids[0].picked = True
@@ -274,11 +274,11 @@ class TestStockValuationStandard(TestStockValuationCommon):
     def test_empty_stock_move_valorisation(self):
         product1 = self.env['product.product'].create({
             'name': 'p1',
-            'type': 'product',
+            'is_storable': True,
         })
         product2 = self.env['product.product'].create({
             'name': 'p2',
-            'type': 'product',
+            'is_storable': True,
         })
         picking = self.env['stock.picking'].create({
             'picking_type_id': self.picking_type_in.id,
@@ -987,9 +987,9 @@ class TestStockValuationChangeValuation(TestStockValuationCommon):
             'property_stock_journal': self.stock_journal.id,
         })
 
-        # Try to change the product category with a `default_detailed_type` key in the context and
+        # Try to change the product category with a `default_type` key in the context and
         # check it doesn't break the account move generation.
-        self.product1.with_context(default_detailed_type='product').categ_id = cat2
+        self.product1.with_context(default_is_storable=True).categ_id = cat2
         self.assertEqual(self.product1.categ_id, cat2)
 
         self.assertEqual(self.product1.value_svl, 100)
@@ -1057,8 +1057,8 @@ class TestStockValuationChangeValuation(TestStockValuationCommon):
 @tagged('post_install', '-at_install')
 class TestAngloSaxonAccounting(AccountTestInvoicingCommon, TestStockValuationCommon):
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
         cls.env.ref('base.EUR').active = True
         cls.company_data['company'].anglo_saxon_accounting = True
         cls.stock_location = cls.env['stock.location'].create({
@@ -1124,7 +1124,7 @@ class TestAngloSaxonAccounting(AccountTestInvoicingCommon, TestStockValuationCom
         cls.uom_unit = cls.env.ref('uom.product_uom_unit')
         cls.product1 = cls.env['product.product'].create({
             'name': 'product1',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': cls.env.ref('product.product_category_all').id,
             'property_account_expense_id': cls.expense_account.id,
         })
@@ -1193,7 +1193,7 @@ class TestAngloSaxonAccounting(AccountTestInvoicingCommon, TestStockValuationCom
             .with_context(active_ids=[move.picking_id.id], active_id=move.picking_id.id, active_model='stock.picking'))
         stock_return_picking = stock_return_picking.save()
         stock_return_picking.product_return_moves.quantity = quantity_to_return
-        stock_return_picking_action = stock_return_picking.create_returns()
+        stock_return_picking_action = stock_return_picking.action_create_returns()
         return_pick = self.env['stock.picking'].browse(stock_return_picking_action['res_id'])
         return_pick.move_ids[0].move_line_ids[0].quantity = quantity_to_return
         return_pick.move_ids.picked = True
@@ -1319,7 +1319,7 @@ class TestAngloSaxonAccounting(AccountTestInvoicingCommon, TestStockValuationCom
         stock_return_picking = stock_return_picking.save()
         stock_return_picking.product_return_moves.quantity = 2
         stock_return_picking.location_id = self.stock_location
-        stock_return_picking_action = stock_return_picking.create_returns()
+        stock_return_picking_action = stock_return_picking.action_create_returns()
         return_pick = self.env['stock.picking'].browse(stock_return_picking_action['res_id'])
         return_pick.move_ids[0].move_line_ids[0].quantity = 2
         return_pick.move_ids[0].picked = True

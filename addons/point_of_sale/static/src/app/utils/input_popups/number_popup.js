@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { _t } from "@web/core/l10n/translation";
 import { useBus, useService } from "@web/core/utils/hooks";
 import { Component, useState } from "@odoo/owl";
@@ -37,7 +35,7 @@ export class NumberPopup extends Component {
         });
     }
     confirm() {
-        this.props.getPayload(this.state.buffer);
+        this.props.getPayload(this.state.buffer || "0");
         this.props.close();
     }
 }

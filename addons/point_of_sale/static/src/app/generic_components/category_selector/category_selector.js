@@ -1,6 +1,5 @@
-/** @odoo-module */
-
 import { Component } from "@odoo/owl";
+import { useService } from "@web/core/utils/hooks";
 
 /**
  * @typedef {Object} Category
@@ -27,9 +26,14 @@ export class CategorySelector extends Component {
             },
         },
         class: { type: String, optional: true },
+        style: { type: String, optional: true },
         onClick: { type: Function },
     };
     static defaultProps = {
         class: "",
+        style: "",
     };
+    setup() {
+        this.ui = useService("ui");
+    }
 }

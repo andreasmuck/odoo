@@ -1,4 +1,5 @@
-/** @odoo-module */
+import { formatDateTime, parseDateTime } from "@web/core/l10n/dates";
+
 /*
  * comes from o_spreadsheet.js
  * https://stackoverflow.com/questions/105034/create-guid-uuid-in-javascript
@@ -48,10 +49,10 @@ export function constructFullProductName(line) {
         }
 
         attributeString = attributeString.slice(0, -2);
-        attributeString = `(${attributeString})`;
+        attributeString = ` (${attributeString})`;
     }
 
-    return `${line?.product_id?.display_name} ${attributeString}`;
+    return `${line?.product_id?.display_name}${attributeString}`;
 }
 /**
  * Returns a random 5 digits alphanumeric code
@@ -120,51 +121,13 @@ export function loadAllImages(el) {
     return Promise.all(Array.from(images).map((img) => loadImage(img.src)));
 }
 
-function match(pattern, text) {
-    const rows = pattern.length + 1;
-    const cols = text.length + 1;
-    const scoreMatrix = [];
-
-    for (let i = 0; i < rows; i++) {
-        scoreMatrix[i] = new Array(cols).fill(0);
-    }
-
-    let maxScore = 0;
-
-    // Calculate scores using Smith-Waterman algorithm
-    for (let i = 1; i < rows; i++) {
-        for (let j = 1; j < cols; j++) {
-            const match = pattern[i - 1] === text[j - 1] ? 1 : -1;
-            scoreMatrix[i][j] = Math.max(
-                0,
-                scoreMatrix[i - 1][j] - 1,
-                scoreMatrix[i][j - 1] - 1,
-                scoreMatrix[i - 1][j - 1] + match
-            );
-
-            if (scoreMatrix[i][j] > maxScore) {
-                maxScore = scoreMatrix[i][j];
-            }
-        }
-    }
-
-    return maxScore / rows;
+export function getUTCString(datetimeObj) {
+    return formatDateTime(datetimeObj, {
+        format: "yyyy-MM-dd HH:mm:ss",
+        tz: "utc",
+    });
 }
 
-export function fuzzyLookup(pattern, list, fn) {
-    const results = [];
-    list.forEach((data) => {
-        const text = fn(data);
-        let score = match(pattern, text);
-        // Phrase Match Bonus:
-        if (text.includes(pattern)) {
-            score += 0.3;
-        }
-        if (score > 0.3) {
-            results.push({ score, elem: data });
-        }
-    });
-    // we want better matches first
-    results.sort((a, b) => b.score - a.score);
-    return results.map((r) => r.elem);
+export function parseUTCString(utcStr) {
+    return parseDateTime(utcStr, { format: "yyyy-MM-dd HH:mm:ss", tz: "utc" });
 }

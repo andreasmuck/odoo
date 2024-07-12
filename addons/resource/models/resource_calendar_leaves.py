@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from datetime import datetime, time
@@ -55,8 +54,11 @@ class ResourceCalendarLeaves(models.Model):
     def _compute_date_to(self):
         user_tz = timezone(self.env.user.tz or self._context.get('tz') or self.company_id.resource_calendar_id.tz or 'UTC')
         for leave in self:
-            date_to_tz = user_tz.localize(leave.date_from) + relativedelta(hour=23, minute=59, second=59)
-            leave.date_to = date_to_tz.astimezone(utc).replace(tzinfo=None)
+            if not leave.date_from or (leave.date_to and leave.date_to > leave.date_from):
+                continue
+            local_date_from = utc.localize(leave.date_from).astimezone(user_tz)
+            local_date_to = local_date_from + relativedelta(hour=23, minute=59, second=59)
+            leave.date_to = local_date_to.astimezone(utc).replace(tzinfo=None)
 
     @api.constrains('date_from', 'date_to')
     def check_dates(self):

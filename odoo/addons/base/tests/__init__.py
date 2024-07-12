@@ -15,6 +15,7 @@ from . import test_expression
 from . import test_float
 from . import test_format_address_mixin
 from . import test_func
+from . import test_groups
 from . import test_http_case
 from . import test_i18n
 from . import test_image
@@ -25,10 +26,12 @@ from . import test_ir_cron
 from . import test_ir_filters
 from . import test_ir_http
 from . import test_ir_mail_server
+from . import test_ir_mail_server_smtpd
 from . import test_ir_model
 from . import test_ir_module
 from . import test_ir_sequence
 from . import test_ir_sequence_date_range
+from . import test_ir_embedded_actions
 from . import test_ir_default
 from . import test_mail
 from . import test_menu
@@ -47,14 +50,17 @@ from . import test_search
 from . import test_split_table
 from . import test_sql
 from . import test_translate
+from . import test_tz
 # from . import test_uninstall  # loop
 from . import test_user_has_group
 from . import test_views
 from . import test_xmlrpc
 from . import test_res_company
 from . import test_res_currency
+from . import test_res_country
 from . import test_res_partner
 from . import test_res_partner_bank
+from . import test_res_partner_merge
 from . import test_res_users
 from . import test_reports
 from . import test_test_retry
@@ -69,3 +75,4 @@ from . import test_neutralize
 from . import test_config_parameter
 from . import test_ir_module_category
 from . import test_configmanager
+from . import test_num2words_ar

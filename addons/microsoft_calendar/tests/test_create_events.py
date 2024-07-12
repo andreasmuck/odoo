@@ -4,6 +4,7 @@ from freezegun import freeze_time
 
 from odoo import Command
 
+from odoo.addons.mail.tests.common import MailCommon
 from odoo.addons.microsoft_calendar.utils.microsoft_calendar import MicrosoftCalendarService
 from odoo.addons.microsoft_calendar.utils.microsoft_event import MicrosoftEvent
 from odoo.addons.microsoft_calendar.models.res_users import User
@@ -489,3 +490,70 @@ class TestCreateEvents(TestCommon):
         new_records = (records - existing_records)
         self.assertEqual(len(new_records), 1)
         self.assert_odoo_event(new_records, expected_event)
+
+    def test_create_event_with_default_and_undefined_sensitivity(self):
+        """ Check if microsoft events are created in Odoo when 'None' sensitivity setting is defined and also when it is not. """
+        # Sync events from Microsoft to Odoo after adding the sensitivity (privacy) property.
+        self.simple_event_from_outlook_organizer.pop('sensitivity')
+        undefined_privacy_event = {'id': 100, 'iCalUId': 2, **self.simple_event_from_outlook_organizer}
+        default_privacy_event = {'id': 200, 'iCalUId': 4, 'sensitivity': None, **self.simple_event_from_outlook_organizer}
+        self.env['calendar.event']._sync_microsoft2odoo(MicrosoftEvent([undefined_privacy_event, default_privacy_event]))
+
+        # Ensure that synced events have the correct privacy field in Odoo.
+        undefined_privacy_odoo_event = self.env['calendar.event'].search([('microsoft_id', '=', 100)])
+        default_privacy_odoo_event = self.env['calendar.event'].search([('microsoft_id', '=', 200)])
+        self.assertFalse(undefined_privacy_odoo_event.privacy, "Event with undefined privacy must have False value in privacy field.")
+        self.assertFalse(default_privacy_odoo_event.privacy, "Event with custom privacy must have False value in privacy field.")
+
+
+class TestSyncOdoo2MicrosoftMail(TestCommon, MailCommon):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.users = cls.env['res.users'].create({
+            'name': f'user{n}',
+            'login': f'user{n}',
+            'email': f'user{n}@odoo.com',
+            'microsoft_calendar_rtoken': f'abc{n}',
+            'microsoft_calendar_token': f'abc{n}',
+            'microsoft_calendar_token_validity': datetime(9999, 12, 31),
+            'res_users_settings_ids': [(0, 0, {
+                'microsoft_synchronization_stopped': False,
+                'microsoft_calendar_sync_token': f'{n}_sync_token',
+            })]
+        } for n in range(1, 3)).user_ids
+
+    @freeze_time("2020-01-01")
+    @patch.object(User, '_get_microsoft_calendar_token', lambda user: user.microsoft_calendar_token)
+    def test_event_creation_for_user(self):
+        """Check that either emails or synchronization happens correctly when creating an event for another user."""
+        user_root = self.env.ref('base.user_root')
+        self.assertFalse(user_root.microsoft_calendar_token)
+        partner = self.env['res.partner'].create({'name': 'Jean-Luc', 'email': 'jean-luc@opoo.com'})
+        event_values = {
+            'name': 'Event',
+            'need_sync_m': True,
+            'start': datetime(2020, 1, 15, 8, 0),
+            'stop': datetime(2020, 1, 15, 18, 0),
+        }
+        for create_user, organizer, expect_mail in [
+            (user_root, self.users[0], True), (user_root, None, True),
+                (self.users[0], None, False), (self.users[0], self.users[1], False)]:
+            with self.subTest(create_uid=create_user.name if create_user else None, user_id=organizer.name if organizer else None):
+                with self.mock_mail_gateway(), patch.object(MicrosoftCalendarService, 'insert') as mock_insert:
+                    mock_insert.return_value = ('1', '1')
+                    self.env['calendar.event'].with_user(create_user).create({
+                        **event_values,
+                        'partner_ids': [(4, organizer.partner_id.id), (4, partner.id)] if organizer else [(4, partner.id)],
+                        'user_id': organizer.id if organizer else False,
+                    })
+                    self.env.cr.postcommit.run()
+                if not expect_mail:
+                    self.assertNotSentEmail()
+                    mock_insert.assert_called_once()
+                    self.assert_dict_equal(mock_insert.call_args[0][0]['organizer'], {
+                        'emailAddress': {'address': organizer.email if organizer else '', 'name': organizer.name if organizer else ''}
+                    })
+                else:
+                    mock_insert.assert_not_called()
+                    self.assertMailMail(partner, 'sent', author=(organizer or create_user).partner_id)

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+from io import BytesIO
 
 import psutil
 import werkzeug.serving
@@ -56,7 +57,8 @@ from odoo.modules import get_modules
 from odoo.modules.registry import Registry
 from odoo.release import nt_service_name
 from odoo.tools import config
-from odoo.tools import stripped_sys_argv, dumpstacks, log_ormcache_stats
+from odoo.tools.cache import log_ormcache_stats
+from odoo.tools.misc import stripped_sys_argv, dumpstacks
 
 _logger = logging.getLogger(__name__)
 
@@ -144,6 +146,16 @@ class RequestHandler(werkzeug.serving.WSGIRequestHandler):
             self.close_connection = True
             return
         super().send_header(keyword, value)
+
+    def end_headers(self, *a, **kw):
+        super().end_headers(*a, **kw)
+        # At this point, Werkzeug assumes the connection is closed and will discard any incoming
+        # data. In the case of WebSocket connections, data should not be discarded. Replace the
+        # rfile/wfile of this handler to prevent any further action (compatibility with werkzeug >= 2.3.x).
+        # See: https://github.com/pallets/werkzeug/blob/2.3.x/src/werkzeug/serving.py#L334
+        if self.headers.get('Upgrade') == 'websocket':
+            self.rfile = BytesIO()
+            self.wfile = BytesIO()
 
 class ThreadedWSGIServerReloadable(LoggingBaseWSGIServerMixIn, werkzeug.serving.ThreadedWSGIServer):
     """ werkzeug Threaded WSGI Server patched to allow reusing a listen socket
@@ -247,7 +259,7 @@ class FSWatcherWatchdog(FSWatcherBase):
     def dispatch(self, event):
         if isinstance(event, (FileCreatedEvent, FileModifiedEvent, FileMovedEvent)):
             if not event.is_directory:
-                path = getattr(event, 'dest_path', event.src_path)
+                path = getattr(event, 'dest_path', '') or event.src_path
                 self.handle_file(path)
 
     def start(self):
@@ -557,9 +569,9 @@ class ThreadedServer(CommonServer):
         The first SIGINT or SIGTERM signal will initiate a graceful shutdown while
         a second one if any will force an immediate exit.
         """
-        self.start(stop=stop)
-
-        rc = preload_registries(preload)
+        with Registry._lock:
+            self.start(stop=stop)
+            rc = preload_registries(preload)
 
         if stop:
             if config['test_enable']:

@@ -2,21 +2,28 @@
 
 import logging
 from odoo import _
-from odoo.exceptions import AccessError, MissingError
+from odoo.exceptions import UserError, MissingError, AccessError
 from odoo.http import Controller, request, route
 from .utils import clean_action
 from werkzeug.exceptions import BadRequest
 
 
-_logger = logging.getLogger(__name__)
+class MissingActionError(UserError):
+    """Missing Action.
+
+    .. admonition:: Example
+
+        When you try to read on a non existing record.
+    """
 
 
 class Action(Controller):
 
     @route('/web/action/load', type='json', auth='user', readonly=True)
-    def load(self, action_id, additional_context=None):
+    def load(self, action_id, context=None):
+        if context:
+            request.update_context(**context)
         Actions = request.env['ir.actions.actions']
-        value = False
         try:
             action_id = int(action_id)
         except ValueError:
@@ -29,19 +36,19 @@ class Action(Controller):
                     assert action
                 action_id = action.id
             except Exception as exc:
-                raise MissingError(_("The action %r does not exist.", action_id)) from exc
+                raise MissingActionError(_("The action “%s” does not exist.", action_id)) from exc
 
         base_action = Actions.browse([action_id]).sudo().read(['type'])
-        if base_action:
-            action_type = base_action[0]['type']
-            if action_type == 'ir.actions.report':
-                request.update_context(bin_size=True)
-            if additional_context:
-                request.update_context(**additional_context)
-            action = request.env[action_type].sudo().browse([action_id]).read()
-            if action:
-                value = clean_action(action[0], env=request.env)
-        return value
+        if not base_action:
+            raise MissingActionError(_("The action “%s” does not exist", action_id))
+        action_type = base_action[0]['type']
+        if action_type == 'ir.actions.report':
+            request.update_context(bin_size=True)
+        if action_type == 'ir.actions.act_window':
+            result = request.env[action_type].sudo().browse([action_id])._get_action_dict()
+            return clean_action(result, env=request.env) if result else False
+        result = request.env[action_type].sudo().browse([action_id]).read()
+        return clean_action(result[0], env=request.env) if result else False
 
     @route('/web/action/run', type='json', auth="user")
     def run(self, action_id, context=None):
@@ -65,12 +72,16 @@ class Action(Controller):
                         else:
                             display_names.append({'error': 'A server action must have a path to be restored'})
                             continue
+                    if not act.get('display_name'):
+                        act['display_name'] = act['name']
                     # client actions don't have multi-record views, so we can't go further to the next controller
                     if act['type'] == 'ir.actions.client' and idx + 1 < len(actions) and action.get('action') == actions[idx + 1].get('action'):
                         continue
                     if record_id:
                         # some actions may not have a res_model (e.g. a client action)
-                        if act['res_model']:
+                        if record_id == 'new':
+                            display_names.append(_("New"))
+                        elif act['res_model']:
                             display_names.append(request.env[act['res_model']].browse(record_id).display_name)
                         else:
                             display_names.append(act['display_name'])
@@ -91,6 +102,6 @@ class Action(Controller):
                         raise BadRequest('Actions with a model should also have a resId')
                 else:
                     raise BadRequest('Actions should have either an action (id or path) or a model')
-            except (MissingError, AccessError) as exc:
+            except (MissingActionError, MissingError, AccessError) as exc:
                 display_names.append({'error': str(exc)})
         return display_names

@@ -35,11 +35,11 @@ class StockQuant(TransactionCase):
 
         cls.product = cls.env['product.product'].create({
             'name': 'Product A',
-            'type': 'product',
+            'is_storable': True,
         })
         cls.product_lot = cls.env['product.product'].create({
             'name': 'Product A',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'lot',
         })
         cls.product_consu = cls.env['product.product'].create({
@@ -48,7 +48,7 @@ class StockQuant(TransactionCase):
         })
         cls.product_serial = cls.env['product.product'].create({
             'name': 'Product A',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'serial',
         })
         cls.stock_location = cls.env['stock.location'].create({
@@ -236,7 +236,7 @@ class StockQuant(TransactionCase):
         stock_sub_location = self.stock_location.child_ids[0]
         product2 = self.env['product.product'].create({
             'name': 'Product B',
-            'type': 'product',
+            'is_storable': True,
         })
         self.env['stock.quant']._update_available_quantity(self.product, self.stock_location, 1.0)
         self.env['stock.quant']._update_available_quantity(self.product, stock_sub_location, 1.0)
@@ -843,7 +843,7 @@ class StockQuant(TransactionCase):
         wizard_form = Form(self.env['stock.return.picking'].with_context(active_ids=receipt01.ids, active_id=receipt01.ids[0], active_model='stock.picking'))
         wizard = wizard_form.save()
         wizard.product_return_moves.quantity = 1.0
-        stock_return_picking_action = wizard.create_returns()
+        stock_return_picking_action = wizard.action_create_returns()
 
         return_pick = self.env['stock.picking'].browse(stock_return_picking_action['res_id'])
         return_pick.move_ids.move_line_ids.quantity = 1.0
@@ -884,7 +884,7 @@ class StockQuant(TransactionCase):
         """
         product = self.env['product.product'].create({
             'name': 'Product',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'serial',
         })
         sn1 = self.env['stock.lot'].create({
@@ -932,7 +932,10 @@ class StockQuant(TransactionCase):
         # testing assigning a package to a quant
         relocate_wizard = _get_relocate_wizard(quant_a)
         relocate_wizard.dest_package_id = package_02
-        relocate_wizard.save().action_relocate_quants()
+        action = relocate_wizard.save().action_relocate_quants()
+        self.assertEqual(action['type'], 'ir.actions.act_window')
+        self.assertEqual(action['res_model'], 'stock.quant')
+
         new_quant_a = self.env['stock.quant'].search([('product_id', '=', self.product.id), ('quantity', '=', 10)])
         self.assertEqual(new_quant_a.package_id, package_02)
 
@@ -948,12 +951,12 @@ class StockQuant(TransactionCase):
         # testing moving multiple packed quants to a new location with incomplete package
         product_b = self.env['product.product'].create({
             'name': 'product B',
-            'type': 'product'
+            'is_storable': True
         })
         self.env['stock.quant']._update_available_quantity(product_b, self.stock_location, 10, package_id=package_01)
         product_c = self.env['product.product'].create({
             'name': 'product C',
-            'type': 'product'
+            'is_storable': True
         })
         self.env['stock.quant']._update_available_quantity(product_c, self.stock_location, 10, package_id=package_01)
 
@@ -990,12 +993,12 @@ class StockQuant(TransactionCase):
         })
         product_a_company_B = self.env['product.product'].create({
             'name': 'product A company B',
-            'type': 'product',
+            'is_storable': True,
             'company_id': company_B.id
         })
         product_b_company_B = self.env['product.product'].create({
             'name': 'product b company B',
-            'type': 'product',
+            'is_storable': True,
             'company_id': company_B.id
         })
         self.env['stock.quant']._update_available_quantity(product_a_company_B, location_company_B, 10, package_id=package_03)
@@ -1024,7 +1027,7 @@ class StockQuant(TransactionCase):
         """ With the changes implemented in _get_inventory_move_values(), we want to make sure that it correctly
         writes the package and destination package for inventory adjustments in _apply_inventory(). """
 
-        dummy_product = self.env['product.product'].create({'name': 'dummy product', 'type': 'product'})
+        dummy_product = self.env['product.product'].create({'name': 'dummy product', 'is_storable': True})
         dummy_package = self.env['stock.quant.package'].create({'name': 'dummy package'})
         dummy_quant = self.env['stock.quant'].create({
             'product_id': dummy_product.id,
@@ -1049,6 +1052,267 @@ class StockQuant(TransactionCase):
         self.assertEqual(destruction_move_line.location_dest_id.id, creation_move_line.location_id.id)
         self.assertEqual(dummy_quant.quantity, 0)
 
+    def test_quant_gs1_barcode(self):
+        """ Checks quant's methods to generate barcode works as expected and don't
+        generate barcodes longer than the given limit and use the given separator.
+        """
+        # Initial config.
+        self.env['ir.config_parameter'].set_param('stock.agg_barcode_max_length', 400)
+        self.env['ir.config_parameter'].set_param('stock.barcode_separator', ';')
+        # Create some products with a valid EAN-13 and LN/SN for tracked ones.
+        product_ean13 = self.env['product.product'].create({
+            'name': 'Product Test EAN13',
+            'is_storable': True,
+            'barcode': '0100011101014',
+        })
+        product_serial_ean13 = self.env['product.product'].create({
+            'name': 'Product Test EAN13 - Tracked by SN',
+            'is_storable': True,
+            'barcode': '0200022202028',
+            'tracking': 'serial',
+        })
+        product_lot_ean13 = self.env['product.product'].create({
+            'name': 'Product Test EAN13 - Tracked by Lots',
+            'is_storable': True,
+            'barcode': '0300033303032',
+            'tracking': 'lot',
+        })
+
+        serial_numbers = self.env['stock.lot'].create([{
+            'product_id': product_serial_ean13.id,
+            'name': f'tsn-00{i}',
+        } for i in range(8)])
+
+        lot_numbers = self.env['stock.lot'].create([{
+            'product_id': product_lot_ean13.id,
+            'name': f'lot-00{i}',
+        } for i in range(2)])
+
+        # Add some quants for those products.
+        common_serial_vals = {
+            'product_id': product_serial_ean13.id,
+            'location_id': self.stock_location.id,
+            'inventory_quantity': 1,
+        }
+        serial_vals = [{
+            **common_serial_vals,
+            'lot_id': serial_numbers[i].id,
+        } for i in range(8)]
+        quants = self.env['stock.quant'].create(serial_vals + [{
+            'product_id': product_ean13.id,
+            'location_id': self.stock_location.id,
+            'inventory_quantity': 123,
+        }, {
+            'product_id': product_lot_ean13.id,
+            'location_id': self.stock_location.id,
+            'inventory_quantity': 15,
+            'lot_id': lot_numbers[0].id,
+        }, {
+            'product_id': product_lot_ean13.id,
+            'location_id': self.stock_location.id,
+            'inventory_quantity': 25,
+            'lot_id': lot_numbers[1].id,
+        }])
+        quants.action_apply_inventory()
+
+        quants_product_ean13 = quants.filtered(lambda q: q.product_id == product_ean13)
+        quants_product_serial_ean13 = quants.filtered(lambda q: q.product_id == product_serial_ean13)
+        quants_product_lot_ean13 = quants.filtered(lambda q: q.product_id == product_lot_ean13)
+
+        # First, check each individual barcodes.
+        self.assertEqual(quants_product_ean13._get_gs1_barcode(), '01001000111010143000000123')
+        self.assertEqual(quants_product_serial_ean13[3]._get_gs1_barcode(), '010020002220202821tsn-003')
+        self.assertEqual(quants_product_lot_ean13[1]._get_gs1_barcode(), '0100300033303032300000002510lot-001')
+
+        # Then, check the aggregate barcode.
+        aggregate_barcodes = quants.sorted(lambda q: q.product_id.id).get_aggregate_barcodes()
+        self.assertEqual(len(aggregate_barcodes), 1)
+        self.assertEqual(
+            aggregate_barcodes[0],
+            "01001000111010143000000123;010020002220202821tsn-000;010020002220202821tsn-001;"
+            "010020002220202821tsn-002;010020002220202821tsn-003;010020002220202821tsn-004;"
+            "010020002220202821tsn-005;010020002220202821tsn-006;010020002220202821tsn-007;"
+            "0100300033303032300000001510lot-000;0100300033303032300000002510lot-001\t"
+        )
+
+        # Use another separator and set a lower aggregate barcode's max length.
+        self.env['ir.config_parameter'].set_param('stock.barcode_separator', '|')
+        self.env['ir.config_parameter'].set_param('stock.agg_barcode_max_length', 160)
+        aggregate_barcodes = quants.sorted(lambda q: q.product_id.id).get_aggregate_barcodes()
+        # Check we have now two aggregate barcodes (306 char but limit at 160).
+        self.assertEqual(len(aggregate_barcodes), 2)
+        for aggregate_barcode in aggregate_barcodes:
+            self.assertTrue(
+                len(aggregate_barcode) <= 160,
+                "Every aggregate barcode should be shorter than the barcode max size limit")
+        self.assertEqual(
+            aggregate_barcodes[0],
+            "01001000111010143000000123|010020002220202821tsn-000|010020002220202821tsn-001|"
+            "010020002220202821tsn-002|010020002220202821tsn-003|010020002220202821tsn-004\t"
+        )
+        self.assertEqual(
+            aggregate_barcodes[1],
+            "010020002220202821tsn-005|010020002220202821tsn-006|010020002220202821tsn-007|"
+            "0100300033303032300000001510lot-000|0100300033303032300000002510lot-001\t"
+        )
+
+    def test_quant_aggregate_barcode(self):
+        """ Checks quant's methods to generate barcode works for tracked products
+        regardless the product's barcode is a valid EAN or not.
+        """
+        # Initial config.
+        self.env['ir.config_parameter'].set_param('stock.agg_barcode_max_length', 400)
+        self.env['ir.config_parameter'].set_param('stock.barcode_separator', ';')
+        # Creates some product with not GS1 compliant barcodes.
+        product = self.env['product.product'].create({
+            'name': "Product Test",
+            'is_storable': True,
+            'barcode': 'PRODUCT-TEST',
+        })
+        product_serial = self.env['product.product'].create({
+            'name': "Product Test - Tracked by SN",
+            'is_storable': True,
+            'barcode': 'PRODUCT-SN',
+            'tracking': 'serial',
+        })
+        product_lot = self.env['product.product'].create({
+            'name': "Product Test - Tracked by Lots",
+            'is_storable': True,
+            'barcode': 'PRODUCT-LN',
+            'tracking': 'lot',
+        })
+        # Creates some lot/serial numbers.
+        serial_numbers = self.env['stock.lot'].create([{
+            'product_id': product_serial.id,
+            'name': f'tsn-00{i}',
+        } for i in range(8)])
+
+        lot_numbers = self.env['stock.lot'].create([{
+            'product_id': product_lot.id,
+            'name': f'lot-00{i}',
+        } for i in range(2)])
+
+        # Add some quants for those products.
+        common_serial_vals = {
+            'product_id': product_serial.id,
+            'location_id': self.stock_location.id,
+            'inventory_quantity': 1,
+        }
+        serial_vals = [{
+            **common_serial_vals,
+            'lot_id': serial_numbers[i].id,
+        } for i in range(8)]
+        quants = self.env['stock.quant'].create(serial_vals + [{
+            'product_id': product.id,
+            'location_id': self.stock_location.id,
+            'inventory_quantity': 123,
+        }, {
+            'product_id': product_lot.id,
+            'location_id': self.stock_location.id,
+            'inventory_quantity': 15,
+            'lot_id': lot_numbers[0].id,
+        }, {
+            'product_id': product_lot.id,
+            'location_id': self.stock_location.id,
+            'inventory_quantity': 25,
+            'lot_id': lot_numbers[1].id,
+        }])
+        quants.action_apply_inventory()
+
+        quants_product = quants.filtered(lambda q: q.product_id == product)
+        quants_product_serial = quants.filtered(lambda q: q.product_id == product_serial)
+        quants_product_lot = quants.filtered(lambda q: q.product_id == product_lot)
+
+        # Check each individual barcodes.
+        self.assertEqual(quants_product._get_gs1_barcode(), '')
+        self.assertEqual(quants_product_serial[3]._get_gs1_barcode(), '21tsn-003')
+        self.assertEqual(quants_product_lot[1]._get_gs1_barcode(), '300000002510lot-001')
+
+        # Check the aggregate barcode.
+        aggregate_barcodes = quants.sorted(lambda q: q.product_id.id).get_aggregate_barcodes()
+        self.assertEqual(len(aggregate_barcodes), 1)
+        self.assertEqual(
+            aggregate_barcodes[0],
+            "PRODUCT-TEST;PRODUCT-SN;21tsn-000;21tsn-001;21tsn-002;21tsn-003;21tsn-004;"
+            "21tsn-005;21tsn-006;21tsn-007;PRODUCT-LN;300000001510lot-000;300000002510lot-001\t")
+
+    def test_unpack_and_quants_history(self):
+        """
+        Test that after unpacking the quant history is preserved
+        """
+        product = self.env['product.product'].create({
+            'name': 'Product',
+            'is_storable': True,
+            'tracking': 'lot',
+        })
+        lot_a = self.env['stock.lot'].create({
+            'name': 'A',
+            'product_id': product.id,
+            'product_qty': 5,
+        })
+        package = self.env['stock.quant.package'].create({
+            'name': 'Super Package',
+        })
+        stock_location = self.stock_location
+        dst_location = self.stock_subloc2
+        picking_type = self.env.ref('stock.picking_type_internal')
+
+        self.env['stock.quant']._update_available_quantity(product, stock_location, 5.0, lot_id=lot_a, package_id=package)
+
+        picking = self.env['stock.picking'].create({
+            'picking_type_id': picking_type.id,
+            'location_id': dst_location.id,
+            'location_dest_id': stock_location.id,
+            'move_ids': [(0, 0, {
+                'name': 'In 5 x %s' % product.name,
+                'product_id': product.id,
+                'location_id': stock_location.id,
+                'location_dest_id': dst_location.id,
+                'product_uom_qty': 5,
+                'product_uom': product.uom_id.id,
+            })],
+        })
+        picking.action_confirm()
+
+        picking.move_ids.move_line_ids.write({
+            'quantity': 5,
+            'lot_id': lot_a.id,
+            'package_id': package.id,
+            'result_package_id': package.id,
+        })
+        picking.button_validate()
+        package.unpack()
+
+        quant = self.env['stock.quant'].search([
+            ('product_id', '=', product.id),
+            ('location_id', '=', dst_location.id),
+        ])
+        action = quant.action_view_stock_moves()
+        history = self.env['stock.move.line'].search(action['domain'])
+        self.assertTrue(history)
+
+    def test_reserve_fractional_qty(self):
+        lot1 = self.env['stock.lot'].create({'name': 'lot1', 'product_id': self.product_serial.id})
+        lot2 = self.env['stock.lot'].create({'name': 'lot2', 'product_id': self.product_serial.id})
+        for lot in (lot1, lot2):
+            self.env['stock.quant']._update_available_quantity(
+                product_id=self.product_serial,
+                location_id=self.stock_location,
+                quantity=1,
+                lot_id=lot,
+            )
+        move = self.env['stock.move'].create({
+            'name': 'test_reserve_small_qty',
+            'location_id': self.stock_location.id,
+            'location_dest_id': self.stock_subloc2.id,
+            'product_id': self.product_serial.id,
+            'product_uom_qty': 1.1,
+        })
+        move._action_confirm()
+        move._action_assign()
+        self.assertFalse(move.quantity)
+
+
 class StockQuantRemovalStrategy(TransactionCase):
     def setUp(self):
         super().setUp()
@@ -1056,7 +1320,7 @@ class StockQuantRemovalStrategy(TransactionCase):
             [('method', '=', 'least_packages')])
         self.product = self.env['product.product'].create({
             'name': 'Product',
-            'type': 'product',
+            'is_storable': True,
         })
         self.product.categ_id.removal_strategy_id = self.least_package_strategy.id
         self.stock_location = self.env['stock.location'].create({

@@ -70,7 +70,7 @@ class Department(models.Model):
 
     @api.constrains('parent_id')
     def _check_parent_id(self):
-        if not self._check_recursion():
+        if self._has_cycle():
             raise ValidationError(_('You cannot create recursive departments.'))
 
     @api.model_create_multi
@@ -99,6 +99,11 @@ class Department(models.Model):
                 # subscribe the manager user
                 if manager.user_id:
                     self.message_subscribe(partner_ids=manager.user_id.partner_id.ids)
+            manager_to_unsubscribe = set()
+            for department in self:
+                if department.manager_id and department.manager_id.user_id:
+                    manager_to_unsubscribe.update(department.manager_id.user_id.partner_id.ids)
+            self.message_unsubscribe(partner_ids=list(manager_to_unsubscribe))
             # set the employees's parent to the new manager
             self._update_employee_manager(manager_id)
         return super(Department, self).write(vals)
@@ -134,6 +139,16 @@ class Department(models.Model):
 
     def get_children_department_ids(self):
         return self.env['hr.department'].search([('id', 'child_of', self.ids)])
+
+    def action_open_view_child_departments(self):
+        self.ensure_one()
+        return {
+            "type": "ir.actions.act_window",
+            "res_model": "hr.department",
+            "views": [[False, "kanban"], [False, "tree"], [False, "form"]],
+            "domain": [['id', 'in', self.get_children_department_ids().ids]],
+            "name": "Child departments",
+        }
 
     def get_department_hierarchy(self):
         if not self:

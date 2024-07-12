@@ -2313,6 +2313,32 @@ class TestFields(TransactionCaseWithUserDemo):
         ''']):
             self.env['test_new_api.message'].search([], order='discussion')
 
+    def test_52_search_many2one_active_test(self):
+        Model = self.env['test_new_api.model_active_field']
+
+        active_parent = Model.create({'name': 'Parent'})
+        child_of_active = Model.create({'parent_id': active_parent.id})
+
+        inactive_parent = Model.create({'name': 'Parent', 'active': False})
+        child_of_inactive = Model.create({'parent_id': inactive_parent.id})
+
+        self.assertEqual(
+            Model.search([('parent_id.name', '=', 'Parent')]),
+            child_of_active + child_of_inactive,
+        )
+        self.assertEqual(
+            Model.search([('parent_id', '=', 'Parent')]),
+            child_of_active + child_of_inactive,
+        )
+        # weird semantics: active_parent is in both results but doesn't have a parent_id
+        self.assertEqual(
+            Model.search([('parent_id', 'child_of', active_parent.id)]),
+            active_parent + child_of_active,
+        )
+        self.assertEqual(
+            Model.search([('parent_id', 'child_of', 'Parent')]),
+            active_parent + child_of_active + child_of_inactive,
+        )
 
     def test_60_one2many_domain(self):
         """ test the cache consistency of a one2many field with a domain """
@@ -2606,6 +2632,8 @@ class TestFields(TransactionCaseWithUserDemo):
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_512))).size, (512, 256))
         # test create related no store (resize, width limited)
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_256))).size, (256, 128))
+        # test create related store on column (resize, width limited)
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_64))).size, (64, 32))
 
         record.write({
             'image': image_h,
@@ -2620,6 +2648,8 @@ class TestFields(TransactionCaseWithUserDemo):
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_512))).size, (256, 512))
         # test write related no store (resize, height limited)
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_256))).size, (128, 256))
+        # test write related store on column (resize, width limited)
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_64))).size, (32, 64))
 
         record = self.env['test_new_api.model_image'].create({
             'name': 'image',
@@ -2635,6 +2665,8 @@ class TestFields(TransactionCaseWithUserDemo):
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_512))).size, (256, 512))
         # test create related no store (resize, height limited)
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_256))).size, (128, 256))
+        # test create related store on column (resize, width limited)
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_64))).size, (32, 64))
 
         record.write({
             'image': image_w,
@@ -2649,48 +2681,71 @@ class TestFields(TransactionCaseWithUserDemo):
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_512))).size, (512, 256))
         # test write related store (resize, width limited)
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_256))).size, (256, 128))
+        # test write related store on column (resize, width limited)
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_64))).size, (64, 32))
 
         # test create inverse store
         record = self.env['test_new_api.model_image'].create({
             'name': 'image',
             'image_512': image_w,
         })
-        record.invalidate_recordset(['image_512'])
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_512))).size, (512, 256))
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image))).size, (4000, 2000))
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_256))).size, (256, 128))
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_64))).size, (64, 32))
         # test write inverse store
         record.write({
             'image_512': image_h,
         })
-        record.invalidate_recordset(['image_512'])
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_512))).size, (256, 512))
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image))).size, (2000, 4000))
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_256))).size, (128, 256))
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_64))).size, (32, 64))
 
         # test create inverse no store
         record = self.env['test_new_api.model_image'].with_context(image_no_postprocess=True).create({
             'name': 'image',
             'image_256': image_w,
         })
-        record.invalidate_recordset(['image_256'])
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_512))).size, (512, 256))
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image))).size, (4000, 2000))
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_256))).size, (256, 128))
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_64))).size, (64, 32))
         # test write inverse no store
         record.write({
             'image_256': image_h,
         })
-        record.invalidate_recordset(['image_256'])
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_512))).size, (256, 512))
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image))).size, (2000, 4000))
         self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_256))).size, (128, 256))
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_64))).size, (32, 64))
+
+        # test create inverse stored column
+        record = self.env['test_new_api.model_image'].with_context(image_no_postprocess=True).create({
+            'name': 'image',
+            'image_64': image_w,
+        })
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_512))).size, (512, 256))
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image))).size, (4000, 2000))
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_256))).size, (256, 128))
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_64))).size, (64, 32))
+        # test write inverse stored column
+        record.write({
+            'image_64': image_h,
+        })
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_512))).size, (256, 512))
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image))).size, (2000, 4000))
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_256))).size, (128, 256))
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(record.image_64))).size, (32, 64))
 
         # test bin_size
         record_bin_size = record.with_context(bin_size=True)
         self.assertEqual(record_bin_size.image, b'31.54 Kb')
         self.assertEqual(record_bin_size.image_512, b'1.02 Kb')
         self.assertEqual(record_bin_size.image_256, b'424.00 bytes')
+        # non-attachment binary fields: value returned as str in a different
+        # form, because coming from PostgreSQL instead of filestore
+        self.assertEqual(record_bin_size.image_64, '148 bytes')
 
         # ensure image_data_uri works (value must be bytes and not string)
         self.assertEqual(record.image_256[:8], b'iVBORw0K')
@@ -2713,18 +2768,16 @@ class TestFields(TransactionCaseWithUserDemo):
         with self.assertQueryCount(0):
             new_record.image = image_w
 
-    def test_95_binary_bin_size(self):
+    def test_95_binary_bin_size_create(self):
         binary_value = base64.b64encode(b'content')
         binary_size = b'7.00 bytes'
 
         def assertBinaryValue(record, value):
             for field in ('binary', 'binary_related_store', 'binary_related_no_store'):
-                self.assertEqual(record[field], value)
+                self.assertEqual(record[field], value, f'Incorrect result for {field}')
 
-        # created, flushed, and first read without context
+        # created and first read without context
         record = self.env['test_new_api.model_binary'].create({'binary': binary_value})
-        self.env.flush_all()
-        self.env.invalidate_all()
         record_no_bin_size = record.with_context(bin_size=False)
         record_bin_size = record.with_context(bin_size=True)
 
@@ -2732,10 +2785,8 @@ class TestFields(TransactionCaseWithUserDemo):
         assertBinaryValue(record_no_bin_size, binary_value)
         assertBinaryValue(record_bin_size, binary_size)
 
-        # created, flushed, and first read with bin_size=False
+        # created and first read with bin_size=False
         record_no_bin_size = self.env['test_new_api.model_binary'].with_context(bin_size=False).create({'binary': binary_value})
-        self.env.flush_all()
-        self.env.invalidate_all()
         record = self.env['test_new_api.model_binary'].browse(record.id)
         record_bin_size = record.with_context(bin_size=True)
 
@@ -2743,10 +2794,8 @@ class TestFields(TransactionCaseWithUserDemo):
         assertBinaryValue(record, binary_value)
         assertBinaryValue(record_bin_size, binary_size)
 
-        # created, flushed, and first read with bin_size=True
+        # created and first read with bin_size=True
         record_bin_size = self.env['test_new_api.model_binary'].with_context(bin_size=True).create({'binary': binary_value})
-        self.env.flush_all()
-        self.env.invalidate_all()
         record = self.env['test_new_api.model_binary'].browse(record.id)
         record_no_bin_size = record.with_context(bin_size=False)
 
@@ -2754,12 +2803,11 @@ class TestFields(TransactionCaseWithUserDemo):
         assertBinaryValue(record_no_bin_size, binary_value)
         assertBinaryValue(record, binary_value)
 
-        # created without context and flushed with bin_size
+        # created without context and flushed/invalidated with bin_size=True
         record = self.env['test_new_api.model_binary'].create({'binary': binary_value})
+        record.with_context(bin_size=True).env.invalidate_all()
         record_no_bin_size = record.with_context(bin_size=False)
         record_bin_size = record.with_context(bin_size=True)
-        self.env.flush_all()
-        self.env.invalidate_all()
 
         assertBinaryValue(record, binary_value)
         assertBinaryValue(record_no_bin_size, binary_value)
@@ -2767,8 +2815,6 @@ class TestFields(TransactionCaseWithUserDemo):
 
         # check computed binary field with arbitrary Python value
         record = self.env['test_new_api.model_binary'].create({})
-        self.env.flush_all()
-        self.env.invalidate_all()
         record_no_bin_size = record.with_context(bin_size=False)
         record_bin_size = record.with_context(bin_size=True)
 
@@ -2776,6 +2822,64 @@ class TestFields(TransactionCaseWithUserDemo):
         self.assertEqual(record.binary_computed, expected_value)
         self.assertEqual(record_no_bin_size.binary_computed, expected_value)
         self.assertEqual(record_bin_size.binary_computed, expected_value)
+
+    def test_95_binary_bin_size_write(self):
+        binary_value = base64.b64encode(b'content')
+        binary_size = b'7.00 bytes'
+
+        def assertBinaryValue(record, value):
+            for field in ('binary', 'binary_related_store', 'binary_related_no_store'):
+                self.assertEqual(record[field], value, f'Incorrect result for {field}')
+
+        # created and written without context
+        record = self.env['test_new_api.model_binary'].create({})
+        record.write({'binary': binary_value})
+        record_no_bin_size = record.with_context(bin_size=False)
+        record_bin_size = record.with_context(bin_size=True)
+
+        assertBinaryValue(record, binary_value)
+        assertBinaryValue(record_no_bin_size, binary_value)
+        assertBinaryValue(record_bin_size, binary_size)
+
+        # created without context, written with bin_size=False
+        record = self.env['test_new_api.model_binary'].create({})
+        record.with_context(bin_size=False).write({'binary': binary_value})
+        record_bin_size = record.with_context(bin_size=True)
+
+        assertBinaryValue(record_no_bin_size, binary_value)
+        assertBinaryValue(record, binary_value)
+        assertBinaryValue(record_bin_size, binary_size)
+
+        # created without context, written with bin_size=True
+        record = self.env['test_new_api.model_binary'].create({})
+        record.with_context(bin_size=True).write({'binary': binary_value})
+        record_no_bin_size = record.with_context(bin_size=False)
+
+        assertBinaryValue(record_bin_size, binary_size)
+        assertBinaryValue(record_no_bin_size, binary_value)
+        assertBinaryValue(record, binary_value)
+
+        # created without context and flushed with bin_size=True
+        record = self.env['test_new_api.model_binary'].create({})
+        record.write({'binary': binary_value})
+        record.with_context(bin_size=True).env.invalidate_all()
+        record_no_bin_size = record.with_context(bin_size=False)
+        record_bin_size = record.with_context(bin_size=True)
+
+        assertBinaryValue(record, binary_value)
+        assertBinaryValue(record_no_bin_size, binary_value)
+        assertBinaryValue(record_bin_size, binary_size)
+
+        # created and written without context, flushed without bin_size
+        record = self.env['test_new_api.model_binary'].create({})
+        record.write({'binary': binary_value})
+        record.env.invalidate_all()
+        record_no_bin_size = record.with_context(bin_size=False)
+        record_bin_size = record.with_context(bin_size=True)
+
+        assertBinaryValue(record, binary_value)
+        assertBinaryValue(record_no_bin_size, binary_value)
+        assertBinaryValue(record_bin_size, binary_size)
 
     def test_96_order_m2o(self):
         belgium, congo = self.env['test_new_api.country'].create([
@@ -2931,8 +3035,49 @@ class TestFields(TransactionCaseWithUserDemo):
             records.mapped('harry')  # fetch all fields with prefetch='Harry Potter'
             records.mapped('rare_description')  # fetch that field only
 
+    def test_cache_key_invalidation(self):
+        company0 = self.env.ref('base.main_company')
+        company1 = self.env['res.company'].create({'name': 'A'})
+
+        user0 = self.env['res.users'].create({
+            'name': 'Foo', 'login': 'foo', 'company_id': company0.id,
+            'company_ids': [Command.set([company0.id, company1.id])],
+        })
+
+        # this uses company0
+        record = self.env['test_new_api.company'].with_user(user0).create({
+            'foo': 'main',
+        })
+        self.assertEqual(record.env.company, company0)
+        self.assertEqual(record.foo, 'main')
+
+        # change the user's company, so we implicitly switch to company1
+        user0.company_id = company1
+        self.assertEqual(record.env.company, company1)
+        self.assertEqual(record.foo, False)
+
 
 class TestX2many(TransactionCase):
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user_portal = cls.env['res.users'].sudo().search([('login', '=', 'portal')])
+        cls.partner_portal = cls.user_portal.partner_id
+
+        if not cls.user_portal:
+            cls.env['ir.config_parameter'].sudo().set_param('auth_password_policy.minlength', 4)
+            cls.partner_portal = cls.env['res.partner'].create({
+                'name': 'Joel Willis',
+                'email': 'joel.willis63@example.com',
+            })
+            cls.user_portal = cls.env['res.users'].with_context(no_reset_password=True).create({
+                'login': 'portal',
+                'password': 'portal',
+                'partner_id': cls.partner_portal.id,
+                'groups_id': [Command.set([cls.env.ref('base.group_portal').id])],
+            })
+
     def test_definition_many2many(self):
         """ Test the definition of inherited many2many fields. """
         field = self.env['test_new_api.multi.line']._fields['tags']
@@ -3057,19 +3202,68 @@ class TestX2many(TransactionCase):
 
     def test_12_active_test_one2many_search(self):
         Model = self.env['test_new_api.model_active_field']
-        parent = Model.create({})
-        all_children = Model.create([
-            {'name': 'A', 'parent_id': parent.id, 'active': True},
-            {'name': 'B', 'parent_id': parent.id, 'active': False},
-        ])
+        parent = Model.create({
+            'children_ids': [
+                Command.create({'name': 'A', 'active': True}),
+                Command.create({'name': 'B', 'active': False}),
+            ],
+        })
 
         # a one2many field without context does not match its inactive children
         self.assertIn(parent, Model.search([('children_ids.name', '=', 'A')]))
         self.assertNotIn(parent, Model.search([('children_ids.name', '=', 'B')]))
+        # Same result when it used _name_search
+        self.assertIn(parent, Model.search([('children_ids', '=', 'A')]))
+        self.assertNotIn(parent, Model.search([('children_ids', '=', 'B')]))
+        # Same result with the child_of operator
+        self.assertIn(parent, Model.search([('children_ids', 'child_of', 'A')]))
+        self.assertNotIn(parent, Model.search([('children_ids', 'child_of', 'B')]))
 
         # a one2many field with active_test=False matches its inactive children
         self.assertIn(parent, Model.search([('all_children_ids.name', '=', 'A')]))
         self.assertIn(parent, Model.search([('all_children_ids.name', '=', 'B')]))
+        # Same result when it used _name_search
+        self.assertIn(parent, Model.search([('all_children_ids', '=', 'A')]))
+        # Same result with the child_of operator
+        self.assertIn(parent, Model.search([('all_children_ids', 'child_of', 'A')]))
+        self.assertIn(parent, Model.search([('all_children_ids', '=', 'B')]))
+        # Same result with the child_of operator
+        self.assertIn(parent, Model.search([('all_children_ids', 'child_of', 'A')]))
+        self.assertIn(parent, Model.search([('all_children_ids', 'child_of', 'B')]))
+
+    def test_12_active_test_many2many_search(self):
+        Model = self.env['test_new_api.model_active_field']
+        parent = Model.create({
+            'relatives_ids': [
+                Command.create({'name': 'A', 'active': True}),
+                Command.create({'name': 'B', 'active': False}),
+            ],
+        })
+        child_a, child_b = parent.with_context(active_test=False).relatives_ids
+
+        # a many2many field without context does not match its inactive children
+        self.assertIn(parent, Model.search([('relatives_ids.name', '=', 'A')]))
+        self.assertNotIn(parent, Model.search([('relatives_ids.name', '=', 'B')]))
+        # Same result when it used _name_search
+        self.assertIn(parent, Model.search([('relatives_ids', '=', 'A')]))
+        self.assertNotIn(parent, Model.search([('relatives_ids', '=', 'B')]))
+        # Same result with the child_of operator
+        self.assertIn(parent, Model.search([('relatives_ids', 'child_of', child_a.id)]))
+        self.assertIn(parent, Model.search([('relatives_ids', 'child_of', 'A')]))
+        self.assertNotIn(parent, Model.search([('relatives_ids', 'child_of', child_b.id)]))
+        self.assertNotIn(parent, Model.search([('relatives_ids', 'child_of', 'B')]))
+
+        # a many2many field with active_test=False matches its inactive children
+        self.assertIn(parent, Model.search([('all_relatives_ids.name', '=', 'A')]))
+        self.assertIn(parent, Model.search([('all_relatives_ids.name', '=', 'B')]))
+        # Same result when it used _name_search
+        self.assertIn(parent, Model.search([('all_relatives_ids', '=', 'A')]))
+        self.assertIn(parent, Model.search([('all_relatives_ids', '=', 'B')]))
+        # Same result with the child_of operator
+        self.assertIn(parent, Model.search([('all_relatives_ids', 'child_of', child_a.id)]))
+        self.assertIn(parent, Model.search([('all_relatives_ids', 'child_of', 'A')]))
+        self.assertIn(parent, Model.search([('all_relatives_ids', 'child_of', child_b.id)]))
+        self.assertIn(parent, Model.search([('all_relatives_ids', 'child_of', 'B')]))
 
     def test_search_many2many(self):
         """ Tests search on many2many fields. """
@@ -4140,10 +4334,17 @@ def insert(model, *fnames, rowcount=1):
 
 def update(model, *fnames):
     """ Return the expected query string to UPDATE the given columns. """
-    columns = sorted(fnames + ('write_uid', 'write_date'))
-    return 'UPDATE "{}" SET {} WHERE id IN %s'.format(
-        model._table,
-        ", ".join('"{}" = %s'.format(column) for column in columns),
+    table = f'"{model._table}"'
+    fnames = sorted(fnames + ('write_uid', 'write_date'))
+    columns = ", ".join(f'"{column}"' for column in fnames)
+    assignments = ", ".join(
+        f'"{fname}" = "__tmp"."{fname}"::{model._fields[fname].column_type[1]}'
+        for fname in fnames
+    )
+    return (
+        f'UPDATE {table} SET {assignments} '
+        f'FROM (VALUES %s) AS "__tmp"("id", {columns}) '
+        f'WHERE {table}."id" = "__tmp"."id"'
     )
 
 

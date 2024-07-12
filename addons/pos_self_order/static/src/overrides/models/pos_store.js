@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { PosStore } from "@point_of_sale/app/store/pos_store";
 import { patch } from "@web/core/utils/patch";
 
@@ -7,13 +5,22 @@ patch(PosStore.prototype, {
     // @Override
     async processServerData(loadedData) {
         await super.processServerData(...arguments);
-        this.self_ordering = this.data.custom.self_ordering;
     },
     async getServerOrders() {
-        if (this.self_ordering) {
-            await this.data.callRelated("pos.order", "get_standalone_self_order", []);
+        if (this.session._self_ordering) {
+            await this.loadServerOrders([
+                ["company_id", "=", this.config.company_id.id],
+                ["state", "=", "draft"],
+                "|",
+                ["pos_reference", "ilike", "Kiosk"],
+                ["pos_reference", "ilike", "Self-Order"],
+                ["table_id", "=", false],
+            ]);
         }
 
         return await super.getServerOrders(...arguments);
+    },
+    _shouldLoadOrders() {
+        return super._shouldLoadOrders() || this.session._self_ordering;
     },
 });

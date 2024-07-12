@@ -15,7 +15,7 @@
             maxlength="100"
         />
     </div>
-    <NavigableList class="'o-discuss-ChannelSelector-list z-index-1'" t-props="state.navigableListProps"/>
+    <NavigableList class="'o-discuss-ChannelSelector-list z-1'" t-props="state.navigableListProps"/>
 </t>
 
 <t t-name="discuss.ChannelSelector.channel">
@@ -29,7 +29,7 @@
 
 <t t-name="discuss.ChannelSelector.chat">
     <ImStatus t-if="option.partner" persona="option.partner"/>
-    <strong class="px-2 py-1 align-self-center flex-shrink-0 text-truncate">
+    <strong class="px-2 py-1 align-self-center text-truncate">
         <t t-esc="option.label"/>
     </strong>
 </t>

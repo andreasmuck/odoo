@@ -19,15 +19,24 @@ class PosCombo(models.Model):
     _name = "pos.combo"
     _description = "Product combo choices"
     _order = "sequence, id"
+    _inherit = ['pos.load.mixin']
     name = fields.Char(string="Name", required=True)
     combo_line_ids = fields.One2many("pos.combo.line", "combo_id", string="Products in Combo", copy=True)
     num_of_products = fields.Integer("No of Products", compute="_compute_num_of_products")
     sequence = fields.Integer(copy=False)
     base_price = fields.Float(
         compute="_compute_base_price",
-        string="Product Price",
+        string="Combo Price",
         help="The value from which pro-rating of the component price is based. This is to ensure that whatever product the user chooses for a component, it will always be they same price."
     )
+
+    @api.model
+    def _load_pos_data_domain(self, data):
+        return [('id', 'in', list(set().union(*[product.get('combo_ids') for product in data['product.product']['data']])))]
+
+    @api.model
+    def _load_pos_data_fields(self, config_id):
+        return ['id', 'name', 'combo_line_ids', 'base_price']
 
     @api.depends("combo_line_ids")
     def _compute_num_of_products(self):

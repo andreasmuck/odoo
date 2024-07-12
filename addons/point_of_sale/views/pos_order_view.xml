@@ -11,7 +11,8 @@
                             invisible="state != 'paid'"/>
                     <button name="refund" string="Return Products" type="object"
                         invisible="state == 'draft' or not has_refundable_lines"/>
-                    <field name="state" widget="statusbar" statusbar_visible="draft,paid,done" />
+                    <field name="state" widget="statusbar" invisible="state == 'cancel'" statusbar_visible="draft,paid,done"/>
+                    <field name="state" widget="statusbar" invisible="state != 'cancel'" statusbar_visible="draft,cancel"/>
                     <field name="has_refundable_lines" invisible="1" />
                 </header>
                 <sheet>
@@ -57,9 +58,52 @@
                 </group>
                 <notebook colspan="4">
                     <page string="Products" name="products">
-                        <field name="lines" colspan="4" nolabel="1" readonly="state != 'draft'">
-                            <tree string="Order lines" editable="bottom">
+                      <field name="lines" colspan="4" nolabel="1" readonly="state != 'draft'" mode="tree,kanban">
+                            <kanban class="o_kanban_mobile">
+                                <field name="price_subtotal"/>
+                                <field name="price_unit"/>
+                                <field name="company_id"/>
                                 <field name="full_product_name"/>
+                                <field name="qty"/>
+                                <field name="product_uom_id"/>
+                                <field name="price_subtotal_incl"/>
+                                <field name="refunded_orderline_id"/>
+                                <t t-name="kanban-box">
+                                    <div t-attf-class="oe_kanban_card oe_kanban_global_click">
+                                            <div class="row g-0">
+                                                <div class="col-2 pe-3">
+                                                    <img t-att-src="kanban_image('product.product', 'image_128', record.product_id.raw_value)" t-att-title="record.product_id.value" t-att-alt="record.product_id.value" style="max-width: 100%;"/>
+                                                </div>
+                                                <div class="col-8">
+                                                    <div class="row">
+                                                        <div class="col">
+                                                            <strong t-out="record.full_product_name.value" />
+                                                        </div>
+                                                    </div>
+                                                    <div class="row">
+                                                        <div class="col-12 text-muted">
+                                                            Quantity: <t t-out="record.qty.value"/> <t t-out="record.product_uom_id.value"/>
+                                                        </div>
+                                                    </div>
+                                                    <div class="row">
+                                                        <div class="col-12 text-muted">
+                                                            Unit price: <field name="price_unit" widget="monetary"/>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="col-2">
+                                                    <div class="col">
+                                                        <field name="price_subtotal_incl" widget="monetary" />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </t>
+                            </kanban>
+                            <tree string="Order lines" editable="bottom">
+                                <field name="name" column_invisible="True"/>
+                                <field name="full_product_name" optional="hide" readonly="1"/>
+                                <field name="product_id" widget="product_label_section_and_note_field" />
                                 <field name="pack_lot_ids" widget="many2many_tags" groups="stock.group_production_lot"/>
                                 <field name="qty"/>
                                 <field name="customer_note" optional="hide"/>
@@ -79,7 +123,7 @@
                             </tree>
                             <form string="Order lines">
                                 <group col="4">
-                                    <field name="full_product_name"/>
+                                    <field name="product_id" />
                                     <field name="qty"/>
                                     <field name="discount"/>
                                     <field name="price_unit" widget="monetary"/>
@@ -90,6 +134,7 @@
                                     <field name="pack_lot_ids" widget="many2many_tags" groups="stock.group_production_lot"/>
                                     <field name="notice"/>
                                     <field name="currency_id" invisible="1"/>
+                                    <field name="full_product_name" readonly="1" />
                                 </group>
                             </form>
                         </field>
@@ -97,18 +142,17 @@
                             <field name="amount_tax"
                                    force_save="1"
                                    widget="monetary"/>
-                            <div class="oe_subtotal_footer_separator oe_inline o_td_label">
-                                <label for="amount_total" />
-                            </div>
                             <field name="amount_total"
                                    force_save="1"
-                                   nolabel="1"
-                                   class="oe_subtotal_footer_separator"
+                                   class="h3"
                                    widget="monetary"/>
+                            <div class="oe_inline o_td_label">
+                                <label class="o_form_label_readonly" for="amount_paid" string="Total Paid (with rounding)"/>
+                            </div>
                             <field name="amount_paid"
-                                string="Total Paid (with rounding)"
-                                class="oe_subtotal_footer_separator"
+                                nolabel="1"
                                 widget="monetary"
+                                class="h3"
                                 invisible="amount_paid == 'amount_total'"
                                 readonly="state != 'draft'"/>
                             <label for="margin"/>
@@ -117,7 +161,7 @@
                                 <span class="oe_inline" invisible="not is_total_cost_computed">
                                     (<field name="margin_percent" nolabel="1" class="oe_inline" widget="percentage"/>)
                                 </span>
-                                <span invisible="is_total_cost_computed">TBD</span>
+                                <span class="float-end" invisible="is_total_cost_computed">To be determined</span>
                             </div>
                             <field name="is_total_cost_computed" invisible="1"/>
                             <field name="currency_id" invisible="1"/>
@@ -128,7 +172,7 @@
                         <field name="payment_ids" colspan="4" nolabel="1">
                             <tree string="Payments">
                                 <field name="currency_id" column_invisible="True" />
-                                <field name="payment_date"/>
+                                <field name="payment_date" optional="hide"/>
                                 <field name="payment_method_id"/>
                                 <field name="amount"/>
                             </tree>
@@ -148,6 +192,10 @@
                                 <field name="country_code" invisible="1"/>
                                 <field name="company_id" groups="base.group_multi_company"/>
                                 <field name="pricelist_id" groups="product.group_product_pricelist" readonly="state != 'draft'"/>
+                            </group>
+                            <group string="Contact Info">
+                                <field name="email"/>
+                                <field name="mobile"/>
                             </group>
                         </group>
                     </page>
@@ -258,7 +306,7 @@
         <field name="name">pos.order.tree</field>
         <field name="model">pos.order</field>
         <field name="arch" type="xml">
-            <tree string="POS Orders" create="0" sample="1" decoration-info="state == 'draft'" decoration-muted="state == 'cancel'">
+            <tree string="POS Orders" create="0" sample="1" decoration-info="state == 'draft'" decoration-muted="state == 'cancel'" duplicate="0">
                 <field name="currency_id" column_invisible="True"/>
                 <field name="name" decoration-bf="1"/>
                 <field name="session_id"  readonly="state != 'draft'"/>
@@ -267,7 +315,7 @@
                 <field name="pos_reference"/>
                 <field name="tracking_number" optional="hide"/>
                 <field name="partner_id"/>
-                <field string="Cashier" name="user_id" widget="many2one_avatar_user" readonly="state in ['done', 'invoiced']"/>
+                <field name="user_id" widget="many2one_avatar_user" readonly="state in ['done', 'invoiced']"/>
                 <field name="amount_total" sum="Amount total" widget="monetary" decoration-bf="1"/>
                 <field name="state" widget="badge" decoration-info="state == 'draft'" decoration-success="state not in ('draft','cancel')"/>
             </tree>
@@ -389,6 +437,7 @@
                 <field name="lines" string="Product" filter_domain="[('lines.product_id', 'ilike', self)]"/>
                 <filter string="Invoiced" name="invoiced" domain="[('state', '=', 'invoiced')]"/>
                 <filter string="Posted" name="posted" domain="[('state', '=', 'done')]"/>
+                <filter string="Cancelled" name="cancelled" domain="[('state', '=', 'cancel')]"/>
                 <separator/>
                 <filter string="Order Date" name="order_date" date="date_order"/>
                 <group expand="0" string="Group By">
@@ -413,6 +462,17 @@
                   The Point of Sale only supports the "add a rounding line" rounding strategy.
                 </div>
             </xpath>
+        </field>
+    </record>
+
+    <record id="action_send_mail" model="ir.actions.server">
+        <field name="name">Send Email</field>
+        <field name="model_id" ref="model_pos_order"/>
+        <field name="binding_model_id" ref="model_pos_order"/>
+        <field name="binding_view_types">tree</field>
+        <field name="state">code</field>
+        <field name="code">
+            action = records.action_send_mail()
         </field>
     </record>
 </odoo>

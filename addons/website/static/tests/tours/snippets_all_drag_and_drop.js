@@ -29,7 +29,6 @@ if (searchParams) {
 }
 const dropInOnlySnippets = {
     's_button': '.btn',
-    's_image': '.img',
     's_video': '.media_iframe_video',
 };
 let steps = [];
@@ -41,24 +40,29 @@ for (const snippet of snippetsNames) {
     const snippetSteps = [{
         content: `Drop ${snippet} snippet [${n}/${snippetsNames.length}]`,
         trigger: `#oe_snippets .oe_snippet:has( > [data-snippet='${snippet}']) .oe_snippet_thumbnail`,
-        run: "drag_and_drop_native :iframe #wrap",
+        run: "drag_and_drop :iframe #wrap",
     }, {
         content: `Edit ${snippet} snippet`,
         trigger: `:iframe #wrap.o_editable [data-snippet='${snippet}']${isModal ? ' .modal.show' : ''}`,
+        run: "click",
     }, {
         content: `check ${snippet} setting are loaded, wait panel is visible`,
         trigger: ".o_we_customize_panel",
-        run: function () {}, // it's a check
     }, {
         content: `Remove the ${snippet} snippet`, // Avoid bad perf if many snippets
-        trigger: "we-button.oe_snippet_remove:last"
-    }, {
+        trigger: "we-button.oe_snippet_remove:last",
+        run: "click",
+    }, 
+    {
+        trigger: "body[test-dd-snippet-removed]",
+    },
+    {
         content: `click on 'BLOCKS' tab (${snippet})`,
-        extra_trigger: 'body[test-dd-snippet-removed]',
         trigger: ".o_we_add_snippet_btn",
         run: function (actions) {
             document.body.removeAttribute("test-dd-snippet-removed");
-            actions.auto();
+            // TODO: use actions.click(); instead
+            this.anchor.click();
         },
     }];
 
@@ -66,12 +70,14 @@ for (const snippet of snippetsNames) {
         snippetSteps.splice(1, 3, {
             content: 'Close API Key popup',
             trigger: ":iframe .modal-footer .btn-secondary",
+            run: "click",
         });
     } else if (isModal) {
         snippetSteps[2]['in_modal'] = false;
         snippetSteps.splice(3, 2, {
             content: `Hide the ${snippet} popup`,
             trigger: `:iframe [data-snippet='${snippet}'] .s_popup_close`,
+            run: "click",
         }, {
             content: `Make sure ${snippet} is hidden`,
             trigger: ":iframe body:not(.modal-open)",
@@ -107,17 +113,19 @@ registry.category("web_tour.tours").add("snippets_all_drag_and_drop", {
     // This first step is needed as it will be used later for inner snippets
     // Without this, it will dropped inside the footer and will need an extra
     // selector.
-    websiteTourUtils.dragNDrop({
+    ...websiteTourUtils.dragNDrop({
         id: "s_text_image",
         name: "Text - Image"
     }),
     {
         content: "Edit s_text_image snippet",
-        trigger: ":iframe #wrap.o_editable [data-snippet='s_text_image']"
+        trigger: ":iframe #wrap.o_editable [data-snippet='s_text_image']",
+        run: "click",
     },
     {
         content: "check setting are loaded, wait panel is visible",
-        trigger: ".o_we_customize_panel"
+        trigger: ".o_we_customize_panel",
+        run: "click",
     },
     websiteTourUtils.goBackToBlocks(),
 ].concat(steps).concat([

@@ -1,7 +1,3 @@
-import { describe, expect, test } from "@odoo/hoot";
-
-import { deserializeDateTime } from "@web/core/l10n/dates";
-import { getOrigin } from "@web/core/utils/urls";
 import {
     SIZES,
     assertSteps,
@@ -17,12 +13,12 @@ import {
     startServer,
     step,
     triggerHotkey,
-} from "../mail_test_helpers";
-import { Command, mockService, onRpc, serverState } from "@web/../tests/web_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, expect, test } from "@odoo/hoot";
 import { Deferred, mockDate, mockTimeZone, tick } from "@odoo/hoot-mock";
-import { withUser } from "@web/../tests/_framework/mock_server/mock_server";
-import { actionService } from "@web/webclient/actions/action_service";
-import { getMockEnv } from "@web/../tests/_framework/env_test_helpers";
+import { Command, mockService, onRpc, serverState, withUser } from "@web/../tests/web_test_helpers";
+import { deserializeDateTime } from "@web/core/l10n/dates";
+import { getOrigin } from "@web/core/utils/urls";
 
 const { DateTime } = luxon;
 
@@ -98,6 +94,27 @@ test("Can edit message comment in chatter", async () => {
     await click(".o-mail-Message-moreMenu [title='Edit']");
     await insertText(".o-mail-Message .o-mail-Composer-input", "edited message", { replace: true });
     await click(".o-mail-Message a", { text: "save" });
+    await contains(".o-mail-Message-content", { text: "edited message" });
+});
+
+test("Can edit message comment in chatter (mobile)", async () => {
+    patchUiSize({ size: SIZES.SM });
+    const pyEnv = await startServer();
+    const partnerId = pyEnv["res.partner"].create({ name: "TestPartner" });
+    pyEnv["mail.message"].create({
+        author_id: serverState.partnerId,
+        body: "original message",
+        message_type: "comment",
+        model: "res.partner",
+        res_id: partnerId,
+    });
+    await start();
+    openFormView("res.partner", partnerId);
+    await click(".o-mail-Message [title='Expand']");
+    await click(".o-mail-Message-moreMenu [title='Edit']");
+    await contains("button", { text: "Discard editing" });
+    await insertText(".o-mail-Message .o-mail-Composer-input", "edited message", { replace: true });
+    await click("button[aria-label='Save editing']");
     await contains(".o-mail-Message-content", { text: "edited message" });
 });
 
@@ -595,7 +612,8 @@ test("Reaction summary", async () => {
         "Foo, Bar, FooBar and 1 other person have reacted with 😅",
     ];
     for (const [idx, name] of partnerNames.entries()) {
-        const userId = pyEnv["res.users"].create({ name });
+        const partner_id = pyEnv["res.partner"].create({ name });
+        const userId = pyEnv["res.users"].create({ partner_id });
         pyEnv["res.partner"].create({ name, user_ids: [Command.link(userId)] });
         await withUser(userId, async () => {
             await click("[title='Add a Reaction']");
@@ -811,11 +829,9 @@ test("toggle_star message", async () => {
         model: "discuss.channel",
         res_id: channelId,
     });
-    onRpc((route, args) => {
-        if (route === "/web/dataset/call_kw/mail.message/toggle_message_starred") {
-            step("rpc:toggle_message_starred");
-            expect(args.args[0][0]).toBe(messageId);
-        }
+    onRpc("mail.message", "toggle_message_starred", ({ args }) => {
+        step("rpc:toggle_message_starred");
+        expect(args[0][0]).toBe(messageId);
     });
     await start();
     await openDiscuss(channelId);
@@ -947,21 +963,16 @@ test("Notification Error", async () => {
         res_partner_id: partnerId,
     });
     const openResendActionDef = new Deferred();
-    mockService("action", () => {
-        const ogService = actionService.start(getMockEnv());
-        return {
-            ...ogService,
-            doAction(action, options) {
-                if (action?.res_model !== "res.partner") {
-                    step("do_action");
-                    expect(action).toBe("mail.mail_resend_message_action");
-                    expect(options.additionalContext.mail_message_to_resend).toBe(messageId);
-                    openResendActionDef.resolve();
-                    return;
-                }
-                return ogService.doAction.call(this, ...arguments);
-            },
-        };
+    mockService("action", {
+        doAction(action, options) {
+            if (action?.res_model === "res.partner") {
+                return super.doAction(...arguments);
+            }
+            step("do_action");
+            expect(action).toBe("mail.mail_resend_message_action");
+            expect(options.additionalContext.mail_message_to_resend).toBe(messageId);
+            openResendActionDef.resolve();
+        },
     });
     await start();
     await openFormView("res.partner", threadId);
@@ -1117,7 +1128,7 @@ test("allow attachment delete on authored message", async () => {
     });
     await start();
     await openDiscuss(channelId);
-    await click(".o-mail-AttachmentImage div[title='Remove']");
+    await click(".o-mail-AttachmentImage [title='Remove']");
     await contains(".modal-dialog .modal-body", { text: 'Do you really want to delete "BLAH"?' });
     await click(".modal-footer .btn-primary");
     await contains(".o-mail-AttachmentCard", { count: 0 });
@@ -1358,21 +1369,16 @@ test("data-oe-id & data-oe-model link redirection on click", async () => {
         model: "res.partner",
         res_id: partnerId,
     });
-    mockService("action", () => {
-        const ogService = actionService.start(getMockEnv());
-        return {
-            ...ogService,
-            doAction(action) {
-                if (action?.res_model !== "res.partner") {
-                    expect(action.type).toBe("ir.actions.act_window");
-                    expect(action.res_model).toBe("some.model");
-                    expect(action.res_id).toBe(250);
-                    step("do-action:openFormView_some.model_250");
-                    return;
-                }
-                return ogService.doAction.call(this, ...arguments);
-            },
-        };
+    mockService("action", {
+        doAction(action) {
+            if (action?.res_model === "res.partner") {
+                return super.doAction(...arguments);
+            }
+            expect(action.type).toBe("ir.actions.act_window");
+            expect(action.res_model).toBe("some.model");
+            expect(action.res_id).toBe(250);
+            step("do-action:openFormView_some.model_250");
+        },
     });
     await start();
     await openFormView("res.partner", partnerId);
@@ -1767,4 +1773,42 @@ test("chatter - font size unchanged when there is only emoji", async () => {
     expect(parseFloat(getComputedStyle(emojiMessage).getPropertyValue("font-size"))).toBe(
         parseFloat(getComputedStyle(textMessage).getPropertyValue("font-size"))
     );
+});
+
+test("Delete starred message decrements starred counter once", async () => {
+    const pyEnv = await startServer();
+    const channelId = pyEnv["discuss.channel"].create({ name: "General" });
+    pyEnv["mail.message"].create([
+        {
+            author_id: serverState.partnerId,
+            body: "delete me",
+            message_type: "comment",
+            model: "discuss.channel",
+            res_id: channelId,
+            starred_partner_ids: [serverState.partnerId],
+        },
+        {
+            author_id: serverState.partnerId,
+            body: "Hello World!",
+            message_type: "comment",
+            model: "discuss.channel",
+            res_id: channelId,
+            starred_partner_ids: [serverState.partnerId],
+        },
+        {
+            author_id: serverState.partnerId,
+            body: "test",
+            message_type: "comment",
+            model: "discuss.channel",
+            res_id: channelId,
+            starred_partner_ids: [serverState.partnerId],
+        },
+    ]);
+    await start();
+    await openDiscuss(channelId);
+    await contains("button", { count: 1, text: "Starred3" });
+    await click(":nth-child(1 of .o-mail-Message) [title='Expand']");
+    await click(".o-mail-Message-moreMenu [title='Delete']");
+    await click("button", { text: "Confirm" });
+    await contains("button", { count: 1, text: "Starred2" });
 });

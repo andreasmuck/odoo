@@ -4,7 +4,7 @@ from lxml import etree
 
 from odoo import fields
 from odoo.osv import expression
-from odoo.tests import users
+from odoo.tests import Form, users
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import UserError
 
@@ -178,6 +178,54 @@ class TestProjectBase(TestProjectCommon):
         self.assertTrue(self.project_pigs.id < self.project_goats.id)
         self.assertEqual(Project.search(domain, order='id').ids, project_ids)
 
+    @users('bastien')
+    def test_edit_favorite(self):
+        project1, project2 = projects = self.env['project.project'].create([{
+            'name': 'Project Test1',
+        }, {
+            'name': 'Project Test2',
+            'is_favorite': True,
+        }])
+        self.assertFalse(project1.is_favorite)
+        self.assertTrue(project2.is_favorite)
+        project1.is_favorite = True
+        project2.is_favorite = False
+        projects.invalidate_recordset(['is_favorite']) # To force 'is_favorite' to recompute
+        self.assertTrue(project1.is_favorite)
+        self.assertFalse(project2.is_favorite)
+
+    @users('bastien')
+    def test_create_favorite_from_project_form(self):
+        Project = self.env['project.project']
+        form1 = Form(Project)
+        form1.name = 'Project Test1'
+        self.assertFalse(form1.is_favorite)
+        project1 = form1.save()
+        self.assertFalse(project1.is_favorite)
+
+        form2 = Form(Project)
+        form2.name = 'Project Test2'
+        form2.is_favorite = True
+        self.assertTrue(form2.is_favorite)
+        project2 = form2.save()
+        self.assertTrue(project2.is_favorite)
+
+    @users('bastien')
+    def test_edit_favorite_from_project_form(self):
+        project1, project2 = self.env['project.project'].create([{
+            'name': 'Project Test1',
+        }, {
+            'name': 'Project Test2',
+            'is_favorite': True,
+        }])
+        with Form(project1) as form:
+            form.is_favorite = True
+        self.assertTrue(project1.is_favorite)
+
+        with Form(project2) as form:
+            form.is_favorite = False
+        self.assertFalse(project2.is_favorite)
+
     def test_change_project_or_partner_company(self):
         """ Tests that it is impossible to change the company of a project
             if the company of the partner is different and vice versa if the company of the project is set.
@@ -196,22 +244,19 @@ class TestProjectBase(TestProjectCommon):
         self.project_pigs.company_id = company_1
         self.assertEqual(self.project_pigs.company_id, company_1, "The company of the project should have been updated.")
         self.project_pigs.company_id = False
+        # if the partner company is set, the project's should also be set
         partner.company_id = company_1
 
-        # The partner has a company, but the project has none. The partner can have any new company, but the project can only be set to False/partner.company
-        with self.assertRaises(UserError):
-            # Cannot change the company of a project if the company of the partner is different
-            self.project_pigs.company_id = company_2
-        partner.company_id = company_2
-        partner.company_id = False
-        partner.company_id = company_1
-        self.project_pigs.company_id = company_1
-        self.assertEqual(self.project_pigs.company_id, company_1, "The company of the project should have been updated.")
+        # If the partner has a company, the project must have the same
+        self.assertEqual(partner.company_id, self.project_pigs.company_id, "The company of the project should have been updated.")
 
-        # The partner has a company and the project has a company. The project can only be set to False, the partner can not be changed
+        # The partner has a company and the project has a company. The partner's can only be set to False, the project's can not be changed
         with self.assertRaises(UserError):
             # Cannot change the company of a project if both the project and its partner have a company
             self.project_pigs.company_id = company_2
+        with self.assertRaises(UserError):
+            # Cannot unset the project's company if its associated partner has a company
+            self.project_pigs.company_id = False
         with self.assertRaises(UserError):
             # Cannot change the company of a partner if both the project and its partner have a company
             partner.company_id = company_2
@@ -397,3 +442,39 @@ class TestProjectBase(TestProjectCommon):
         } for i in range(2)]).copy()
         self.assertEqual(task_0.name, 'task 0 (copy)')
         self.assertEqual(task_1.name, 'task 1 (copy)')
+
+    def test_duplicate_project_with_tasks(self):
+        """ Test to check duplication of projects tasks active state. """
+        project = self.env['project.project'].create({
+            'name': 'Project',
+        })
+        task = self.env['project.task'].create({
+            'name': 'Task',
+            'project_id': project.id,
+        })
+
+        # Duplicate active project with active task
+        project_dup = project.copy()
+        self.assertTrue(project_dup.active, "Active project should remain active when duplicating an active project")
+        self.assertEqual(project_dup.task_count, 1, "Duplicated project should have as many tasks as orginial project")
+        self.assertTrue(project_dup.tasks.active, "Active task should remain active when duplicating an active project")
+
+        # Duplicate active project with archived task
+        task.active = False
+        project_dup = project.copy()
+        self.assertTrue(project_dup.active, "Active project should remain active when duplicating an active project")
+        self.assertFalse(project_dup.tasks.active, "Archived task should remain archived when duplicating an active project")
+
+        # Duplicate archived project with archived task
+        project.active = False
+        project_dup = project.copy()
+        self.assertTrue(project_dup.active, "The new project should be active by default")
+        self.assertTrue(project_dup.tasks.active, "Archived task should be active when duplicating an archived project")
+
+    def test_create_analytic_account_batch(self):
+        """ This test will check that the '_create_analytic_account' method assigns the accounts to the projects in the right order. """
+        projects = self.env["project.project"].create([{
+            "name": f"Project {x}",
+        } for x in range(10)])
+        projects._create_analytic_account()
+        self.assertEqual(projects.mapped("name"), projects.analytic_account_id.mapped("name"), "The analytic accounts names should match with the projects.")

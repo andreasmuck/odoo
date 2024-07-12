@@ -37,8 +37,8 @@ class SaleOrderLine(models.Model):
             line = line.with_company(line.company_id)
             fpos = line.order_id.fiscal_position_id or line.order_id.fiscal_position_id._get_fiscal_position(line.order_partner_id)
             # If company_id is set, always filter taxes by the company
-            taxes = line.tax_id.filtered(lambda r: not line.company_id or r.company_id == line.company_id)
-            line.tax_id = fpos.map_tax(taxes)
+            taxes = line.tax_ids.filtered(lambda r: not line.company_id or r.company_id == line.company_id)
+            line.tax_ids = fpos.map_tax(taxes)
 
     def _get_display_price(self):
         # A product created from a promotion does not have a list_price.
@@ -46,6 +46,9 @@ class SaleOrderLine(models.Model):
         if self.is_reward_line and self.reward_id.reward_type != 'product':
             return self.price_unit
         return super()._get_display_price()
+
+    def _can_be_invoiced_alone(self):
+        return super()._can_be_invoiced_alone() and not self.is_reward_line
 
     def _is_not_sellable_line(self):
         return self.is_reward_line or super()._is_not_sellable_line()

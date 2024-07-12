@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
+import logging
 
 from odoo.tests.common import HttpCase, tagged, ChromeBrowser
-from odoo.tools import config, logging
+from odoo.tools import config
 from unittest.mock import patch
 
 @tagged('-at_install', 'post_install')
@@ -73,7 +74,7 @@ class TestChromeBrowser(HttpCase):
     def setUp(self):
         super().setUp()
         screencasts_dir = config['screencasts'] or config['screenshots']
-        with patch.dict('odoo.tools.config.options', {'screencasts': screencasts_dir, 'screenshots': config['screenshots']}):
+        with patch.dict(config.options, {'screencasts': screencasts_dir, 'screenshots': config['screenshots']}):
             self.browser = ChromeBrowser(self)
         self.addCleanup(self.browser.stop)
 

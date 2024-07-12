@@ -1,6 +1,5 @@
 import { Component } from "@odoo/owl";
 import { ConfirmationDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
-import { DomainSelectorDialog } from "../../core/domain_selector_dialog/domain_selector_dialog";
 import { Dropdown } from "@web/core/dropdown/dropdown";
 import { PropertiesGroupByItem } from "@web/search/properties_group_by_item/properties_group_by_item";
 import { DropdownItem } from "@web/core/dropdown/dropdown_item";
@@ -11,7 +10,6 @@ import { AccordionItem } from "@web/core/dropdown/accordion_item";
 import { CustomGroupByItem } from "@web/search/custom_group_by_item/custom_group_by_item";
 import { CheckboxItem } from "@web/core/dropdown/checkbox_item";
 import { FACET_ICONS, GROUPABLE_TYPES } from "@web/search/utils/misc";
-import { useGetDefaultLeafDomain } from "@web/core/domain_selector/utils";
 import { _t } from "@web/core/l10n/translation";
 
 const favoriteMenuRegistry = registry.category("favoriteMenu");
@@ -49,7 +47,6 @@ export class SearchBarMenu extends Component {
         this.facet_icons = FACET_ICONS;
         // Filter
         this.dialogService = useService("dialog");
-        this.getDefaultLeafDomain = useGetDefaultLeafDomain();
         // GroupBy
         const fields = [];
         for (const [fieldName, field] of Object.entries(this.env.searchModel.searchViewFields)) {
@@ -59,8 +56,6 @@ export class SearchBarMenu extends Component {
         }
         this.fields = sortBy(fields, "string");
         // Favorite
-        this.dialogService = useService("dialog");
-
         useBus(this.env.searchModel, "update", this.render);
     }
 
@@ -72,20 +67,7 @@ export class SearchBarMenu extends Component {
     }
 
     async onAddCustomFilterClick() {
-        const { domainEvalContext: context, resModel } = this.env.searchModel;
-        const domain = await this.getDefaultLeafDomain(resModel);
-        this.dialogService.add(DomainSelectorDialog, {
-            resModel,
-            defaultConnector: "|",
-            domain,
-            context,
-            onConfirm: (domain) => this.env.searchModel.splitAndAddDomain(domain),
-            disableConfirmButton: (domain) => domain === `[]`,
-            title: _t("Add Custom Filter"),
-            confirmButtonText: _t("Add"),
-            discardButtonText: _t("Cancel"),
-            isDebugMode: this.env.searchModel.isDebugMode,
-        });
+        this.env.searchModel.spawnCustomFilterDialog();
     }
 
     /**
@@ -126,11 +108,7 @@ export class SearchBarMenu extends Component {
      */
     validateField(fieldName, field) {
         const { groupable, type } = field;
-        return (
-            groupable &&
-            fieldName !== "id" &&
-            GROUPABLE_TYPES.includes(type)
-        );
+        return groupable && fieldName !== "id" && GROUPABLE_TYPES.includes(type);
     }
 
     /**
@@ -174,13 +152,20 @@ export class SearchBarMenu extends Component {
     }
 
     // Favorite Panel
-    /**
-     * @returns {Array}
-     */
-    get favoriteItems() {
-        const favorites = this.env.searchModel.getSearchItems(
-            (searchItem) => searchItem.type === "favorite"
+
+    get favorites() {
+        return this.env.searchModel.getSearchItems(
+            (searchItem) => searchItem.type === "favorite" && searchItem.userId !== false
         );
+    }
+
+    get sharedFavorites() {
+        return this.env.searchModel.getSearchItems(
+            (searchItem) => searchItem.type === "favorite" && searchItem.userId === false
+        );
+    }
+
+    get otherItems() {
         const registryMenus = [];
         for (const item of favoriteMenuRegistry.getAll()) {
             if ("isDisplayed" in item ? item.isDisplayed(this.env) : true) {
@@ -191,21 +176,14 @@ export class SearchBarMenu extends Component {
                 });
             }
         }
-        return [...favorites, ...registryMenus];
+        return registryMenus;
     }
 
-    /**
-     * @param {number} itemId
-     */
     onFavoriteSelected(itemId) {
         this.env.searchModel.toggleSearchItem(itemId);
     }
 
-    /**
-     * @param {number} itemId
-     */
-    openConfirmationDialog(itemId) {
-        const { userId } = this.favoriteItems.find((item) => item.id === itemId);
+    openConfirmationDialog(itemId, userId) {
         const dialogProps = {
             title: _t("Warning"),
             body: userId

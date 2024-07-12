@@ -1,8 +1,6 @@
-/** @odoo-module */
-
 import { ProductScreen } from "@point_of_sale/app/screens/product_screen/product_screen";
 import { patch } from "@web/core/utils/patch";
-import { onMounted } from "@odoo/owl";
+import { onMounted, useState } from "@odoo/owl";
 
 patch(ProductScreen.prototype, {
     /**
@@ -10,6 +8,10 @@ patch(ProductScreen.prototype, {
      */
     setup() {
         super.setup(...arguments);
+
+        this.uiState = useState({
+            clicked: false,
+        });
 
         onMounted(() => {
             this.pos.addPendingOrder([this.pos.get_order().id]);
@@ -30,19 +32,24 @@ patch(ProductScreen.prototype, {
         }
         return super.selectedOrderlineQuantity;
     },
-    get selectedOrderlineTotal() {
-        return this.env.utils.formatCurrency(
-            this.pos.get_order().get_selected_orderline().get_display_price()
-        );
-    },
     get nbrOfChanges() {
         return this.pos.getOrderChanges().nbrOfChanges;
     },
     get swapButton() {
         return this.pos.config.module_pos_restaurant && this.pos.orderPreparationCategories.size;
     },
-    submitOrder() {
-        this.pos.sendOrderInPreparationUpdateLastChange(this.pos.get_order());
+    get displayCategoryCount() {
+        return this.pos.categoryCount.slice(0, 3);
+    },
+    async submitOrder() {
+        if (!this.uiState.clicked) {
+            this.uiState.clicked = true;
+            try {
+                await this.pos.sendOrderInPreparationUpdateLastChange(this.currentOrder);
+            } finally {
+                this.uiState.clicked = false;
+            }
+        }
     },
     get primaryReviewButton() {
         return (

@@ -6,6 +6,7 @@ import re
 import odoo
 from odoo import _, api, fields, models, tools
 from odoo.osv import expression
+from odoo.addons.mail.tools.discuss import Store
 
 class Partner(models.Model):
     """ Update partner to add a field about notification preferences. Add a generic opt-out field that can be used
@@ -15,6 +16,7 @@ class Partner(models.Model):
     _mail_flat_thread = False
 
     # override to add and order tracking
+    name = fields.Char(tracking=1)
     email = fields.Char(tracking=1)
     phone = fields.Char(tracking=2)
     parent_id = fields.Many2one(tracking=3)
@@ -210,14 +212,11 @@ class Partner(models.Model):
     # DISCUSS
     # ------------------------------------------------------------
 
-    def mail_partner_format(self, fields=None):
-        partners_format = dict()
+    def _to_store(self, store: Store, /, *, fields=None):
         if not fields:
             fields = {'id': True, 'name': True, 'email': True, 'active': True, 'im_status': True, 'is_company': True, 'user': {}, "write_date": True}
         for partner in self:
-            data = {}
-            if 'id' in fields:
-                data['id'] = partner.id
+            data = {"id": partner.id}
             if 'name' in fields:
                 data['name'] = partner.name
             if 'email' in fields:
@@ -239,18 +238,17 @@ class Partner(models.Model):
             if not self.env.user._is_internal():
                 data.pop('email', None)
             data['type'] = "partner"
-            partners_format[partner] = data
-        return partners_format
+            store.add("Persona", data)
 
     @api.model
     def get_mention_suggestions(self, search, limit=8):
         """ Return 'limit'-first partners' such that the name or email matches a 'search' string.
             Prioritize partners that are also (internal) users, and then extend the research to all partners.
-            The return format is a list of partner data (as per returned by `mail_partner_format()`).
+            The return format is a list of partner data (as per returned by `_to_store()`).
         """
         domain = self._get_mention_suggestions_domain(search)
         partners = self._search_mention_suggestions(domain, limit)
-        return list(partners.mail_partner_format().values())
+        return Store(partners).get_result()
 
     @api.model
     def _get_mention_suggestions_domain(self, search):
@@ -302,7 +300,7 @@ class Partner(models.Model):
             ('share', '=', False),
             ('partner_id', 'not in', excluded_ids)
         ], order='name, id', limit=limit)
-        return list(users.partner_id.mail_partner_format().values())
+        return Store(users.partner_id).get_result()
 
     @api.model
     def _get_current_persona(self):

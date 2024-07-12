@@ -1,5 +1,5 @@
 import { markRaw } from "@odoo/owl";
-import { Popover, POPOVER_SYMBOL } from "@web/core/popover/popover";
+import { Popover } from "@web/core/popover/popover";
 import { registry } from "@web/core/registry";
 
 /**
@@ -17,6 +17,8 @@ import { registry } from "@web/core/registry";
  *   position?: import("@web/core/position/position_hook").UsePositionOptions["position"];
  *   ref?: Function;
  * }} PopoverServiceAddOptions
+ *
+ * @typedef {ReturnType<popoverService["start"]>["add"]} PopoverServiceAddFunction
  */
 
 export const popoverService = {
@@ -43,7 +45,6 @@ export const popoverService = {
                     close: () => remove(),
                     closeOnClickAway,
                     closeOnEscape: options.closeOnEscape,
-                    parentSubPopovers: options[POPOVER_SYMBOL],
                     component,
                     componentProps: markRaw(props),
                     ref: options.ref,

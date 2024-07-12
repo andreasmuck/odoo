@@ -1,4 +1,5 @@
 /** @odoo-module */
+/* global posmodel */
 import { Chrome } from "@point_of_sale/app/pos_app";
 import { getFixture, mount } from "@web/../tests/helpers/utils";
 import { makeTestEnv } from "@web/../tests/helpers/mock_env";
@@ -10,6 +11,7 @@ import { EventBus } from "@odoo/owl";
 import { uiService } from "@web/core/ui/ui_service";
 import { dialogService } from "@web/core/dialog/dialog_service";
 import { PosDataService } from "@point_of_sale/app/models/data_service";
+import { RPCError } from "@web/core/network/rpc";
 
 const mockContextualUtilsService = {
     dependencies: ["pos", "localization"],
@@ -38,6 +40,11 @@ QUnit.module("Chrome", {
             .add("ui", uiService)
             .add("dialog", dialogService)
             .add("contextual_utils_service", mockContextualUtilsService)
+            .add("alert", {
+                start() {
+                    return { add: () => {}, dismiss: () => {} };
+                },
+            })
             .add("barcode", {
                 start() {
                     return { bus: new EventBus() };
@@ -61,6 +68,7 @@ QUnit.module("Chrome", {
             "sound",
             "action",
             "hotkey",
+            "popover",
         ]) {
             registry.category("services").add(service, {
                 start() {
@@ -75,40 +83,56 @@ export class MockPosData {
     get data() {
         return {
             models: {
-                "product.product": { fields: {}, records: [] },
-                "product.pricelist": { fields: {}, records: [] },
+                "product.product": { relations: {}, fields: {}, data: [] },
+                "product.pricelist": { relations: {}, fields: {}, data: [] },
                 "pos.session": {
+                    relations: {},
                     fields: {},
-                    records: [
+                    data: [
                         {
                             name: "PoS Session",
+                            id: 1,
                         },
                     ],
                 },
                 "res.company": {
+                    relations: {},
                     fields: {
                         tax_calculation_rounding_method: {
                             string: "Tax rounding method",
                             type: "string",
                         },
                     },
-                    records: [
+                    data: [
                         {
                             tax_calculation_rounding_method: "round_globally",
                         },
                     ],
                 },
-                "res.partner": { fields: {}, records: [] },
-                "stock.picking.type": { fields: {}, records: [] },
-                "pos.config": {
+                "res.partner": {
+                    relations: {},
                     fields: {
-                        iface_printer: { string: "Iface printer", type: "boolean" },
+                        vat: {
+                            string: "VAT",
+                            type: "string",
+                        },
+                    },
+                    data: [],
+                },
+                "stock.picking.type": { relations: {}, fields: {}, data: [] },
+                "pos.config": {
+                    relations: {},
+                    fields: {
+                        iface_printer: {
+                            string: "Iface printer",
+                            type: "boolean",
+                        },
                         trusted_config_ids: {
                             string: "Trusted config ids",
                             type: "many2many",
                         },
                     },
-                    records: [
+                    data: [
                         {
                             id: 1,
                             name: "PoS Config",
@@ -123,32 +147,40 @@ export class MockPosData {
                         },
                     ],
                 },
-                "pos.printer": { fields: {}, records: [] },
-                "pos.payment.method": { fields: {}, records: [] },
+                "pos.printer": { relations: {}, fields: {}, data: [] },
+                "pos.payment.method": { relations: {}, fields: {}, data: [] },
                 "res.currency": {
-                    fields: { rounding: { string: "Rounding", type: "float" } },
-                    records: [
+                    relations: {},
+                    fields: {
+                        rounding: {
+                            string: "Rounding",
+                            type: "float",
+                        },
+                    },
+                    data: [
                         {
                             rounding: 0.01,
                         },
                     ],
                 },
                 "res.users": {
+                    relations: {},
                     fields: {},
-                    records: [
+                    data: [
                         {
                             id: 1,
                             name: "Administrator",
                         },
                     ],
                 },
-                "account.fiscal.position": { fields: {}, records: [] },
-                "pos.category": { fields: {}, records: [] },
-                "pos.order": { fields: {}, records: [] },
-                "pos.order.line": { fields: {}, records: [] },
-                "pos.payment": { fields: {}, records: [] },
-                "pos.pack.operation.lot": { fields: {}, records: [] },
-                "product.pricelist.item": { fields: {}, records: [] },
+                "account.fiscal.position": { relations: {}, fields: {}, data: [] },
+                "pos.category": { relations: {}, fields: {}, data: [] },
+                "pos.order": { relations: {}, fields: {}, data: [] },
+                "pos.order.line": { relations: {}, fields: {}, data: [] },
+                "pos.payment": { relations: {}, fields: {}, data: [] },
+                "pos.pack.operation.lot": { relations: {}, fields: {}, data: [] },
+                "product.pricelist.item": { relations: {}, fields: {}, data: [] },
+                "product.attribute.custom.value": { relations: {}, fields: {}, data: [] },
             },
         };
     }
@@ -165,4 +197,37 @@ QUnit.test("mount the Chrome", async (assert) => {
     });
     assert.containsOnce(fixture, ".pos");
     assert.verifySteps(["disable loader"]);
+});
+
+QUnit.test("test unsynch data error filtering", async (assert) => {
+    const serverData = new MockPosData().data;
+    const fixture = getFixture();
+    assert.verifySteps([]);
+    const testEnv = await makeTestEnv({
+        serverData,
+        async mockRPC(route, args) {
+            if (route === "/web/dataset/call_kw/res.partner/create") {
+                const error = new RPCError();
+                error.exceptionName = "odoo.exceptions.ValidationError";
+                error.code = 200;
+                throw error;
+            }
+        },
+    });
+    await mount(Chrome, fixture, {
+        env: testEnv,
+        test: true,
+        props: { disableLoader: () => {} },
+    });
+    const partner_data = {
+        name: "Test 1",
+        vat: "BE40301926",
+    };
+    try {
+        await posmodel.data.create("res.partner", [partner_data]);
+    } catch {
+        assert.step("create failed");
+        assert.equal(posmodel.data.network.unsyncData.length, 0);
+    }
+    assert.verifySteps(["create failed"]);
 });

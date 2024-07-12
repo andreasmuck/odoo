@@ -47,12 +47,15 @@ const setupSteps = [{
 }, {
     content: "drop a snippet",
     trigger: "#oe_snippets .oe_snippet[name='Text - Image'] .oe_snippet_thumbnail:not(.o_we_already_dragging)",
-    run: "drag_and_drop_native :iframe #wrap",
-}, {
+    run: "drag_and_drop :iframe #wrap",
+}, 
+{
+    trigger: "body.editor_has_snippets",
+},
+{
     content: "drop a snippet",
     trigger: "#oe_snippets .oe_snippet[name='Image Gallery'] .oe_snippet_thumbnail:not(.o_we_already_dragging)",
-    extra_trigger: "body.editor_has_snippets",
-    run: "drag_and_drop_native :iframe #wrap",
+    run: "drag_and_drop :iframe #wrap",
 }];
 
 const formatErrorMsg = "format is not supported. Try with: .gif, .jpe, .jpeg, .jpg, .png, .svg, .webp";
@@ -67,9 +70,11 @@ wTourUtils.registerWebsitePreviewTour('test_image_upload_progress', {
     {
         content: "click on dropped snippet",
         trigger: ":iframe #wrap .s_image_gallery .img",
+        run: "click",
     }, {
         content: "click on add images to open image dialog (in multi mode)",
         trigger: 'we-customizeblock-option [data-add-images]',
+        run: "click",
     }, {
         content: "manually trigger input change",
         trigger: ".o_select_media_dialog .o_upload_media_button",
@@ -82,22 +87,18 @@ wTourUtils.registerWebsitePreviewTour('test_image_upload_progress', {
         content: "check upload progress bar is correctly shown (1)",
         trigger: `.o_we_progressbar:contains('icon.ico'):contains('${formatErrorMsg}')`,
         in_modal: false,
-        run: function () {}, // it's a check
     }, {
         content: "check upload progress bar is correctly shown (2)",
         trigger: ".o_we_progressbar:contains('image.webp'):contains('File has been uploaded')",
         in_modal: false,
-        run: function () {}, // it's a check
     }, {
         content: "check upload progress bar is correctly shown (3)",
         trigger: ".o_we_progressbar:contains('image.png'):contains('File has been uploaded')",
         in_modal: false,
-        run: function () {}, // it's a check
     }, {
         content: "check upload progress bar is correctly shown (4)",
         trigger: ".o_we_progressbar:contains('image.jpeg'):contains('File has been uploaded')",
         in_modal: false,
-        run: function () {}, // it's a check
     }, {
         content: "there should only have one notification toaster",
         trigger: ".o_notification",
@@ -112,17 +113,21 @@ wTourUtils.registerWebsitePreviewTour('test_image_upload_progress', {
         content: "close notification",
         trigger: '.o_notification_close',
         in_modal: false,
+        run: "click",
     }, {
         content: "close media dialog",
         trigger: '.modal-footer .btn-secondary',
+        run: "click",
     },
     // 2. Check success single image upload
     {
         content: "click on dropped snippet",
         trigger: ":iframe #wrap .s_text_image .img",
+        run: "click",
     }, {
         content: "click on replace media to open image dialog",
         trigger: 'we-customizeblock-option [data-replace-media]',
+        run: "click",
     }, {
         content: "manually trigger input change",
         trigger: ".o_select_media_dialog .o_upload_media_button",
@@ -135,7 +140,6 @@ wTourUtils.registerWebsitePreviewTour('test_image_upload_progress', {
         content: "check upload progress bar is correctly shown",
         trigger: ".o_we_progressbar:contains('image.png')",
         in_modal: false,
-        run: function () {}, // it's a check
     }, {
         content: "there should only have one notification toaster",
         trigger: ".o_notification",
@@ -149,23 +153,22 @@ wTourUtils.registerWebsitePreviewTour('test_image_upload_progress', {
     }, {
         content: "media dialog has closed after the upload",
         trigger: 'body:not(:has(.o_select_media_dialog))',
-        run: () => {}, // It's a check.
     }, {
         content: "the upload progress toast was updated",
         trigger: ".o_we_progressbar:contains('image.png'):contains('File has been uploaded')",
-        run: () => {}, // It's a check.
     }, {
         content: "toaster should disappear after a few seconds if the uploaded image is successful",
         trigger: "body:not(:has(.o_we_progressbar))",
-        run: function () {}, // it's a check
     },
     // 3. Check error single image upload
     {
         content: "click on dropped snippet",
         trigger: ":iframe #wrap .s_text_image .img",
+        run: "click",
     }, {
         content: "click on replace media to open image dialog",
         trigger: 'we-customizeblock-option [data-replace-media]',
+        run: "click",
     }, {
         content: "manually trigger input change",
         trigger: ".o_select_media_dialog .o_upload_media_button",
@@ -209,27 +212,33 @@ wTourUtils.registerWebsitePreviewTour('test_image_upload_progress_unsplash', {
     {
         content: "click on dropped snippet",
         trigger: ":iframe #wrap .s_image_gallery .img",
+        run: "click",
     }, {
         content: "click on replace media to open image dialog",
         trigger: 'we-customizeblock-option [data-replace-media]',
+        run: "click",
     }, {
         content: "search 'fox' images",
         trigger: ".o_we_search",
-        run: "text fox",
+        run: "edit fox",
     }, {
         content: "click on unsplash result", // note that unsplash is mocked
-        trigger: "img[alt~=fox]"
-    }, {
+        trigger: "img[alt~=fox]",
+        run: "click",
+    }, 
+    {
+        trigger: ".o_notification_close",
+    },
+    {
         content: "check that the upload progress bar is correctly shown",
         // ensure it is there so we are sure next step actually test something
-        extra_trigger: '.o_notification_close',
         trigger: ".o_we_progressbar:contains('fox'):contains('File has been uploaded')",
         in_modal: false,
-        run: function () {}, // it's a check
     }, {
         content: "notification should close after 3 seconds",
         trigger: 'body:not(:has(.o_notification_close))',
         in_modal: false,
+        run: "click",
     }, {
         content: "unsplash image (mocked to logo) should have been used",
         trigger: ":iframe #wrap .s_image_gallery .img[data-original-src^='/unsplash/HQqIOc8oYro/fox']",

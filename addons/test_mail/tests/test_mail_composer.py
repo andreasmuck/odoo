@@ -522,6 +522,36 @@ class TestComposerForm(TestMailComposer):
         self.assertFalse(composer_form.subtype_id, 'MailComposer: subtype is not used in mail mode')
         self.assertFalse(composer_form.subtype_is_log, 'MailComposer: subtype is log has no meaning in mail mode')
 
+    @users('employee')
+    def test_mail_composer_template_switching(self):
+        """ Ensure that the current user's identity serves as the sender,
+        particularly when transitioning from a template with a designated sender to one lacking such specifications.
+        Moreover, we verify that switching to a template lacking any subject maintains the existing subject intact. """
+        # Setup: Prepare Templates
+        template_complete = self.template.copy({
+            "email_from": "not_current_user@template_complete.com",
+            "subject": "subject: template_complete",
+        })
+        template_no_sender = template_complete.copy({"email_from": ""})
+        template_no_subject = template_no_sender.copy({"subject": ""})
+        forms = {
+            'comment': Form(self.env['mail.compose.message'].with_context(default_composition_mode='comment')),
+            'mass_mail': Form(self.env['mail.compose.message'].with_context(default_composition_mode='mass_mail')),
+        }
+        for composition_mode, form in forms.items():
+            with self.subTest(composition_mode=composition_mode):
+                # Use Template with Sender and Subject
+                form.template_id = template_complete
+                self.assertEqual(form.email_from, template_complete.email_from, "email_from not set correctly to form this test")
+                self.assertEqual(form.subject, template_complete.subject, "subject not set correctly to form this test")
+
+                # Switch to Template without Sender
+                form.template_id = template_no_sender
+                self.assertEqual(form.email_from, self.env.user.email_formatted, "email_from not updated to current user")
+
+                # Switch to Template without Subject
+                form.template_id = template_no_subject
+                self.assertEqual(form.subject, template_complete.subject, "subject should be kept unchanged")
 
 @tagged('mail_composer')
 class TestComposerInternals(TestMailComposer):
@@ -680,18 +710,18 @@ class TestComposerInternals(TestMailComposer):
                     self.assertEqual(composer.email_from, self.test_from,
                                      'MailComposer: manual values should be kept')
 
-                # update with template with void values: void value is not forced in
+                # Update with template with void email_from field, should result in reseting email_from to a default value
                 # rendering mode as well as when copying template values
                 composer.write({'template_id': template_void.id})
 
                 if composition_mode == 'comment' and not batch:
                     self.assertEqual(composer.author_id, self.env.user.partner_id,
                                      'MailComposer: TODO: author / email_from are not synchronized')
-                    self.assertEqual(composer.email_from, self.test_from)
+                    self.assertEqual(composer.email_from, self.env.user.email_formatted)
                 else:
                     self.assertEqual(composer.author_id, self.env.user.partner_id,
                                      'MailComposer: TODO: author / email_from are not synchronized')
-                    self.assertEqual(composer.email_from, self.test_from)
+                    self.assertEqual(composer.email_from, self.env.user.email_formatted)
 
                 # reset template: values are reset due to call to default_get
                 composer.write({'template_id': False})
@@ -1189,27 +1219,15 @@ class TestComposerInternals(TestMailComposer):
 
         # patch check access rights for write access, required to post a message by default
         with patch.object(MailTestTicket, 'check_access_rights', return_value=True):
-            self.env['mail.compose.message'].with_user(portal_user).with_context(
-                self._get_web_context(self.test_record)
-            ).create({
-                'subject': 'Subject',
-                'body': '<p>Body text</p>',
-                'partner_ids': []
-            })._action_send_mail()
-
-            self.assertEqual(self.test_record.message_ids[0].body, '<p>Body text</p>')
-            self.assertEqual(self.test_record.message_ids[0].author_id, portal_user.partner_id)
-
-            self.env['mail.compose.message'].with_user(portal_user).with_context({
-                'default_composition_mode': 'comment',
-                'default_parent_id': self.test_record.message_ids.ids[0],
-            }).create({
-                'subject': 'Subject',
-                'body': '<p>Body text 2</p>'
-            })._action_send_mail()
-
-            self.assertEqual(self.test_record.message_ids[0].body, '<p>Body text 2</p>')
-            self.assertEqual(self.test_record.message_ids[0].author_id, portal_user.partner_id)
+            with self.assertRaises(AccessError):
+                # ensure portal can not send messages
+                self.env['mail.compose.message'].with_user(portal_user).with_context(
+                    self._get_web_context(self.test_record)
+                ).create({
+                    'subject': 'Subject',
+                    'body': '<p>Body text</p>',
+                    'partner_ids': []
+                })._action_send_mail()
 
     @users('employee')
     def test_mail_composer_save_template(self):

@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { _t } from "@web/core/l10n/translation";
 import { patch } from "@web/core/utils/patch";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
@@ -523,7 +521,7 @@ patch(PaymentScreen.prototype, {
      */
     async addNewPaymentLine(paymentMethod) {
         const order = this.pos.get_order();
-        const res = super.addNewPaymentLine(...arguments);
+        const res = await super.addNewPaymentLine(...arguments);
         if (res && paymentMethod.pos_mercury_config_id) {
             order.get_selected_paymentline().mercury_swipe_pending = true;
         }

@@ -1,27 +1,30 @@
 /** @odoo-module */
 
-import { getActiveElement, getParentFrame } from "../../../hoot-dom/helpers/dom";
-import { click } from "../../../hoot-dom/helpers/events";
+import { describe, expect, getFixture, mountOnFixture, test } from "@odoo/hoot";
 import {
+    click,
+    formatXml,
+    getActiveElement,
     getFocusableElements,
     getNextFocusableElement,
     getPreviousFocusableElement,
-    getRect,
     isDisplayed,
     isEditable,
     isEventTarget,
     isFocusable,
     isVisible,
     queryAll,
+    queryAllRects,
     queryAllTexts,
     queryOne,
+    queryRect,
     waitFor,
     waitForNone,
     waitUntil,
-} from "../../../hoot-dom/hoot-dom";
-import { describe, expect, getFixture, mountOnFixture, test } from "../../hoot";
-import { tick } from "../../hoot-mock";
-import { parseUrl } from "../local_helpers";
+} from "@odoo/hoot-dom";
+import { animationFrame, mockTouch } from "@odoo/hoot-mock";
+import { getParentFrame } from "../../../hoot-dom/helpers/dom";
+import { parseUrl, waitForIframes } from "../local_helpers";
 
 /**
  * @param {...string} queryAllSelectors
@@ -64,37 +67,13 @@ const expectSelector = (...queryAllSelectors) => {
  * @param {HTMLElement} [root]
  * @returns {Promise<HTMLIFrameElement>}
  */
-const makeIframe = (document, root) => {
-    return new Promise((resolve) => {
+const makeIframe = (document, root) =>
+    new Promise((resolve) => {
         const iframe = document.createElement("iframe");
-        iframe.addEventListener("load", async () => resolve(iframe));
+        iframe.addEventListener("load", () => resolve(iframe));
         iframe.srcdoc = "<body></body>";
         (root || document.body).appendChild(iframe);
     });
-};
-
-/**
- * @param {Partial<DOMRect>} dimensions
- * @param {string} [className]
- */
-const makeSquare = (dimensions, className) => {
-    const style = Object.entries({ width: 30, height: 30, ...dimensions })
-        .map(([k, v]) => `${k}:${v}px`)
-        .join(";");
-    return /* html */ `
-        <div
-            class="absolute ${className}"
-            style="${style}"
-        ></div>
-    `;
-};
-
-const waitForIframes = () =>
-    Promise.all(
-        queryAll("iframe").map(
-            (iframe) => new Promise((resolve) => iframe.addEventListener("load", resolve))
-        )
-    );
 
 const FULL_HTML_TEMPLATE = /* html */ `
     <header>
@@ -148,6 +127,34 @@ describe.tags("ui")(parseUrl(import.meta.url), () => {
         expect().toBeFalsy();
     });
 
+    test("formatXml", () => {
+        expect(formatXml("")).toBe("");
+        expect(formatXml("<input />")).toBe("<input/>");
+        expect(
+            formatXml(/* xml */ `
+            <div>
+                A
+            </div>
+        `)
+        ).toBe(`<div>\n    A\n</div>`);
+        expect(formatXml(/* xml */ `<div>A</div>`)).toBe(`<div>\n    A\n</div>`);
+
+        // Inline
+        expect(
+            formatXml(
+                /* xml */ `
+            <div>
+                A
+            </div>
+        `,
+                { keepInlineTextNodes: true }
+            )
+        ).toBe(`<div>\n    A\n</div>`);
+        expect(formatXml(/* xml */ `<div>A</div>`, { keepInlineTextNodes: true })).toBe(
+            `<div>A</div>`
+        );
+    });
+
     test("getActiveElement", async () => {
         await mountOnFixture(/* xml */ `<iframe srcdoc="&lt;input &gt;"></iframe>`);
 
@@ -189,11 +196,19 @@ describe.tags("ui")(parseUrl(import.meta.url), () => {
         await mountOnFixture(/* xml */ `
             <input class="input" />
             <div class="div" tabindex="0">aaa</div>
+            <span class="span" tabindex="-1">aaa</span>
             <button class="disabled-button" disabled="disabled">Disabled button</button>
             <button class="button" tabindex="1">Button</button>
         `);
 
         expect(getFocusableElements().map((el) => el.className)).toEqual([
+            "button",
+            "span",
+            "input",
+            "div",
+        ]);
+
+        expect(getFocusableElements({ tabbable: true }).map((el) => el.className)).toEqual([
             "button",
             "input",
             "div",
@@ -240,23 +255,6 @@ describe.tags("ui")(parseUrl(import.meta.url), () => {
         click(".input");
 
         expect(getPreviousFocusableElement()).toHaveClass("button");
-    });
-
-    test("getRect", async () => {
-        await mountOnFixture(/* xml */ `
-            <div class="root relative">
-                ${makeSquare({ left: 10, top: 20, padding: 5 }, "target")}
-            </div>
-        `);
-
-        const root = queryOne(".root");
-        const { x, y } = getRect(root);
-        const target = root.querySelector(".target");
-
-        expect(getRect(target)).toEqual(new DOMRect(x + 10, y + 20, 30, 30));
-        expect(getRect(queryOne(".target"), { trimPadding: true })).toEqual(
-            new DOMRect(x + 15, y + 25, 20, 20)
-        );
     });
 
     test("isEditable", async () => {
@@ -330,6 +328,15 @@ describe.tags("ui")(parseUrl(import.meta.url), () => {
         expect(matchMedia("not (prefers-color-scheme: dark)").matches).toBe(true);
         expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
         expect(matchMedia("(prefers-reduced-motion: no-preference)").matches).toBe(false);
+
+        // Touch feature
+        expect(window.matchMedia("(pointer: coarse)").matches).toBe(false);
+        expect(window.ontouchstart).toBe(undefined);
+
+        mockTouch(true);
+
+        expect(window.matchMedia("(pointer: coarse)").matches).toBe(true);
+        expect(window.ontouchstart).not.toBe(undefined);
     });
 
     test("waitFor: already in fixture", async () => {
@@ -340,11 +347,11 @@ describe.tags("ui")(parseUrl(import.meta.url), () => {
             return el;
         });
 
-        expect([]).toVerifySteps();
+        expect.verifySteps([]);
 
-        await tick();
+        await animationFrame();
 
-        expect(["title"]).toVerifySteps();
+        expect.verifySteps(["title"]);
     });
 
     test("waitFor: rejects", async () => {
@@ -363,24 +370,24 @@ describe.tags("ui")(parseUrl(import.meta.url), () => {
             return el;
         });
 
-        await tick();
+        await animationFrame();
 
-        expect([]).toVerifySteps();
+        expect.verifySteps([]);
 
         getFixture().append(el1, el2);
 
         await expect(promise).resolves.toBe(el1);
 
-        expect(["new-element"]).toVerifySteps();
+        expect.verifySteps(["new-element"]);
     });
 
     test("waitForNone: DOM empty", async () => {
         waitForNone(".title").then(() => expect.step("none"));
-        expect([]).toVerifySteps();
+        expect.verifySteps([]);
 
-        await tick();
+        await animationFrame();
 
-        expect(["none"]).toVerifySteps();
+        expect.verifySteps(["none"]);
     });
 
     test("waitForNone: rejects", async () => {
@@ -389,21 +396,21 @@ describe.tags("ui")(parseUrl(import.meta.url), () => {
         await expect(waitForNone(".title", { timeout: 1 })).rejects.toThrow();
     });
 
-    test("waitForNone; delete elements", async () => {
+    test("waitForNone: delete elements", async () => {
         await mountOnFixture(FULL_HTML_TEMPLATE);
 
         waitForNone(".title").then(() => expect.step("none"));
         expect(".title").toHaveCount(3);
 
         for (const title of queryAll(".title")) {
-            expect([]).toVerifySteps();
+            expect.verifySteps([]);
 
             title.remove();
 
-            await tick();
+            await animationFrame();
         }
 
-        expect(["none"]).toVerifySteps();
+        expect.verifySteps(["none"]);
     });
 
     test("waitUntil: already true", async () => {
@@ -414,23 +421,22 @@ describe.tags("ui")(parseUrl(import.meta.url), () => {
         await expect(waitUntil(() => false, { timeout: 1 })).rejects.toThrow();
     });
 
-    test("waitUntil: observe fixture", async () => {
+    test("waitUntil: lazy", async () => {
         let value = "";
         waitUntil(() => value).then((v) => expect.step(v));
 
-        expect([]).toVerifySteps();
+        expect.verifySteps([]);
 
         value = "test";
 
-        expect([]).toVerifySteps();
+        expect.verifySteps([]);
 
-        getFixture().setAttribute("data-value", "test"); // trigger mutation observer
-        await tick();
+        await animationFrame();
 
-        expect(["test"]).toVerifySteps();
+        expect.verifySteps(["test"]);
     });
 
-    describe("queryAll", () => {
+    describe("query", () => {
         test("native selectors", async () => {
             await mountOnFixture(FULL_HTML_TEMPLATE);
 
@@ -456,6 +462,7 @@ describe.tags("ui")(parseUrl(import.meta.url), () => {
             // :first, :last, :only & :eq
             expectSelector(".title:first").toEqualNodes(".title", { index: 0 });
             expectSelector(".title:last").toEqualNodes(".title", { index: -1 });
+            expectSelector(".title:eq(-1)").toEqualNodes(".title", { index: -1 });
             expectSelector("main:only").toEqualNodes("main");
             expectSelector(".title:only").toEqualNodes("");
             expectSelector(".title:eq(1)").toEqualNodes(".title", { index: 1 });
@@ -492,7 +499,7 @@ describe.tags("ui")(parseUrl(import.meta.url), () => {
             await mountOnFixture(FULL_HTML_TEMPLATE);
 
             // Comma-separated selectors
-            expectSelector("p:contains(ipsum),:has(form:contains('Form title'))").toEqualNodes(
+            expectSelector(":has(form:contains('Form title')),p:contains(ipsum)").toEqualNodes(
                 "p,main"
             );
 
@@ -830,8 +837,21 @@ describe.tags("ui")(parseUrl(import.meta.url), () => {
             expect(() => queryAll`[href=/]`).toThrow(); // missing quotes
             expect(
                 () =>
-                    queryAll`#o_wblog_posts_loop:has(span:has(i.fa-calendar-o):has(a[href="/blog?search=a"])):has(span:has(i.fa-search):has(a[href^="/blog?date_begin"]))`
+                    queryAll`_o_wblog_posts_loop:has(span:has(i.fa-calendar-o):has(a[href="/blog?search=a"])):has(span:has(i.fa-search):has(a[href^="/blog?date_begin"]))`
             ).toThrow(); // nested :has statements
+        });
+
+        test("queryAllRects", async () => {
+            await mountOnFixture(/* xml */ `
+                <div style="width: 40px; height: 60px;" />
+                <div style="width: 20px; height: 10px;" />
+            `);
+
+            expect(queryAllRects("div")).toEqual(
+                queryAll("div").map((el) => el.getBoundingClientRect())
+            );
+            expect(queryAllRects("div:first")).toEqual([new DOMRect({ width: 40, height: 60 })]);
+            expect(queryAllRects("div:last")).toEqual([new DOMRect({ width: 20, height: 10 })]);
         });
 
         test("queryAllTexts", async () => {
@@ -848,6 +868,28 @@ describe.tags("ui")(parseUrl(import.meta.url), () => {
 
             expect(() => queryOne(".title")).toThrow();
             expect(() => queryOne(".title", { exact: 2 })).toThrow();
+        });
+
+        test("queryRect", async () => {
+            await mountOnFixture(/* xml */ `
+                <div class="container">
+                    <div class="rect" style="width: 40px; height: 60px;" />
+                </div>
+            `);
+
+            expect(".rect").toHaveRect(".container"); // same rect as parent
+            expect(".rect").toHaveRect({ width: 40, height: 60 });
+            expect(queryRect(".rect")).toEqual(queryOne(".rect").getBoundingClientRect());
+            expect(queryRect(".rect")).toEqual(new DOMRect({ width: 40, height: 60 }));
+        });
+
+        test("queryRect with trimPadding", async () => {
+            await mountOnFixture(/* xml */ `
+                <div style="width: 40px; height: 60px; padding: 5px; margin: 6px" />
+            `);
+
+            expect("div").toHaveRect({ width: 50, height: 70 }); // with padding
+            expect("div").toHaveRect({ width: 40, height: 60 }, { trimPadding: true });
         });
 
         test.skip("performance against jQuery", async () => {

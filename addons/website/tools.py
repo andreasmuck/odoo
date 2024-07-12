@@ -11,13 +11,14 @@ from werkzeug.test import EnvironBuilder
 import odoo
 from odoo.tests.common import HttpCase, HOST
 from odoo.tools.misc import hmac, DotDict, frozendict
+from odoo.tools import config
 
 
 @contextlib.contextmanager
 def MockRequest(
         env, *, path='/mockrequest', routing=True, multilang=True,
         context=frozendict(), cookies=frozendict(), country_code=None,
-        website=None, remote_addr=HOST, environ_base=None,
+        website=None, remote_addr=HOST, environ_base=None, url_root=None,
         # website_sale
         sale_order_id=None, website_sale_current_pl=None,
 ):
@@ -41,6 +42,8 @@ def MockRequest(
             cookies=cookies,
             referrer='',
             remote_addr=remote_addr,
+            url_root=url_root,
+            args=[],
         ),
         type='http',
         future_response=odoo.http.FutureResponse(),
@@ -48,9 +51,9 @@ def MockRequest(
         redirect=env['ir.http']._redirect,
         session=DotDict(
             odoo.http.get_default_session(),
-            geoip={'country_code': country_code},
             sale_order_id=sale_order_id,
             website_sale_current_pl=website_sale_current_pl,
+            context={'lang': ''},
         ),
         geoip=odoo.http.GeoIP('127.0.0.1'),
         db=env.registry.db_name,
@@ -63,8 +66,12 @@ def MockRequest(
         website=website,
         render=lambda *a, **kw: '<MockResponse>',
     )
+    if url_root is not None:
+        request.httprequest.url = werkzeug.urls.url_join(url_root, path)
     if website:
         request.website_routing = website.id
+    if country_code:
+        request.geoip._city_record = odoo.http.geoip2.models.City({'country': {'iso_code': country_code}})
 
     # The following code mocks match() to return a fake rule with a fake
     # 'routing' attribute (routing=True) or to raise a NotFound
@@ -219,3 +226,23 @@ def add_form_signature(html_fragment, env_sudo):
             hash_value += ':email_cc'
         hash_node = etree.Element('input', attrib={'type': "hidden", 'value': hash_value, 'class': "form-control s_website_form_input s_website_form_custom", 'name': "website_form_signature"})
         form_values['email_to'].addnext(hash_node)
+
+
+def create_image_attachment(env, image_path, image_name):
+    """
+    Creates an image attachment.
+
+    :param env: self.env
+    :param image_path: the path to the image (e.g. '/web/image/website.s_banner_default_image')
+    :param image_name: the name to give to the image (e.g. 's_banner_default_image.jpg')
+    :return: the image attachment
+    """
+    IrAttachment = env['ir.attachment']
+    base = 'http://%s:%s' % (HOST, config['http_port'])
+    img = IrAttachment.create({
+        'public': True,
+        'name': image_name,
+        'type': 'url',
+        'url': base + image_path,
+    })
+    return img

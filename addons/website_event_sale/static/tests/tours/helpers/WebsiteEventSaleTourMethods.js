@@ -6,6 +6,7 @@ export function changePricelist(pricelistName) {
         {
             content: "Go to page Shop",
             trigger: '.nav-link:contains("Shop")',
+            run: "click",
         },
         {
             content: "Toggle Pricelist",
@@ -20,7 +21,6 @@ export function changePricelist(pricelistName) {
         {
             content: 'Wait for pricelist to load',
             trigger: `.dropdown-toggle:contains(${pricelistName})`,
-            run: function () {},
         },
     ];
 }
@@ -29,23 +29,26 @@ function checkPriceEvent(eventName, price) {
         {
             content: "Go to page Event",
             trigger: '.nav-link:contains("Event")',
+            run: "click",
         },
         {
             content: "Open the Pycon event",
             trigger: `.o_wevent_events_list a:contains(${eventName})`,
+            run: "click",
         },
         {
             content: "Open the ticket picking modal",
             trigger: `button:contains("Register")`,
+            run: "click",
         },
         {
             content: "Verify Price",
             trigger: `.oe_currency_value:contains(${price})`,
-            run: function () {}, // it's a check
         },
         {
             content: "Open the ticket picking modal",
             trigger: `.modal-content button:contains("Close")`,
+            run: "click",
         },
     ]
 }
@@ -55,7 +58,6 @@ function checkPriceDiscountEvent(eventName, price, discount) {
         {
             content: "Verify Price before discount",
             trigger: `del:contains(${discount})`,
-            run: function () {}, // it's a check
         },
     ]
 }

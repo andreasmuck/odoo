@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+from collections import defaultdict
 from datetime import timedelta
 
 from odoo import api, fields, tools, models, _
@@ -82,14 +83,24 @@ class UoM(models.Model):
     ]
 
     def _check_category_reference_uniqueness(self):
+        categ_res = self.read_group(
+            [("category_id", "in", self.category_id.ids)],
+            ["category_id", "uom_type"],
+            ["category_id", "uom_type"],
+            lazy=False,
+        )
+        uom_by_category = defaultdict(int)
+        ref_by_category = {}
+        for res in categ_res:
+            uom_by_category[res["category_id"][0]] += res["__count"]
+            if res["uom_type"] == "reference":
+                ref_by_category[res["category_id"][0]] = res["__count"]
+
         for category in self.category_id:
-            if not category.uom_ids:
-                continue
-            reference_count = sum(
-                uom.uom_type == 'reference' for uom in category.uom_ids)
+            reference_count = ref_by_category.get(category.id, 0)
             if reference_count > 1:
                 raise ValidationError(_("UoM category %s should only have one reference unit of measure.", category.name))
-            elif reference_count == 0:
+            elif reference_count == 0 and uom_by_category.get(category.id, 0) > 0:
                 raise ValidationError(_("UoM category %s should have a reference unit of measure.", category.name))
 
     @api.depends('factor')
@@ -212,8 +223,8 @@ class UoM(models.Model):
         if self != to_unit and self.category_id.id != to_unit.category_id.id:
             if raise_if_failure:
                 raise UserError(_(
-                    'The unit of measure %s defined on the order line doesn\'t belong to the same category as the unit of measure %s defined on the product. Please correct the unit of measure defined on the order line or on the product, they should belong to the same category.',
-                    self.name, to_unit.name))
+                    'The unit of measure %(unit)s defined on the order line doesn\'t belong to the same category as the unit of measure %(product_unit)s defined on the product. Please correct the unit of measure defined on the order line or on the product. They should belong to the same category.',
+                    unit=self.name, product_unit=to_unit.name))
             else:
                 return qty
 

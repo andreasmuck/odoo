@@ -16,6 +16,7 @@ class FecExportWizard(models.TransientModel):
     date_to = fields.Date(string='End Date', required=True, default=lambda self: self._context.get('report_dates', {}).get('date_to'))
     filename = fields.Char(string='Filename', size=256, readonly=True)
     test_file = fields.Boolean()
+    exclude_zero = fields.Boolean(string="Exclude lines at 0")
     export_type = fields.Selection([
         ('official', 'Official FEC report (posted entries only)'),
         ('nonofficial', 'Non-official FEC report (posted and unposted entries)'),
@@ -35,6 +36,8 @@ class FecExportWizard(models.TransientModel):
             domain.append(('parent_state', '=', 'posted'))
         if self.excluded_journal_ids:
             domain.append(('journal_id', 'not in', self.excluded_journal_ids.ids))
+        if self.exclude_zero:
+            domain.append(('balance', '!=', 0.0))
         return domain
 
     def _do_query_unaffected_earnings(self):
@@ -309,13 +312,11 @@ class FecExportWizard(models.TransientModel):
             aa_name=aa_name,
         )
         with io.BytesIO() as fecfile:
-            csv_writer = pycompat.csv_writer(fecfile, delimiter='|', lineterminator='')
+            csv_writer = pycompat.csv_writer(fecfile, delimiter='|', lineterminator='\r\n')
 
             # Write header and initial balances
             for initial_row in rows_to_write:
                 initial_row = list(initial_row)
-                # We don't skip \n at then end of the file if there are only initial balances, for simplicity. An empty period export shouldn't happen IRL.
-                initial_row[-1] += u'\r\n'
                 csv_writer.writerow(initial_row)
 
             # Write current period's data
@@ -326,13 +327,8 @@ class FecExportWizard(models.TransientModel):
                 has_more_results = self._cr.rowcount > query_limit # we load one more result than the limit to check if there is more
                 query_results = self._cr.fetchall()
                 for i, row in enumerate(query_results[:query_limit]):
-                    if i < len(query_results) - 1:
-                        # The file is not allowed to end with an empty line, so we can't use lineterminator on the writer
-                        row = list(row)
-                        row[-1] += u'\r\n'
                     csv_writer.writerow(row)
-            content = fecfile.getvalue()
-
+            content = fecfile.getvalue()[:-2]
 
         end_date = fields.Date.to_string(self.date_to).replace('-', '')
         suffix = ''

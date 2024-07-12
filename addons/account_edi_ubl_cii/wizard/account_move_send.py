@@ -26,6 +26,15 @@ class AccountMoveSend(models.TransientModel):
         values['ubl_cii_xml'] = self.checkbox_ubl_cii_xml
         return values
 
+    @api.model
+    def _get_wizard_vals_restrict_to(self, only_options):
+        # EXTENDS 'account'
+        values = super()._get_wizard_vals_restrict_to(only_options)
+        return {
+            'checkbox_ubl_cii_xml': False,
+            **values,
+        }
+
     # -------------------------------------------------------------------------
     # COMPUTE METHODS
     # -------------------------------------------------------------------------
@@ -36,7 +45,7 @@ class AccountMoveSend(models.TransientModel):
             wizard.checkbox_ubl_cii_label = False
             if wizard.mode in ('invoice_single', 'invoice_multi'):
                 code_to_label = dict(wizard.move_ids.partner_id._fields['ubl_cii_format'].selection)
-                codes = wizard.move_ids.partner_id.mapped('ubl_cii_format')
+                codes = wizard.move_ids.partner_id.commercial_partner_id.mapped('ubl_cii_format')
                 if any(codes):
                     wizard.checkbox_ubl_cii_label = ", ".join(code_to_label[c] for c in set(codes) if c)
 
@@ -55,6 +64,50 @@ class AccountMoveSend(models.TransientModel):
         for wizard in self:
             wizard.checkbox_ubl_cii_xml = wizard.enable_ubl_cii_xml and (wizard.checkbox_ubl_cii_xml or wizard.company_id.invoice_is_ubl_cii)
 
+    @api.depends('checkbox_ubl_cii_xml')
+    def _compute_warnings(self):
+        # EXTENDS 'account'
+        super()._compute_warnings()
+        for wizard in self:
+            if not set(wizard.move_ids.partner_id.commercial_partner_id.mapped('ubl_cii_format')) - {False, 'facturx', 'oioubl_201'}:
+                continue
+
+            warnings = {}
+            if wizard.checkbox_ubl_cii_xml:
+                show_ubl_company_warning = not (wizard.company_id.partner_id.peppol_eas and wizard.company_id.partner_id.peppol_endpoint)
+                if show_ubl_company_warning:
+                    warnings['account_edi_ubl_cii_configure_company'] = {
+                        'message': _("Please fill in Peppol EAS and Peppol Endpoint in your company form to generate a complete file."),
+                        'level': 'info',
+                        'action_text': _("View Company"),
+                        'action': wizard.company_id.partner_id._get_records_action(),
+                    }
+
+                not_configured_partners = wizard.move_ids.partner_id.commercial_partner_id.filtered(
+                    lambda partner: not (partner.peppol_eas and partner.peppol_endpoint)
+                )
+                if not_configured_partners:
+                    warnings['account_edi_ubl_cii_configure_partner'] = {
+                        'message': _("These partners are missing Peppol EAS or Peppol Endpoint field. "
+                                     "Please check those in their Accounting tab. "
+                                     "Otherwise, the generated files will be incomplete."),
+                        'level': 'info',
+                        'action_text': _("View Partner(s)"),
+                        'action': not_configured_partners._get_records_action(name=_("Check Partner(s)"))
+                    }
+
+                moves_without_bank = self.move_ids.filtered(lambda m: not m.partner_bank_id)
+                if moves_without_bank:
+                    warnings['account_edi_ubl_cii_configure_bank'] = {
+                        'message': _("Please add a Recipient bank in the 'Other Info' tab to generate a complete file."),
+                        'level': 'info',
+                        'action_text': _("View Invoice(s)"),
+                        'action': moves_without_bank._get_records_action(name=_("Check Invoice(s)")),
+                    }
+
+            if warnings:
+                wizard.warnings = {**(wizard.warnings or {}), **warnings}
+
     # -------------------------------------------------------------------------
     # ATTACHMENTS
     # -------------------------------------------------------------------------
@@ -72,7 +125,7 @@ class AccountMoveSend(models.TransientModel):
         results = super()._get_placeholder_mail_attachments_data(move)
 
         if self.mode == 'invoice_single' and self._needs_ubl_cii_placeholder():
-            builder = move.partner_id._get_edi_builder()
+            builder = move.partner_id.commercial_partner_id._get_edi_builder()
             filename = builder._export_invoice_filename(move)
             results.append({
                 'id': f'placeholder_{filename}',
@@ -93,7 +146,7 @@ class AccountMoveSend(models.TransientModel):
         super()._hook_invoice_document_before_pdf_report_render(invoice, invoice_data)
 
         if invoice_data.get('ubl_cii_xml') and invoice._need_ubl_cii_xml():
-            builder = invoice.partner_id._get_edi_builder()
+            builder = invoice.partner_id.commercial_partner_id._get_edi_builder()
             xml_content, errors = builder._export_invoice(invoice)
             filename = builder._export_invoice_filename(invoice)
 
@@ -114,7 +167,7 @@ class AccountMoveSend(models.TransientModel):
                     'res_field': 'ubl_cii_xml_file',  # Binary field
                 }
                 invoice_data['ubl_cii_xml_options'] = {
-                    'ubl_cii_format': invoice.partner_id.ubl_cii_format,
+                    'ubl_cii_format': invoice.partner_id.commercial_partner_id.ubl_cii_format,
                     'builder': builder,
                 }
 
@@ -187,6 +240,7 @@ class AccountMoveSend(models.TransientModel):
         if not anchor_elements:
             return
 
+        xmlns_move_type = 'Invoice' if invoice.move_type == 'out_invoice' else 'CreditNote'
         pdf_values = invoice_data.get('pdf_attachment_values') or invoice_data['proforma_pdf_attachment_values']
         filename = pdf_values['name']
         content = pdf_values['raw']
@@ -199,7 +253,7 @@ class AccountMoveSend(models.TransientModel):
             doc_type_node = f"<cbc:DocumentTypeCode {doc_type_code_attrs}>{doc_type_code_vals['value']}</cbc:DocumentTypeCode>"
         to_inject = f'''
             <cac:AdditionalDocumentReference
-                xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+                xmlns="urn:oasis:names:specification:ubl:schema:xsd:{xmlns_move_type}-2"
                 xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
                 xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2">
                 <cbc:ID>{escape(filename)}</cbc:ID>
@@ -221,11 +275,16 @@ class AccountMoveSend(models.TransientModel):
         )
 
     @api.model
-    def _link_invoice_documents(self, invoice, invoice_data):
+    def _link_invoice_documents(self, invoices_data):
         # EXTENDS 'account'
-        super()._link_invoice_documents(invoice, invoice_data)
+        super()._link_invoice_documents(invoices_data)
 
-        attachment_vals = invoice_data.get('ubl_cii_xml_attachment_values')
-        if attachment_vals:
-            self.env['ir.attachment'].with_user(SUPERUSER_ID).create(attachment_vals)
-            invoice.invalidate_recordset(fnames=['ubl_cii_xml_id', 'ubl_cii_xml_file'])
+        attachments_vals = [
+            invoice_data.get('ubl_cii_xml_attachment_values')
+            for invoice_data in invoices_data.values()
+            if invoice_data.get('ubl_cii_xml_attachment_values')
+        ]
+        if attachments_vals:
+            attachments = self.env['ir.attachment'].with_user(SUPERUSER_ID).create(attachments_vals)
+            res_ids = [attachment.res_id for attachment in attachments]
+            self.env['account.move'].browse(res_ids).invalidate_recordset(fnames=['ubl_cii_xml_id', 'ubl_cii_xml_file'])

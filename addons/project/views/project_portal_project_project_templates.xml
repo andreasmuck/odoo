@@ -38,13 +38,13 @@
         </xpath>
     </template>
 
-    <template id="portal_my_home" name="Show Projects / Tasks" customize_show="True" inherit_id="portal.portal_my_home" priority="40">
+    <template id="portal_my_home" name="Projects / Tasks" customize_show="True" inherit_id="portal.portal_my_home" priority="40">
         <xpath expr="//div[hasclass('o_portal_docs')]" position="before">
             <t t-set="portal_service_category_enable" t-value="True"/>
         </xpath>
         <div id="portal_service_category" position="inside">
             <t t-call="portal.portal_docs_entry">
-                <t t-set="icon" t-value="'/project/static/src/img/folder.svg'"/>
+                <t t-set="icon" t-value="'/web/static/img/folder.svg'"/>
                 <t t-set="title">Projects</t>
                 <t t-set="url" t-value="'/my/projects'"/>
                 <t t-set="text">Follow the evolution of your projects</t>

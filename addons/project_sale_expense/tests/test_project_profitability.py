@@ -95,7 +95,7 @@ class TestProjectSaleExpenseProfitability(TestProjectProfitabilityCommon, TestPr
             'No costs should be found since the sheets are not posted or done.',
         )
 
-        expense_sheet.action_sheet_move_create()
+        expense_sheet.action_sheet_move_post()
         self.assertEqual(expense_sheet.state, 'post')
         self.assertRecordValues(self.sale_order.order_line, [
             # Original SO line:
@@ -138,7 +138,7 @@ class TestProjectSaleExpenseProfitability(TestProjectProfitabilityCommon, TestPr
             }
         )
 
-        expense_sheet_foreign.action_sheet_move_create()
+        expense_sheet_foreign.action_sheet_move_post()
         self.assertEqual(expense_sheet_foreign.state, 'post')
         expense_sol_foreign = so_foreign.order_line[0]
         expense_profitability = project._get_expenses_profitability_items(False)
@@ -199,7 +199,7 @@ class TestProjectSaleExpenseProfitability(TestProjectProfitabilityCommon, TestPr
             {'id': 'expenses', 'sequence': expense_sequence, 'billed': expense.currency_id.round(billed), 'to_bill': 0.0},
         )
 
-        expense_sheet._do_refuse('Test Cancel Expense')
+        expense_sheet.action_reset_expense_sheets()
         expense_profitability = project._get_expenses_profitability_items(False)
         self.assertDictEqual(
             expense_profitability.get('revenues', {}),
@@ -243,7 +243,7 @@ class TestProjectSaleExpenseProfitability(TestProjectProfitabilityCommon, TestPr
             {'id': 'expenses', 'sequence': expense_sequence, 'billed': expense.currency_id.round(-expense_foreign.untaxed_amount_currency * 0.2), 'to_bill': 0.0},
         )
 
-        expense_sheet_foreign._do_refuse('Test Cancel Expense')
+        expense_sheet_foreign.action_reset_expense_sheets()
         expense_profitability = project._get_expenses_profitability_items(False)
         self.assertDictEqual(
             expense_profitability.get('revenues', {}),

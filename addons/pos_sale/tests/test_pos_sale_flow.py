@@ -5,6 +5,7 @@ import odoo
 
 from odoo.addons.point_of_sale.tests.test_frontend import TestPointOfSaleHttpCommon
 from odoo.tests import Form
+from odoo import fields
 
 @odoo.tests.tagged('post_install', '-at_install')
 class TestPoSSale(TestPointOfSaleHttpCommon):
@@ -15,13 +16,13 @@ class TestPoSSale(TestPointOfSaleHttpCommon):
         self.kit = self.env['product.product'].create({
             'name': 'Pizza Chicken',
             'available_in_pos': True,
-            'type': 'product',
+            'is_storable': True,
             'lst_price': 10.0,
         })
 
         self.component_a = self.env['product.product'].create({
             'name': 'Chicken',
-            'type': 'product',
+            'is_storable': True,
             'available_in_pos': True,
             'uom_id': self.env.ref('uom.product_uom_gram').id,
             'uom_po_id': self.env.ref('uom.product_uom_gram').id,
@@ -90,14 +91,14 @@ class TestPoSSale(TestPointOfSaleHttpCommon):
         product1 = self.env['product.product'].create({
             'name': 'product1',
             'available_in_pos': True,
-            'type': 'product',
+            'is_storable': True,
             'lst_price': 10,
             'taxes_id': [odoo.Command.clear()],
         })
         product2 = self.env['product.product'].create({
             'name': 'product2',
             'available_in_pos': True,
-            'type': 'product',
+            'is_storable': True,
             'lst_price': 11,
             'taxes_id': [odoo.Command.clear()],
         })
@@ -124,13 +125,13 @@ class TestPoSSale(TestPointOfSaleHttpCommon):
         product_a = self.env['product.product'].create({
             'name': 'Product A',
             'available_in_pos': True,
-            'type': 'product',
+            'is_storable': True,
             'lst_price': 10.0,
         })
         product_b = self.env['product.product'].create({
             'name': 'Product B',
             'available_in_pos': True,
-            'type': 'product',
+            'is_storable': True,
             'lst_price': 10.0,
         })
         #create a sale order with 2 lines
@@ -148,6 +149,10 @@ class TestPoSSale(TestPointOfSaleHttpCommon):
                 'product_uom_qty': 1,
                 'product_uom': product_b.uom_id.id,
                 'price_unit': product_b.lst_price,
+            }), (0, 0, {
+                # Add this line to test that it should not cause any issue when settling this order.
+                'name': 'section line',
+                'display_type': 'line_section',
             })],
         })
         sale_order.action_confirm()
@@ -192,9 +197,9 @@ class TestPoSSale(TestPointOfSaleHttpCommon):
         })
         self.main_pos_config.open_ui()
         self.start_pos_tour('PosRefundDownpayment', login="accountman")
-        self.assertEqual(len(sale_order.order_line), 3)
-        self.assertEqual(sale_order.order_line[1].qty_invoiced, 1)
-        self.assertEqual(sale_order.order_line[2].qty_invoiced, -1)
+        self.assertEqual(len(sale_order.order_line), 4)
+        self.assertEqual(sale_order.order_line[2].qty_invoiced, 1)
+        self.assertEqual(sale_order.order_line[3].qty_invoiced, -1)
 
     def test_settle_order_unreserve_order_lines(self):
         #create a product category that use the closest location for the removal strategy
@@ -207,7 +212,7 @@ class TestPoSSale(TestPointOfSaleHttpCommon):
         self.product = self.env['product.product'].create({
             'name': 'Product',
             'available_in_pos': True,
-            'type': 'product',
+            'is_storable': True,
             'lst_price': 10.0,
             'taxes_id': False,
             'categ_id': self.product_category.id,
@@ -277,7 +282,7 @@ class TestPoSSale(TestPointOfSaleHttpCommon):
         product_a = self.env['product.product'].create({
             'name': 'Product A',
             'available_in_pos': True,
-            'type': 'product',
+            'is_storable': True,
             'lst_price': 10.0,
         })
         #create a sale order with 2 lines
@@ -316,7 +321,7 @@ class TestPoSSale(TestPointOfSaleHttpCommon):
         product_a = self.env['product.product'].create({
             'name': 'Product A',
             'available_in_pos': True,
-            'type': 'product',
+            'is_storable': True,
             'lst_price': 10.0,
             'uom_id': uom.id,
             'uom_po_id': uom.id,
@@ -428,3 +433,80 @@ class TestPoSSale(TestPointOfSaleHttpCommon):
         current_session.close_session_from_ui()
         self.env.flush_all()
         self.assertEqual(self.desk_pad.sales_count, 1)
+
+    def test_untaxed_invoiced_amount(self):
+        """Make sure that orders invoiced in the pos gets their untaxed invoiced
+           amount updated accordingly"""
+
+        product_a = self.env['product.product'].create({
+            'name': 'Product A',
+            'available_in_pos': True,
+            'lst_price': 10.0,
+            'taxes_id': [],
+        })
+
+        product_b = self.env['product.product'].create({
+            'name': 'Product B',
+            'available_in_pos': True,
+            'lst_price': 5.0,
+            'taxes_id': [],
+        })
+
+        partner_test = self.env['res.partner'].create({'name': 'Test Partner'})
+
+        sale_order = self.env['sale.order'].create({
+            'partner_id': partner_test.id,
+            'order_line': [(0, 0, {
+                'product_id': product_a.id,
+                'name': product_a.name,
+                'product_uom_qty': 1,
+                'product_uom': product_a.uom_id.id,
+                'price_unit': product_a.lst_price,
+            }), (0, 0, {
+                'product_id': product_b.id,
+                'name': product_b.name,
+                'product_uom_qty': 1,
+                'product_uom': product_b.uom_id.id,
+                'price_unit': product_b.lst_price,
+            })],
+        })
+        sale_order.action_confirm()
+        self.main_pos_config.open_ui()
+        current_session = self.main_pos_config.current_session_id
+
+        pos_order = {
+           'amount_paid': 10,
+           'amount_return': 0,
+           'amount_tax': 0,
+           'amount_total': 10,
+           'date_order': fields.Datetime.to_string(fields.Datetime.now()),
+           'fiscal_position_id': False,
+           'to_invoice': True,
+           'partner_id': partner_test.id,
+           'pricelist_id': self.main_pos_config.available_pricelist_ids[0].id,
+           'lines': [[0,
+             0,
+             {'discount': 0,
+              'pack_lot_ids': [],
+              'price_unit': 10,
+              'product_id': product_a.id,
+              'price_subtotal': 10,
+              'price_subtotal_incl': 10,
+              'sale_order_line_id': sale_order.order_line[0].id,
+              'sale_order_origin_id': sale_order.id,
+              'qty': 1,
+              'tax_ids': []}]],
+           'name': 'Order 00044-003-0014',
+           'session_id': current_session.id,
+           'sequence_number': self.main_pos_config.journal_id.id,
+           'payment_ids': [[0,
+             0,
+             {'amount': 10,
+              'name': fields.Datetime.now(),
+              'payment_method_id': self.main_pos_config.payment_method_ids[0].id}]],
+           'user_id': self.env.uid
+            }
+
+        self.env['pos.order'].sync_from_ui([pos_order])
+        self.assertEqual(sale_order.order_line[0].untaxed_amount_invoiced, 10, "Untaxed invoiced amount should be 10")
+        self.assertEqual(sale_order.order_line[1].untaxed_amount_invoiced, 0, "Untaxed invoiced amount should be 0")

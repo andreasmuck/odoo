@@ -26,6 +26,7 @@ function clickAndCheck(blockID, expected) {
     return [{
         content: blockID ? `Enable the ${blockData.name}` : 'Disable all blocks',
         trigger: blockData.selector || ':iframe #wrapwrap',
+        run: "click",
     }, {
         content: 'Once the related overlays are enabled/disabled, check that the focus/blur calls have been correct.',
         trigger: blockID
@@ -56,8 +57,8 @@ wTourUtils.registerWebsitePreviewTour("focus_blur_snippets", {
 }, () => [
     {
         content: 'Drag the custom block into the page',
-        trigger: '#snippet_structure .oe_snippet:has(.oe_snippet_body.s_focusblur) .oe_snippet_thumbnail',
-        run: 'drag_and_drop_native :iframe #wrap',
+        trigger: '#snippet_structure .oe_snippet[name="s_focusblur"] .oe_snippet_thumbnail',
+        run: 'drag_and_drop :iframe #wrap',
     },
     ...clickAndCheck('parent', ['focus parent']),
     ...clickAndCheck(null, ['blur parent']),

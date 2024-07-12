@@ -1,4 +1,4 @@
-import { describe, test } from "@odoo/hoot";
+import { waitNotifications } from "@bus/../tests/bus_test_helpers";
 import {
     click,
     contains,
@@ -7,16 +7,15 @@ import {
     start,
     startServer,
 } from "@mail/../tests/mail_test_helpers";
-import { Command, serverState } from "@web/../tests/web_test_helpers";
-import { rpcWithEnv } from "@mail/utils/common/misc";
-import { tick } from "@odoo/hoot-mock";
-import { url } from "@web/core/utils/urls";
-import { deserializeDateTime } from "@web/core/l10n/dates";
-import { defineLivechatModels } from "./livechat_test_helpers";
 import { withGuest } from "@mail/../tests/mock_server/mail_mock_server";
+import { describe, test } from "@odoo/hoot";
+import { mockDate, tick } from "@odoo/hoot-mock";
+import { Command, serverState } from "@web/../tests/web_test_helpers";
 
-/** @type {ReturnType<import("@mail/utils/common/misc").rpcWithEnv>} */
-let rpc;
+import { deserializeDateTime } from "@web/core/l10n/dates";
+import { rpc } from "@web/core/network/rpc";
+import { url } from "@web/core/utils/urls";
+import { defineLivechatModels } from "./livechat_test_helpers";
 
 describe.current.tags("desktop");
 defineLivechatModels();
@@ -63,6 +62,7 @@ test("Known user with country", async () => {
 });
 
 test("Do not show channel when visitor is typing", async () => {
+    mockDate("2023-01-03 12:00:00"); // so that it's after last interest (mock server is in 2019 by default!)
     const pyEnv = await startServer();
     pyEnv["res.users"].write([serverState.userId], { im_status: "online" });
     const livechatChannelId = pyEnv["im_livechat.channel"].create({
@@ -82,8 +82,7 @@ test("Do not show channel when visitor is typing", async () => {
         livechat_channel_id: livechatChannelId,
         livechat_operator_id: serverState.partnerId,
     });
-    const env = await start();
-    rpc = rpcWithEnv(env);
+    await start();
     await openDiscuss();
     await contains(".o-mail-DiscussSidebarCategory", { count: 2 });
     await contains(".o-mail-DiscussSidebarCategory-livechat + .o-mail-DiscussSidebarChannel", {
@@ -92,7 +91,7 @@ test("Do not show channel when visitor is typing", async () => {
     // simulate livechat visitor typing
     const channel = pyEnv["discuss.channel"].search_read([["id", "=", channelId]])[0];
     await withGuest(guestId, () =>
-        rpc("/im_livechat/notify_typing", {
+        rpc("/discuss/channel/notify_typing", {
             is_typing: true,
             channel_id: channel.id,
         })
@@ -196,17 +195,22 @@ test("No counter if category is folded and without unread messages", async () =>
 test("Counter should have correct value of unread threads if category is folded and with unread messages", async () => {
     const pyEnv = await startServer();
     const guestId = pyEnv["mail.guest"].create({ name: "Visitor 11" });
-    pyEnv["discuss.channel"].create({
+    const channelId = pyEnv["discuss.channel"].create({
         anonymous_name: "Visitor 11",
         channel_member_ids: [
             Command.create({
-                message_unread_counter: 10,
                 partner_id: serverState.partnerId,
             }),
             Command.create({ guest_id: guestId }),
         ],
         channel_type: "livechat",
         livechat_operator_id: serverState.partnerId,
+    });
+    pyEnv["mail.message"].create({
+        author_guest_id: guestId,
+        message_type: "comment",
+        model: "discuss.channel",
+        res_id: channelId,
     });
     await start();
     await openDiscuss();
@@ -236,13 +240,17 @@ test("Close manually by clicking the title", async () => {
 });
 
 test("Open manually by clicking the title", async () => {
+    mockDate("2023-01-03 12:00:00");
     const pyEnv = await startServer();
     const guestId = pyEnv["mail.guest"].create({ name: "Visitor 11" });
     pyEnv["discuss.channel"].create({
         anonymous_name: "Visitor 11",
         channel_member_ids: [
-            Command.create({ partner_id: serverState.partnerId }),
-            Command.create({ guest_id: guestId }),
+            Command.create({
+                partner_id: serverState.partnerId,
+                last_interest_dt: "2021-01-01 10:00:00",
+            }),
+            Command.create({ guest_id: guestId, last_interest_dt: "2021-01-01 10:00:00" }),
         ],
         channel_type: "livechat",
         livechat_operator_id: serverState.partnerId,
@@ -282,13 +290,17 @@ test("Category item should be invisible if the category is closed", async () => 
 });
 
 test("Active category item should be visible even if the category is closed", async () => {
+    mockDate("2023-01-03 12:00:00");
     const pyEnv = await startServer();
     const guestId = pyEnv["mail.guest"].create({ name: "Visitor 11" });
     pyEnv["discuss.channel"].create({
         anonymous_name: "Visitor 11",
         channel_member_ids: [
-            Command.create({ partner_id: serverState.partnerId }),
-            Command.create({ guest_id: guestId }),
+            Command.create({
+                partner_id: serverState.partnerId,
+                last_interest_dt: "2021-01-01 10:00:00",
+            }),
+            Command.create({ guest_id: guestId, last_interest_dt: "2021-01-01 10:00:00" }),
         ],
         channel_type: "livechat",
         livechat_operator_id: serverState.partnerId,
@@ -322,19 +334,22 @@ test("Clicking on unpin button unpins the channel", async () => {
 });
 
 test("Message unread counter", async () => {
+    mockDate("2023-01-03 12:00:00");
     const pyEnv = await startServer();
     const guestId = pyEnv["mail.guest"].create({ name: "Visitor 11" });
     const channelId = pyEnv["discuss.channel"].create({
         anonymous_name: "Visitor 11",
         channel_member_ids: [
-            Command.create({ partner_id: serverState.partnerId }),
-            Command.create({ guest_id: guestId }),
+            Command.create({
+                partner_id: serverState.partnerId,
+                last_interest_dt: "2021-01-03 10:00:00",
+            }),
+            Command.create({ guest_id: guestId, last_interest_dt: "2021-01-03 10:00:00" }),
         ],
         channel_type: "livechat",
         livechat_operator_id: serverState.partnerId,
     });
-    const env = await start();
-    rpc = rpcWithEnv(env);
+    await start();
     await openDiscuss();
     withGuest(guestId, () =>
         rpc("/mail/message/post", {
@@ -351,14 +366,17 @@ test("Message unread counter", async () => {
 });
 
 test("unknown livechat can be displayed and interacted with", async () => {
+    mockDate("2023-01-03 12:00:00");
     const pyEnv = await startServer();
     const partnerId = pyEnv["res.partner"].create({ name: "Jane" });
     const channelId = pyEnv["discuss.channel"].create({
-        channel_member_ids: [Command.create({ partner_id: partnerId })],
+        channel_member_ids: [
+            Command.create({ partner_id: partnerId, last_interest_dt: "2021-01-01 10:00:00" }),
+        ],
         channel_type: "livechat",
         livechat_operator_id: partnerId,
     });
-    await start();
+    const env = await start();
     await openDiscuss();
     await contains("button.o-active", { text: "Inbox" });
     await contains(".o-mail-DiscussSidebarCategory-livechat", { count: 0 });
@@ -371,9 +389,10 @@ test("unknown livechat can be displayed and interacted with", async () => {
     await insertText(".o-mail-Composer-input", "Hello", { replace: true });
     await click(".o-mail-Composer-send:enabled");
     await contains(".o-mail-Message", { text: "Hello" });
+    await waitNotifications([env, "discuss.channel/new_message"]);
     await click("button", { text: "Inbox" });
     await contains(".o-mail-DiscussSidebarChannel:not(.o-active)", { text: "Jane" });
-    await click("div[title='Unpin Conversation']", {
+    await click("[title='Unpin Conversation']", {
         parent: [".o-mail-DiscussSidebarChannel", { text: "Jane" }],
     });
     await contains(".o-mail-DiscussSidebarCategory-livechat", { count: 0 });

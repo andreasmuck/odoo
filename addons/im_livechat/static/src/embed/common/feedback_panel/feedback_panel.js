@@ -3,10 +3,10 @@ import { TranscriptSender } from "@im_livechat/embed/common/feedback_panel/trans
 
 import { Component, useState } from "@odoo/owl";
 
-import { rpc } from "@web/core/network/rpc";
 import { useService } from "@web/core/utils/hooks";
 import { session } from "@web/session";
 import { url } from "@web/core/utils/urls";
+import { rpc } from "@web/core/network/rpc";
 
 /**
  * @typedef {Object} Props

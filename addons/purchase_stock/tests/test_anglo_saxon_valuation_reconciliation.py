@@ -11,9 +11,15 @@ from odoo import Command, fields
 
 @tagged('post_install', '-at_install')
 class TestValuationReconciliation(ValuationReconciliationTestCommon):
+
     @classmethod
-    def setup_company_data(cls, company_name, chart_template=None, **kwargs):
-        company_data = super().setup_company_data(company_name, chart_template=chart_template, **kwargs)
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.other_currency = cls.setup_other_currency('EUR', rounding=0.001)
+
+    @classmethod
+    def collect_company_accounting_data(cls, company):
+        company_data = super().collect_company_accounting_data(company)
 
         # Create stock config.
         company_data.update({
@@ -31,7 +37,7 @@ class TestValuationReconciliation(ValuationReconciliationTestCommon):
         with freeze_time(date):
             rslt = self.env['purchase.order'].create({
                 'partner_id': self.partner_a.id,
-                'currency_id': self.currency_data['currency'].id,
+                'currency_id': self.other_currency.id,
                 'order_line': [
                     (0, 0, {
                         'name': product.name,
@@ -40,7 +46,7 @@ class TestValuationReconciliation(ValuationReconciliationTestCommon):
                         'product_uom': product.uom_po_id.id,
                         'price_unit': price_unit,
                         'date_planned': date,
-                        'taxes_id': [(6, 0, product.supplier_taxes_id.ids)] if set_tax else False,
+                        'tax_ids': [(6, 0, product.supplier_taxes_id.ids)] if set_tax else False,
                     })],
                 'date_order': date,
             })
@@ -52,7 +58,7 @@ class TestValuationReconciliation(ValuationReconciliationTestCommon):
             move_form = Form(self.env['account.move'].with_context(default_move_type='in_invoice', default_date=date))
             move_form.invoice_date = date
             move_form.partner_id = self.partner_a
-            move_form.currency_id = self.currency_data['currency']
+            move_form.currency_id = self.other_currency
             move_form.purchase_vendor_bill_id = self.env['purchase.bill.union'].browse(-purchase_order.id)
             return move_form.save()
 
@@ -97,7 +103,7 @@ class TestValuationReconciliation(ValuationReconciliationTestCommon):
                 active_ids=picking.ids, active_id=picking.ids[0], active_model='stock.picking'))
             stock_return_picking = stock_return_picking_form.save()
             stock_return_picking.product_return_moves.quantity = 1.0
-            stock_return_picking_action = stock_return_picking.create_returns()
+            stock_return_picking_action = stock_return_picking.action_create_returns()
             return_pick = self.env['stock.picking'].browse(stock_return_picking_action['res_id'])
             return_pick.action_assign()
             return_pick.move_ids.quantity = 1
@@ -225,7 +231,7 @@ class TestValuationReconciliation(ValuationReconciliationTestCommon):
         date_accounting = '2021-01-03'
         rate_accounting = 26.0
 
-        foreign_currency = self.currency_data['currency']
+        foreign_currency = self.other_currency
         company_currency = self.env.company.currency_id
         self.env['res.currency.rate'].create([
         {
@@ -348,7 +354,7 @@ class TestValuationReconciliation(ValuationReconciliationTestCommon):
         product_A = self.env["product.product"].create(
             {
                 "name": "Product A",
-                "type": "product",
+                "is_storable": True,
                 "default_code": "prda",
                 "categ_id": self.stock_account_product_categ.id,
                 "taxes_id": [(5, 0, 0)],
@@ -407,14 +413,14 @@ class TestValuationReconciliation(ValuationReconciliationTestCommon):
         date_po_and_delivery = '2022-03-02'
         self.product_a.write({
             'categ_id': self.stock_account_product_categ,
-            'detailed_type': 'product',
+            'is_storable': True,
         })
         self.product_b.write({
             'categ_id': self.stock_account_product_categ,
-            'detailed_type': 'product',
+            'is_storable': True,
         })
         purchase_order = self.env['purchase.order'].create({
-                'currency_id': self.currency_data['currency'].id,
+            'currency_id': self.other_currency.id,
                 'order_line': [
                     Command.create({
                         'name': self.product_a.name,
@@ -451,7 +457,7 @@ class TestValuationReconciliation(ValuationReconciliationTestCommon):
         self.product_a.write({
             'standard_price': 27.0,
             'categ_id': self.stock_account_product_categ,
-            'detailed_type': 'product',
+            'is_storable': True,
         })
 
         self.stock_account_product_categ['property_cost_method'] = 'average'
@@ -470,7 +476,7 @@ class TestValuationReconciliation(ValuationReconciliationTestCommon):
             active_model='stock.picking'))
         stock_return_picking = stock_return_picking_form.save()
         stock_return_picking.product_return_moves.write({'quantity': 1000.0})
-        stock_return_picking_action = stock_return_picking.create_returns()
+        stock_return_picking_action = stock_return_picking.action_create_returns()
         return_pick = self.env['stock.picking'].browse(stock_return_picking_action['res_id'])
         return_pick.move_line_ids.write({'quantity': 1000})
         return_pick.button_validate()

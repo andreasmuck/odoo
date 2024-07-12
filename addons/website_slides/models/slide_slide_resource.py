@@ -11,6 +11,7 @@ from odoo.tools.mimetypes import get_extension
 class SlideResource(models.Model):
     _name = 'slide.slide.resource'
     _description = "Additional resource for a particular slide"
+    _order = "sequence, id"
 
     slide_id = fields.Many2one('slide.slide', required=True, ondelete='cascade')
     resource_type = fields.Selection([('file', 'File'), ('url', 'Link')], required=True)
@@ -19,6 +20,7 @@ class SlideResource(models.Model):
     file_name = fields.Char(store=True)
     link = fields.Char('Link', compute='_compute_reset_resources', store=True, readonly=False)
     download_url = fields.Char('Download URL', compute='_compute_download_url')
+    sequence = fields.Integer(string="Sequence")
 
     _sql_constraints = [
         ('check_url', "CHECK (resource_type != 'url' OR link IS NOT NULL)", 'A resource of type url must contain a link.'),
@@ -42,9 +44,9 @@ class SlideResource(models.Model):
             if to_update:
                 new_name = _("Resource")
                 if resource.resource_type == 'file' and (resource.data or resource.file_name):
-                    new_name = self.file_name
+                    new_name = resource.file_name
                 elif resource.resource_type == 'url':
-                    new_name = self.link
+                    new_name = resource.link
                 resource.name = new_name
 
     @api.depends('name', 'file_name')

@@ -26,7 +26,9 @@ patch(MockServer.prototype, {
             if (args.body.get("voice")) {
                 this.mockCreate("discuss.voice.metadata", { attachment_id: attachmentId });
             }
-            return this._mockIrAttachment_attachmentFormat([attachmentId])[0];
+            return {
+                data: { Attachment: this._mockIrAttachment_attachmentFormat([attachmentId]) },
+            };
         }
         return super.performRPC(...arguments);
     },
@@ -74,8 +76,7 @@ patch(MockServer.prototype, {
             return this._mockRouteMailMessageHistory(search_term, after, before, limit);
         }
         if (route === "/mail/inbox/messages") {
-            const { search_term, after, around, before, limit } = args;
-            return this._mockRouteMailMessageInbox(search_term, after, before, around, limit);
+            return { count: 0, data: {}, message: [] };
         }
         if (route === "/mail/link_preview") {
             return this._mockRouteMailLinkPreview(args.message_id);
@@ -143,7 +144,7 @@ patch(MockServer.prototype, {
                     },
                 }
             );
-            return this._mockMailMessageMessageFormat([args.message_id])[0];
+            return { Message: this._mockMailMessageMessageFormat([args.message_id]) };
         }
         if (route === "/mail/partner/from_email") {
             return this._mockRouteMailPartnerFromEmail(args.emails, args.additional_values);
@@ -201,7 +202,7 @@ patch(MockServer.prototype, {
             ["res_id", "=", channel_id],
             ["pinned_at", "!=", false],
         ]);
-        return this._mockMailMessageMessageFormat(messageIds);
+        return { Message: this._mockMailMessageMessageFormat(messageIds) };
     },
     /**
      * Simulates the `/mail/attachment/delete` route.
@@ -252,7 +253,12 @@ patch(MockServer.prototype, {
         }
         return {
             ...res,
-            messages: this._mockMailMessageMessageFormat(res.messages.map((message) => message.id)),
+            data: {
+                Message: this._mockMailMessageMessageFormat(
+                    res.messages.map((message) => message.id)
+                ),
+            },
+            message: res.messages.map((message) => ({ id: message.id })),
         };
     },
     /**
@@ -361,38 +367,12 @@ patch(MockServer.prototype, {
 
         return {
             ...res,
-            messages: this._mockMailMessageMessageFormat(
-                messagesWithNotification.map((message) => message.id)
-            ),
-        };
-    },
-    /**
-     * Simulates the `/mail/inbox/messages` route.
-     *
-     * @private
-     * @returns {Object}
-     */
-    _mockRouteMailMessageInbox(
-        search_term = false,
-        after = false,
-        before = false,
-        around = false,
-        limit = 30
-    ) {
-        const domain = [["needaction", "=", true]];
-        const res = this._mockMailMessage_MessageFetch(
-            domain,
-            search_term,
-            before,
-            after,
-            around,
-            limit
-        );
-        return {
-            ...res,
-            messages: this._mockMailMessageFormatPersonalize(
-                res.messages.map((message) => message.id)
-            ),
+            data: {
+                Message: this._mockMailMessageMessageFormat(
+                    messagesWithNotification.map((message) => message.id)
+                ),
+            },
+            message: res.messages.map((message) => ({ id: message.id })),
         };
     },
     /**
@@ -418,7 +398,12 @@ patch(MockServer.prototype, {
         );
         return {
             ...res,
-            messages: this._mockMailMessageMessageFormat(res.messages.map((message) => message.id)),
+            data: {
+                Message: this._mockMailMessageMessageFormat(
+                    res.messages.map((message) => message.id)
+                ),
+            },
+            message: res.messages.map((message) => ({ id: message.id })),
         };
     },
     /**
@@ -545,10 +530,15 @@ patch(MockServer.prototype, {
             });
             notifications.push([
                 channel,
-                "discuss.channel/rtc_sessions_update",
+                "mail.record/insert",
                 {
-                    id: Number(channelId), // JS object keys are strings, but the type from the server is number
-                    rtcSessions: [["DELETE", notificationRtcSessions]],
+                    Thread: [
+                        {
+                            id: Number(channelId), // JS object keys are strings, but the type from the server is number
+                            model: "discuss.channel",
+                            rtcSessions: [["DELETE", notificationRtcSessions]],
+                        },
+                    ],
                 },
             ]);
         }
@@ -626,26 +616,9 @@ patch(MockServer.prototype, {
             }
         }
         if (request_list.includes("followers")) {
-            const domain = [
-                ["res_id", "=", thread.id],
-                ["res_model", "=", thread_model],
-            ];
             res["followersCount"] = (thread.message_follower_ids || []).length;
-            const selfFollower = this.pyEnv["mail.followers"].search_read(
-                domain.concat([["partner_id", "=", this.pyEnv.currentPartnerId]])
-            )[0];
-            res["selfFollower"] = selfFollower
-                ? this._mockMailFollowers_FormatForChatter(selfFollower.id)[0]
-                : false;
-            res["followers"] = this._mockMailThreadMessageGetFollowers(thread_model, [thread_id]);
+            res["selfFollower"] = false;
             res["recipientsCount"] = (thread.message_follower_ids || []).length - 1;
-            res["recipients"] = this._mockMailThreadMessageGetFollowers(
-                thread_model,
-                [thread_id],
-                undefined,
-                100,
-                { filter_recipients: true }
-            );
         }
         if (request_list.includes("suggestedRecipients")) {
             res["suggestedRecipients"] = this._mockMailThread_MessageGetSuggestedRecipients(
@@ -653,7 +626,7 @@ patch(MockServer.prototype, {
                 thread.id
             );
         }
-        return res;
+        return { Thread: [res] };
     },
     /**
      * Simulates the `/mail/thread/messages` route.
@@ -691,7 +664,12 @@ patch(MockServer.prototype, {
         this._mockMailMessageSetMessageDone(res.messages.map((message) => message.id));
         return {
             ...res,
-            messages: this._mockMailMessageMessageFormat(res.messages.map((message) => message.id)),
+            data: {
+                Message: this._mockMailMessageMessageFormat(
+                    res.messages.map((message) => message.id)
+                ),
+            },
+            message: res.messages.map((message) => ({ id: message.id })),
         };
     },
 });

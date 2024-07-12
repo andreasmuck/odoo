@@ -32,15 +32,15 @@ SUPPORTED_CURRENCIES = (
 )
 
 # The codes of the payment methods to activate when Paypal is activated.
-DEFAULT_PAYMENT_METHODS_CODES = [
+DEFAULT_PAYMENT_METHOD_CODES = {
     # Primary payment methods.
     'paypal',
-]
+}
 
 # Mapping of transaction states to PayPal payment statuses
 # See https://developer.paypal.com/docs/api-basics/notifications/ipn/IPNandPDTVariables/
 PAYMENT_STATUS_MAPPING = {
     'pending': ('Pending',),
-    'done': ('Processed', 'Completed'),
+    'done': ('Processed', 'Completed', 'Cleared'),  # cleared status is required fo echeck
     'cancel': ('Voided', 'Expired'),
 }

@@ -2,7 +2,7 @@
 <odoo>
     <record id="base.partner_demo_company_dz" model="res.partner" forcecreate="1">
         <field name="name">DZ Company</field>
-        <field name="vat">088390123</field>
+        <field name="vat">000000000000000</field>
         <field name="street">شارع</field>
         <field name="city">عين صالح</field>
         <field name="country_id" ref="base.dz"/>
@@ -30,5 +30,6 @@
         <value eval="[]"/>
         <value>dz</value>
         <value model="res.company" eval="obj().env.ref('base.demo_company_dz')"/>
+        <value name="install_demo" eval="True"/>
     </function>
 </odoo>

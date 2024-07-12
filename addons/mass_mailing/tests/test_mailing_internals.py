@@ -15,13 +15,13 @@ from odoo.addons.base.tests.test_ir_cron import CronMixinCase
 from odoo.addons.mass_mailing.tests.common import MassMailCommon
 from odoo.exceptions import ValidationError
 from odoo.sql_db import Cursor
-from odoo.tests import Form, users, tagged
+from odoo.tests import Form, HttpCase, users, tagged
 from odoo.tools import mute_logger
 
 BASE_64_STRING = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
 
 
-@tagged('mass_mailing')
+@tagged("mass_mailing")
 class TestMassMailValues(MassMailCommon):
 
     @classmethod
@@ -421,6 +421,10 @@ class TestMassMailValues(MassMailCommon):
             activity.write({'res_id': 0})
             self.env.flush_all()
 
+
+@tagged("mass_mailing", "utm")
+class TestMassMailUTM(MassMailCommon):
+
     @freeze_time('2022-01-02')
     @patch.object(Cursor, 'now', lambda *args, **kwargs: datetime(2022, 1, 2))
     @users('user_marketing')
@@ -431,6 +435,7 @@ class TestMassMailValues(MassMailCommon):
         that this generated name is unique.
         """
         mailing_0 = self.env['mailing.mailing'].create({'subject': 'First subject'})
+        self.assertEqual(mailing_0.name, 'First subject (Mass Mailing created on 2022-01-02)')
 
         mailing_1, mailing_2, mailing_3, mailing_4, mailing_5, mailing_6 = self.env['mailing.mailing'].create([{
             'subject': 'First subject',
@@ -457,13 +462,20 @@ class TestMassMailValues(MassMailCommon):
         self.assertEqual(mailing_5.name, 'Mailing [2]')
         self.assertEqual(mailing_6.name, 'Second subject (Mass Mailing created on 2022-01-02)')
 
+        # should generate same name (coming from same subject)
         mailing_0.subject = 'First subject'
-        self.assertEqual(mailing_0.name, 'First subject (Mass Mailing created on 2022-01-02) [4]',
-            msg='The name must have been re-generated')
+        self.assertEqual(mailing_0.name, 'First subject (Mass Mailing created on 2022-01-02)',
+            msg='The name should not be updated')
 
+        # take a (long) existing name -> should increment
         mailing_0.name = 'Second subject (Mass Mailing created on 2022-01-02)'
         self.assertEqual(mailing_0.name, 'Second subject (Mass Mailing created on 2022-01-02) [2]',
-            msg='The name must be unique')
+            msg='The name must be unique, it was already taken')
+
+        # back to first subject: not linked to any record so should take it back
+        mailing_0.subject = 'First subject'
+        self.assertEqual(mailing_0.name, 'First subject (Mass Mailing created on 2022-01-02)',
+            msg='The name should be back to first one')
 
 
 @tagged('mass_mailing')
@@ -667,6 +679,65 @@ Email: <a id="url5" href="mailto:test@odoo.com">test@odoo.com</a></div>""",
                     link_params=link_params,
                 )
 
+
+@tagged("mail_mail")
+class TestMailingHeaders(MassMailCommon, HttpCase):
+    """ Test headers + linked controllers """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._create_mailing_list()
+        cls.test_mailing = cls.env['mailing.mailing'].with_user(cls.user_marketing).create({
+            "body_html": """
+<p>Hello <t t-out="object.name"/>
+    <a href="/unsubscribe_from_list">UNSUBSCRIBE</a>
+    <a href="/view">VIEW</a>
+</p>""",
+            "contact_list_ids": [(4, cls.mailing_list_1.id)],
+            "mailing_model_id": cls.env["ir.model"]._get("mailing.list").id,
+            "mailing_type": "mail",
+            "name": "TestMailing",
+            "subject": "Test for {{ object.name }}",
+        })
+
+    @users('user_marketing')
+    def test_mailing_unsubscribe_headers(self):
+        """ Check unsubscribe headers are present in outgoing emails and work
+        as one-click """
+        test_mailing = self.test_mailing.with_env(self.env)
+        test_mailing.action_put_in_queue()
+
+        with self.mock_mail_gateway(mail_unlink_sent=False):
+            test_mailing.action_send_mail()
+
+        for contact in self.mailing_list_1.contact_ids:
+            new_mail = self._find_mail_mail_wrecord(contact)
+            # check mail.mail still have default links
+            self.assertIn("/unsubscribe_from_list", new_mail.body)
+            self.assertIn("/view", new_mail.body)
+
+            # check outgoing email headers (those are put into outgoing email
+            # not in the mail.mail record)
+            email = self._find_sent_mail_wemail(contact.email)
+            headers = email.get("headers")
+            unsubscribe_oneclick_url = test_mailing._get_unsubscribe_oneclick_url(contact.email, contact.id)
+            self.assertTrue(headers, "Mass mailing emails should have headers for unsubscribe")
+            self.assertEqual(headers.get("List-Unsubscribe"), f"<{unsubscribe_oneclick_url}>")
+            self.assertEqual(headers.get("List-Unsubscribe-Post"), "List-Unsubscribe=One-Click")
+            self.assertEqual(headers.get("Precedence"), "list")
+
+            # check outgoing email has real links
+            self.assertNotIn("/unsubscribe_from_list", email["body"])
+
+            # unsubscribe in one-click
+            unsubscribe_oneclick_url = headers["List-Unsubscribe"].strip("<>")
+            self.opener.post(unsubscribe_oneclick_url)
+
+            # should be unsubscribed
+            self.assertTrue(contact.subscription_ids.opt_out)
+
+
 class TestMailingScheduleDateWizard(MassMailCommon):
 
     @mute_logger('odoo.addons.mail.models.mail_mail')
@@ -689,3 +760,27 @@ class TestMailingScheduleDateWizard(MassMailCommon):
         self.assertEqual(mailing.schedule_date, datetime(2021, 4, 30, 9, 0))
         self.assertEqual(mailing.schedule_type, 'scheduled')
         self.assertEqual(mailing.state, 'in_queue')
+
+
+class TestMassMailingActions(MassMailCommon):
+    def test_mailing_action_open(self):
+        mass_mailings = self.env['mailing.mailing'].create([
+            {'subject': 'First subject'},
+            {'subject': 'Second subject'}
+        ])
+        # Create two traces: one linked to the created mass.mailing and one not (action should open only the first)
+        self.env["mailing.trace"].create([{
+                "trace_status": "open",
+                "mass_mailing_id": mass_mailings[0].id,
+                "model": "res.partner",
+                "res_id": self.partner_admin.id,
+            }, {
+                "trace_status": "open",
+                "mass_mailing_id": mass_mailings[1].id,
+                "model": "res.partner",
+                "res_id": self.partner_employee.id,
+            }
+        ])
+        results = mass_mailings[0].action_view_opened()
+        results_partner = self.env["res.partner"].search(results['domain'])
+        self.assertEqual(results_partner, self.partner_admin, "Trace leaked from mass_mailing_2 to mass_mailing_1")

@@ -1,4 +1,3 @@
-import { describe, test } from "@odoo/hoot";
 import {
     click,
     contains,
@@ -6,9 +5,9 @@ import {
     openDiscuss,
     start,
     startServer,
-} from "../../mail_test_helpers";
-import { Command, serverState } from "@web/../tests/web_test_helpers";
-import { withUser } from "@web/../tests/_framework/mock_server/mock_server";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, test } from "@odoo/hoot";
+import { Command, getService, serverState, withUser } from "@web/../tests/web_test_helpers";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -97,7 +96,9 @@ test("chat with member should be opened after clicking on channel member", async
     await start();
     await openDiscuss(channelId);
     await click("[title='Show Member List']");
-    await click(".o-discuss-ChannelMember.cursor-pointer");
+    await click(".o-discuss-ChannelMember.cursor-pointer", { text: "Demo" });
+    await contains(".o_avatar_card .o_card_user_infos", { text: "Demo" });
+    await click(".o_avatar_card button", { text: "Send message" });
     await contains(".o-mail-AutoresizeInput[title='Demo']");
 });
 
@@ -168,12 +169,58 @@ test("Channel member count update after user left", async () => {
             Command.create({ partner_id: partnerId }),
         ],
     });
-    const env = await start();
+    await start();
     await openDiscuss(channelId);
     await click("[title='Show Member List']");
     await contains(".o-discuss-ChannelMember", { count: 2 });
     await withUser(userId, () =>
-        env.services.orm.call("discuss.channel", "action_unfollow", [channelId])
+        getService("orm").call("discuss.channel", "action_unfollow", [channelId])
     );
     await contains(".o-discuss-ChannelMember", { count: 1 });
+});
+
+test("Members are partitioned by online/offline", async () => {
+    const pyEnv = await startServer();
+    const [userId_1, userId_2] = pyEnv["res.users"].create([{ name: "Dobby" }, { name: "John" }]);
+    const [partnerId_1, partnerId_2] = pyEnv["res.partner"].create([
+        {
+            name: "Dobby",
+            user_ids: [userId_1],
+            im_status: "offline",
+        },
+        {
+            name: "John",
+            user_ids: [userId_2],
+            im_status: "online",
+        },
+    ]);
+    const channelId = pyEnv["discuss.channel"].create({
+        name: "General",
+        channel_member_ids: [
+            Command.create({ partner_id: serverState.partnerId }),
+            Command.create({ partner_id: partnerId_1 }),
+            Command.create({ partner_id: partnerId_2 }),
+        ],
+    });
+    pyEnv["res.partner"].write([serverState.partnerId], { im_status: "online" });
+    await start();
+    await openDiscuss(channelId);
+    await click("[title='Show Member List']");
+    await contains(".o-discuss-ChannelMember", { count: 3 });
+    await contains("h6", { text: "Online - 2" });
+    await contains("h6", { text: "Offline - 1" });
+    await contains(".o-discuss-ChannelMember", {
+        text: "John",
+        after: ["h6", { text: "Online - 2" }],
+        before: ["h6", { text: "Offline - 1" }],
+    });
+    await contains(".o-discuss-ChannelMember", {
+        text: "Mitchell Admin",
+        after: ["h6", { text: "Online - 2" }],
+        before: ["h6", { text: "Offline - 1" }],
+    });
+    await contains(".o-discuss-ChannelMember", {
+        text: "Dobby",
+        after: ["h6", { text: "Offline - 1" }],
+    });
 });

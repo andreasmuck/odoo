@@ -131,7 +131,7 @@
         <field name="arch" type="xml">
             <form string="Project Sharing: Task" class="o_form_project_tasks">
                 <header>
-                    <field name="stage_id" widget="statusbar" options="{'clickable': '1', 'fold_field': 'fold'}" invisible="not project_id and not stage_id" />
+                    <field name="stage_id" widget="statusbar_duration" options="{'clickable': '1', 'fold_field': 'fold'}" invisible="not project_id and not stage_id" />
                 </header>
                 <div groups="base.group_user" role="status" class="alert alert-info alert-dismissible rounded-0 fade show d-print-none css_editable_mode_hidden">
                     <div class="text-center">This is a preview of how the project will look when it's shared with customers and they have editing access.
@@ -151,9 +151,15 @@
                                 class="oe_stat_button" icon="fa-repeat" context="{'default_user_ids': [(6, 0, [uid])]}">
                             <field name="recurring_count" widget="statinfo" string="Recurring Tasks"/>
                         </button>
-                        <button name="action_project_sharing_open_subtasks" type="object" class="oe_stat_button" icon="fa-tasks"
-                            invisible="not id or subtask_count == 0" context="{'default_user_ids': [(6, 0, [uid])]}">
+                        <button name="action_project_sharing_open_subtasks" type="object" class="oe_stat_button" icon="fa-check"
+                            invisible="not id or subtask_count == 0" context="{
+                                'default_user_ids': [(6, 0, [uid])],
+                                'default_project_id': project_id,
+                                'default_display_in_project': False,
+                            }"
+                        >
                             <field name="subtask_count" widget="statinfo" string="Sub-tasks"/>
+                            <field name="display_in_project" invisible="True"/>
                         </button>
                         <button name="action_project_sharing_open_blocking" type="object" invisible="not dependent_tasks_count" class="oe_stat_button" icon="fa-tasks">
                             <div class="o_field_widget o_stat_info">
@@ -178,7 +184,6 @@
                             <field name="allow_milestones" invisible="1"/>
                             <field name="milestone_id"
                                 placeholder="e.g. Product Launch"
-                                context="{'default_project_id': project_id}"
                                 invisible="not allow_milestones"
                                 readonly="1"
                                 options="{'no_open': True}"/>
@@ -217,18 +222,24 @@
                             <field name="description" type="html" options="{'collaborative': true, 'allowCommandImage': false, 'allowCommandVideo': false, 'allowCommandFile': false}"/>
                         </page>
                         <page name="sub_tasks_page" string="Sub-tasks">
-                            <field name="child_ids" context="{'default_parent_id': id, 'default_partner_id': partner_id, 'form_view_ref' : 'project.project_sharing_project_task_view_form'}">
+                            <field name="child_ids" context="{
+                                'default_project_id': project_id, 'default_display_in_project': False, 'default_parent_id': id,
+                                'default_milestone_id': allow_milestones and milestone_id, 'default_partner_id': partner_id,
+                                'form_view_ref' : 'project.project_sharing_project_task_view_form',
+                            }">
                                 <tree editable="bottom">
                                     <field name="project_id" column_invisible="True"/>
+                                    <field name="display_in_project" column_invisible="True"/>
                                     <field name="state" column_invisible="True"/>
                                     <field name="sequence" widget="handle"/>
-                                    <field name="priority" widget="priority" optional="show" nolabel="1"/>
-                                    <field name="state" widget="project_task_state_selection" nolabel="1"/>
+                                    <field name="priority" widget="priority" optional="show" nolabel="1" width="20px"/>
+                                    <field name="state" widget="project_task_state_selection" nolabel="1" width="20px"/>
                                     <field name="name"/>
                                     <field name="allow_milestones" column_invisible="True"/>
                                     <field name="milestone_id"
                                         optional="hide"
-                                        context="{'default_project_id': project_id}"
+                                        options="{'no_open': True}"
+                                        readonly="1"
                                         column_invisible="not parent.allow_milestones"
                                         invisible="not allow_milestones"/>
                                     <field name="company_id" column_invisible="True"/>
@@ -240,7 +251,7 @@
                                     <field name="stage_id" domain="[('user_id', '=', False), ('project_ids', 'in', [project_id])]"/>
                                     <button name="action_open_task" type="object" title="View Task" string="View Task" class="btn btn-link float-end"
                                             context="{'form_view_ref': 'project.project_sharing_project_task_view_form', 'search_view_ref': 'project.project_sharing_project_task_view_search'}"
-                                            invisible="not project_id or project_id == id"/>
+                                            invisible="project_id != context.get('active_id')"/>
                                 </tree>
                             </field>
                         </page>
@@ -255,8 +266,8 @@
                                 <tree editable="bottom">
                                     <field name="project_id" column_invisible="True"/>
                                     <field name="sequence" widget="handle"/>
-                                    <field name="priority" widget="priority" optional="show" nolabel="1" readonly="1"/>
-                                    <field name="state" widget="project_task_state_selection" nolabel="1" readonly="1"/>
+                                    <field name="priority" widget="priority" optional="show" nolabel="1" width="20px" readonly="1"/>
+                                    <field name="state" widget="project_task_state_selection" nolabel="1" width="20px" readonly="1"/>
                                     <field name="name"/>
                                     <field name="allow_milestones" column_invisible="True"/>
                                     <field name="milestone_id"
@@ -273,12 +284,15 @@
                                     <field name="stage_id" optional="show"/>
                                     <button name="action_open_task" type="object" title="View Task" string="View Task" class="btn btn-link float-end"
                                             context="{'form_view_ref': 'project.project_sharing_project_task_view_form'}"
-                                            invisible="not project_id or project_id == id"/>
+                                            invisible="project_id != context.get('active_id')"/>
                                 </tree>
                             </field>
                         </page>
                     </notebook>
                 </sheet>
+                <!-- field used inside the chatter to know if the portal user is follower or not -->
+                <field name="message_is_follower" invisible="1"/>
+                <field name="display_follow_button" invisible="1"/>
                 <chatter/>
             </form>
         </field>
@@ -287,11 +301,30 @@
     <record id="project_sharing_project_task_view_search" model="ir.ui.view">
         <field name="name">project.task.search.form</field>
         <field name="model">project.task</field>
-        <field name="inherit_id" ref="project.view_task_search_form_project_base"/>
+        <field name="inherit_id" ref="project.view_task_search_form_base"/>
         <field name="mode">primary</field>
         <field name="priority">999</field>
         <field name="arch" type="xml">
-            <search position="inside"/>
+            <filter name="date_last_stage_update" position="after">
+                <filter string="Deadline" name="date_deadline" date="date_deadline">
+                    <filter name="deadline_future" string="Future" domain="[('date_deadline', '&gt;', datetime.datetime.combine(context_today(), datetime.time(23,59,59)).to_utc())]"/>
+                    <filter name="deadline_this_week" string="This Week" domain="[
+                        ('date_deadline', '&gt;=', datetime.datetime.combine(context_today() + relativedelta(weeks=-1,weekday=0), datetime.time(0,0,0)).to_utc()),
+                        ('date_deadline', '&lt;', datetime.datetime.combine(context_today() + relativedelta(weekday=0), datetime.time(0,0,0)).to_utc()),
+                    ]"/>
+                    <filter name="deadline_today" string="Today" domain="[
+                        ('date_deadline', '&gt;=', datetime.datetime.combine(context_today(), datetime.time(0,0,0)).to_utc()),
+                        ('date_deadline', '&lt;=', datetime.datetime.combine(context_today(), datetime.time(23,59,59)).to_utc()),
+                    ]"/>
+                    <filter name="deadline_past_due" string="Overdue" domain="[('date_deadline', '&lt;', datetime.datetime.combine(context_today(), datetime.time(0,0,0)).to_utc())]"/>
+                </filter>
+            </filter>
+            <filter name="last_stage_update" position="after">
+                <filter string="Deadline" name="deadline" context="{'group_by': 'date_deadline'}"/>
+            </filter>
+            <xpath expr="//search/filter[@name='inactive']" position='attributes'>
+                <attribute name='invisible'>1</attribute>
+            </xpath>
         </field>
     </record>
 

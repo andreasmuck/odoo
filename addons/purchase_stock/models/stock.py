@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from collections import defaultdict
@@ -33,7 +32,7 @@ class StockWarehouse(models.Model):
                     'picking_type_id': self.in_type_id.id,
                     'group_propagation_option': 'none',
                     'company_id': self.company_id.id,
-                    'route_id': self._find_global_route('purchase_stock.route_warehouse0_buy', _('Buy'), raise_if_not_found=False).id,
+                    'route_id': self._find_or_create_global_route('purchase_stock.route_warehouse0_buy', _('Buy')).id,
                     'propagate_cancel': self.reception_steps != 'one_step',
                 },
                 'update_values': {
@@ -75,17 +74,16 @@ class ReturnPicking(models.TransientModel):
     _inherit = "stock.return.picking"
 
     def _prepare_move_default_values(self, return_line, new_picking):
-        vals = super(ReturnPicking, self)._prepare_move_default_values(return_line, new_picking)
+        vals = super()._prepare_move_default_values(return_line, new_picking)
         if self.location_id.usage == "supplier":
             vals['purchase_line_id'], vals['partner_id'] = return_line.move_id._get_purchase_line_and_partner_from_chain()
         return vals
 
-    def _create_returns(self):
-        new_picking_id, picking_type_id = super()._create_returns()
-        picking = self.env['stock.picking'].browse(new_picking_id)
+    def _create_return(self):
+        picking = super()._create_return()
         if len(picking.move_ids.partner_id) == 1:
             picking.partner_id = picking.move_ids.partner_id
-        return new_picking_id, picking_type_id
+        return picking
 
 
 class Orderpoint(models.Model):
@@ -93,10 +91,11 @@ class Orderpoint(models.Model):
 
     show_supplier = fields.Boolean('Show supplier column', compute='_compute_show_suppplier')
     supplier_id = fields.Many2one(
-        'product.supplierinfo', string='Product Supplier', check_company=True,
+        'product.supplierinfo', string='Supplier', check_company=True,
         domain="['|', ('product_id', '=', product_id), '&', ('product_id', '=', False), ('product_tmpl_id', '=', product_tmpl_id)]")
     vendor_id = fields.Many2one(related='supplier_id.partner_id', string="Vendor", store=True)
     purchase_visibility_days = fields.Float(default=0.0, help="Visibility Days applied on the purchase routes.")
+    product_supplier_id = fields.Many2one('res.partner', compute='_compute_product_supplier_id', store=True, string='Product Supplier')
 
     @api.depends('product_id.purchase_order_line_ids.product_qty', 'product_id.purchase_order_line_ids.state')
     def _compute_qty(self):
@@ -113,6 +112,11 @@ class Orderpoint(models.Model):
             if 'buy' in orderpoint.rule_ids.mapped('action'):
                 orderpoint.visibility_days = orderpoint.purchase_visibility_days
         return res
+
+    @api.depends('product_tmpl_id', 'product_tmpl_id.seller_ids', 'product_tmpl_id.seller_ids.sequence', 'product_tmpl_id.seller_ids.partner_id')
+    def _compute_product_supplier_id(self):
+        for orderpoint in self:
+            orderpoint.product_supplier_id = orderpoint.product_tmpl_id.seller_ids.sorted('sequence')[:1].partner_id.id
 
     def _set_visibility_days(self):
         res = super()._set_visibility_days()
@@ -173,9 +177,10 @@ class Orderpoint(models.Model):
                     'message': '%s',
                     'links': [{
                         'label': order.display_name,
-                        'url': f'#action={action.id}&id={order.id}&model=purchase.order',
+                        'url': f'/web#action={action.id}&id={order.id}&model=purchase.order',
                     }],
                     'sticky': False,
+                    'next': {'type': 'ir.actions.act_window_close'},
                 }
             }
         return super()._get_replenishment_order_notification()

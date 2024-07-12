@@ -15,7 +15,7 @@ export const IMAGE_MIMETYPES = ['image/jpg', 'image/jpeg', 'image/jpe', 'image/p
 export const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.jpe', '.png', '.svg', '.gif', '.webp'];
 
 class RemoveButton extends Component {
-    static template = xml`<i class="fa fa-trash o_existing_attachment_remove position-absolute top-0 end-0 p-2 bg-white-25 cursor-pointer opacity-0 opacity-100-hover z-index-1 transition-base" t-att-title="removeTitle" role="img" t-att-aria-label="removeTitle" t-on-click="this.remove"/>`;
+    static template = xml`<i class="fa fa-trash o_existing_attachment_remove position-absolute top-0 end-0 p-2 bg-white-25 cursor-pointer opacity-0 opacity-100-hover z-1 transition-base" t-att-title="removeTitle" role="img" t-att-aria-label="removeTitle" t-on-click="this.remove"/>`;
     static props = ["model?", "remove"];
     setup() {
         this.removeTitle = _t("This file is attached to the current record.");
@@ -316,33 +316,10 @@ export class FileSelector extends Component {
     }
 
     async uploadUrl(url) {
-        await fetch(url).then(async result => {
-            const blob = await result.blob();
-            blob.id = new Date().getTime();
-            blob.name = new URL(url).pathname.split("/").findLast(s => s);
-            await this.uploadFiles([blob]);
-        }).catch(async () => {
-            await new Promise(resolve => {
-                // If it works from an image, use URL.
-                const imageEl = document.createElement("img");
-                imageEl.onerror = () => {
-                    // This message is about the blob fetch failure.
-                    // It is only displayed if the fallback did not work.
-                    this.notificationService.add(_t("An error occurred while fetching the entered URL."), {
-                        title: _t("Error"),
-                        sticky: true,
-                    });
-                    resolve();
-                };
-                imageEl.onload = () => {
-                    this.uploadService.uploadUrl(url, {
-                        resModel: this.props.resModel,
-                        resId: this.props.resId,
-                    }, attachment => this.onUploaded(attachment)).then(resolve);
-                };
-                imageEl.src = url;
-            });
-        });
+        await this.uploadService.uploadUrl(url, {
+            resModel: this.props.resModel,
+            resId: this.props.resId,
+        }, attachment => this.onUploaded(attachment));
     }
 
     async onUploaded(attachment) {

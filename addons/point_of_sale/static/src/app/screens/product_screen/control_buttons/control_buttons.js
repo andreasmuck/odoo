@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { Component, useState, xml } from "@odoo/owl";
 import { useService } from "@web/core/utils/hooks";
 import { Dialog } from "@web/core/dialog/dialog";
@@ -14,11 +12,12 @@ export class ControlButtons extends Component {
     static template = "point_of_sale.ControlButtons";
     static components = { OrderlineNoteButton, SelectPartnerButton };
     static props = {
-        wrapped: { type: Boolean, optional: true },
+        showRemainingButtons: { type: Boolean, optional: true },
         onClickMore: { type: Function, optional: true },
+        close: { type: Function, optional: true },
     };
     static defaultProps = {
-        wrapped: true,
+        showRemainingButtons: false,
     };
     setup() {
         this.pos = usePos();
@@ -72,11 +71,6 @@ export class ControlButtons extends Component {
         this.currentOrder.update({
             fiscal_position_id: selectedFiscalPosition ? selectedFiscalPosition.id : false,
         });
-        // IMPROVEMENT: The following is the old implementation and I believe
-        // there could be a better way of doing it.
-        for (const line of this.currentOrder.lines) {
-            line.set_quantity(line.qty);
-        }
     }
     async clickPricelist() {
         // Create the list to be passed to the SelectionPopup.
@@ -91,7 +85,7 @@ export class ControlButtons extends Component {
             item: pricelist,
         }));
 
-        if (!this.pos.default_pricelist) {
+        if (!this.pos.config.pricelist_id) {
             selectionList.push({
                 id: null,
                 label: _t("Default Price"),
@@ -100,11 +94,14 @@ export class ControlButtons extends Component {
             });
         }
 
-        this.dialog.add(SelectionPopup, {
+        const payload = await makeAwaitable(this.dialog, SelectionPopup, {
             title: _t("Select the pricelist"),
             list: selectionList,
-            getPayload: (x) => this.currentOrder.set_pricelist(x),
         });
+
+        if (payload) {
+            this.pos.selectPricelist(payload);
+        }
     }
 
     clickRefund() {
@@ -119,37 +116,22 @@ export class ControlButtons extends Component {
             },
         });
     }
-    onClickSave() {
-        const orderline = this.pos.get_order().get_selected_orderline();
-        if (!orderline) {
-            this.notification.add(_t("You cannot save an empty order"));
-            return;
-        }
-        this._selectEmptyOrder();
-        this.pos.addPendingOrder([this.pos.get_order().id]);
-        this.pos.syncAllOrders();
-        this.notification.add(_t("Order saved for later"));
-    }
-    _selectEmptyOrder() {
-        const orders = this.pos.get_order_list();
-        const emptyOrders = orders.filter((order) => order.is_empty());
-        if (emptyOrders.length > 0) {
-            this.pos.syncAllOrders();
-            this.pos.set_order(emptyOrders[0]);
-        } else {
-            this.pos.add_new_order();
-        }
-    }
     get internalNoteLabel() {
         return _t("Internal Note");
+    }
+
+    get buttonClass() {
+        return this.props.showRemainingButtons
+            ? "btn btn-secondary rounded fw-bolder"
+            : "btn btn-light rounded-0 fw-bolder";
     }
 }
 
 export class ControlButtonsPopup extends Component {
     static components = { Dialog, ControlButtons };
     static template = xml`
-        <Dialog bodyClass="'d-flex flex-column'" footer="false" title="''" t-on-click="props.close">
-            <ControlButtons wrapped="false"/>
+        <Dialog bodyClass="'d-flex flex-column'" footer="false" header="false" t-on-click="props.close">
+            <ControlButtons showRemainingButtons="true" close="props.close"/>
         </Dialog>
     `;
     static props = {

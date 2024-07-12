@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { Dialog } from "@web/core/dialog/dialog";
 import { SaleDetailsButton } from "@point_of_sale/app/navbar/sale_details_button/sale_details_button";
 import { ConfirmationDialog, AlertDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
@@ -12,6 +10,8 @@ import { usePos } from "@point_of_sale/app/store/pos_hook";
 import { parseFloat } from "@web/views/fields/parsers";
 import { Input } from "@point_of_sale/app/generic_components/inputs/input/input";
 import { useAsyncLockedMethod } from "@point_of_sale/app/utils/hooks";
+import { ask } from "@point_of_sale/app/store/make_awaitable_dialog";
+import { deduceUrl } from "@point_of_sale/utils";
 
 export class ClosePosPopup extends Component {
     static components = { SaleDetailsButton, Input, Dialog };
@@ -20,7 +20,7 @@ export class ClosePosPopup extends Component {
         "orders_details",
         "opening_notes",
         "default_cash_details",
-        "other_payment_methods",
+        "non_cash_payment_methods",
         "is_manager",
         "amount_authorized_diff",
         "close",
@@ -30,7 +30,6 @@ export class ClosePosPopup extends Component {
         this.pos = usePos();
         this.report = useService("report");
         this.hardwareProxy = useService("hardware_proxy");
-        this.customerDisplay = useService("customer_display");
         this.dialog = useService("dialog");
         this.state = useState(this.getInitialState());
         this.confirm = useAsyncLockedMethod(this.confirm);
@@ -42,7 +41,7 @@ export class ClosePosPopup extends Component {
                 counted: "0",
             };
         }
-        this.props.other_payment_methods.forEach((pm) => {
+        this.props.non_cash_payment_methods.forEach((pm) => {
             if (pm.type === "bank") {
                 initialState.payments[pm.id] = {
                     counted: this.env.utils.formatCurrency(pm.amount, false),
@@ -58,13 +57,17 @@ export class ClosePosPopup extends Component {
             return;
         }
         if (this.hasUserAuthority()) {
-            this.dialog.add(ConfirmationDialog, {
+            const response = await ask(this.dialog, {
                 title: _t("Payments Difference"),
                 body: _t(
-                    "Do you want to accept payments difference and post a profit/loss journal entry?"
+                    "The money counted doesn't match what we expected. Want to log the difference for the books?"
                 ),
-                confirm: this.closeSession.bind(this),
+                confirmLabel: _t("Proceed Anyway"),
+                cancelLabel: _t("Discard"),
             });
+            if (response) {
+                return this.closeSession();
+            }
             return;
         }
         this.dialog.add(ConfirmationDialog, {
@@ -100,6 +103,7 @@ export class ClosePosPopup extends Component {
                 }
                 this.moneyDetails = moneyDetails;
             },
+            context: "Closing",
         });
     }
     async downloadSalesReport() {
@@ -119,10 +123,11 @@ export class ClosePosPopup extends Component {
         const expectedAmount =
             paymentId === this.props.default_cash_details?.id
                 ? this.props.default_cash_details.amount
-                : this.props.other_payment_methods.find((pm) => pm.id === paymentId).amount;
+                : this.props.non_cash_payment_methods.find((pm) => pm.id === paymentId).amount;
 
         return parseFloat(counted) - expectedAmount;
     }
+
     getMaxDifference() {
         return Math.max(
             ...Object.keys(this.state.payments).map((id) =>
@@ -141,7 +146,21 @@ export class ClosePosPopup extends Component {
         return true;
     }
     async closeSession() {
-        this.customerDisplay?.update({ closeUI: true });
+        if (this.pos.config.customer_display_type === "proxy") {
+            const proxyIP = this.pos.getDisplayDeviceIP();
+            fetch(`${deduceUrl(proxyIP)}/hw_proxy/customer_facing_display`, {
+                method: "POST",
+                headers: {
+                    Accept: "application/json",
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    action: "close",
+                }),
+            }).catch(() => {
+                console.log("Failed to send data to customer display");
+            });
+        }
         // If there are orders in the db left unsynced, we try to sync.
         const syncSuccess = await this.pos.push_orders_with_closing_popup();
         if (!syncSuccess) {
@@ -179,7 +198,7 @@ export class ClosePosPopup extends Component {
         }
 
         try {
-            const bankPaymentMethodDiffPairs = this.props.other_payment_methods
+            const bankPaymentMethodDiffPairs = this.props.non_cash_payment_methods
                 .filter((pm) => pm.type == "bank")
                 .map((pm) => [pm.id, this.getDifference(pm.id)]);
             const response = await this.pos.data.call("pos.session", "close_session_from_ui", [
@@ -189,7 +208,7 @@ export class ClosePosPopup extends Component {
             if (!response.successful) {
                 return this.handleClosingError(response);
             }
-            window.location = "/web#action=point_of_sale.action_client_pos_menu";
+            this.pos.redirectToBackend();
         } catch (error) {
             if (error instanceof ConnectionLostError) {
                 // Cannot redirect to backend when offline, let error handlers show the offline popup
@@ -206,17 +225,37 @@ export class ClosePosPopup extends Component {
                             "You will be redirected to the back-end to manually close the session."
                     ),
                 });
-                window.location = "/web#action=point_of_sale.action_client_pos_menu";
+                this.pos.redirectToBackend();
             }
         }
     }
     async handleClosingError(response) {
-        this.dialog.add(AlertDialog, {
+        this.dialog.add(ConfirmationDialog, {
             title: response.title || "Error",
             body: response.message,
+            confirmLabel: _t("Review Orders"),
+            cancelLabel: _t("Cancel Orders"),
+            confirm: () => {
+                if (!response.redirect) {
+                    this.props.close();
+                    this.pos.onTicketButtonClick();
+                }
+            },
+            cancel: async () => {
+                if (!response.redirect) {
+                    const ordersDraft = this.pos.models["pos.order"].filter((o) => !o.finalized);
+                    await this.pos.deleteOrders(ordersDraft, response.open_order_ids);
+                    this.closeSession();
+                }
+            },
         });
+
         if (response.redirect) {
-            window.location = "/web#action=point_of_sale.action_client_pos_menu";
+            this.pos.redirectToBackend();
         }
+    }
+    getMovesTotalAmount() {
+        const amounts = this.props.default_cash_details.moves.map((move) => move.amount);
+        return amounts.reduce((acc, x) => acc + x, 0);
     }
 }

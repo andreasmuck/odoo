@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+from collections import defaultdict
 import time
 import re
 import logging
@@ -12,7 +13,7 @@ from odoo.osv import expression
 from odoo.tools import DEFAULT_SERVER_DATETIME_FORMAT, mute_logger
 from odoo.exceptions import ValidationError, UserError
 from odoo.addons.base.models.res_partner import WARNING_MESSAGE, WARNING_HELP
-from odoo.tools import SQL
+from odoo.tools import SQL, unique
 
 _logger = logging.getLogger(__name__)
 
@@ -32,7 +33,9 @@ class AccountFiscalPosition(models.Model):
         string='Company', required=True, readonly=True,
         default=lambda self: self.env.company)
     account_ids = fields.One2many('account.fiscal.position.account', 'position_id', string='Account Mapping', copy=True)
+    account_map = fields.Binary(compute='_compute_account_map')
     tax_ids = fields.One2many('account.fiscal.position.tax', 'position_id', string='Tax Mapping', copy=True)
+    tax_map = fields.Binary(compute='_compute_tax_map')
     note = fields.Html('Notes', translate=True, help="Legal mentions that have to be printed on the invoices.")
     auto_apply = fields.Boolean(string='Detect Automatically', help="Apply tax & account mappings on invoices automatically if the matching criterias (VAT/Country) are met.")
     vat_required = fields.Boolean(string='VAT required', help="Apply only if partner has a VAT number.")
@@ -74,11 +77,27 @@ class AccountFiscalPosition(models.Model):
                 # 'no_template' kept for compatibility in stable. To remove in master
                 fiscal_position.foreign_vat_header_mode = 'templates_found' if template['installed'] else 'no_template'
 
+    @api.depends('tax_ids.tax_src_id', 'tax_ids.tax_dest_id')
+    def _compute_tax_map(self):
+        for position in self:
+            tax_map = defaultdict(list)
+            for tl in position.tax_ids:
+                if tl.tax_dest_id:
+                    tax_map[tl.tax_src_id.id].append(tl.tax_dest_id.id)
+                else:
+                    tax_map[tl.tax_src_id.id]  # map to an empty list
+            position.tax_map = dict(tax_map)
+
+    @api.depends('account_ids.account_src_id', 'account_ids.account_dest_id')
+    def _compute_account_map(self):
+        for position in self:
+            position.account_map = {al.account_src_id.id: al.account_dest_id.id for al in position.account_ids}
+
     @api.constrains('zip_from', 'zip_to')
     def _check_zip(self):
         for position in self:
-            if position.zip_from and position.zip_to and position.zip_from > position.zip_to:
-                raise ValidationError(_('Invalid "Zip Range", please configure it properly.'))
+            if bool(position.zip_from) != bool(position.zip_to) or position.zip_from > position.zip_to:
+                raise ValidationError(_('Invalid "Zip Range", You have to configure both "From" and "To" values for the zip range and "To" should be greater than "From".'))
 
     @api.constrains('country_id', 'state_ids', 'foreign_vat')
     def _validate_foreign_vat_country(self):
@@ -108,30 +127,14 @@ class AccountFiscalPosition(models.Model):
                     raise ValidationError(_("A fiscal position with a foreign VAT already exists in this region."))
 
     def map_tax(self, taxes):
-        if not self:
-            return taxes
-        result = self.env['account.tax']
-        for tax in taxes:
-            taxes_correspondance = self.tax_ids.filtered(lambda t: t.tax_src_id == tax._origin and (not t.tax_dest_id or t.tax_dest_active))
-            result |= taxes_correspondance.tax_dest_id if taxes_correspondance else tax
-        return result
+        return self.env['account.tax'].browse(unique(
+            tax_id
+            for tax in taxes
+            for tax_id in (self.tax_map or {}).get(tax.id, [tax.id])
+        ))
 
     def map_account(self, account):
-        for pos in self.account_ids:
-            if pos.account_src_id == account:
-                return pos.account_dest_id
-        return account
-
-    def map_accounts(self, accounts):
-        """ Receive a dictionary having accounts in values and try to replace those accounts accordingly to the fiscal position.
-        """
-        ref_dict = {}
-        for line in self.account_ids:
-            ref_dict[line.account_src_id] = line.account_dest_id
-        for key, acc in accounts.items():
-            if acc in ref_dict:
-                accounts[key] = ref_dict[acc]
-        return accounts
+        return self.env['account.account'].browse((self.account_map or {}).get(account.id, account.id))
 
     @api.onchange('country_id')
     def _onchange_country_id(self):
@@ -148,11 +151,12 @@ class AccountFiscalPosition(models.Model):
 
     @api.model
     def _convert_zip_values(self, zip_from='', zip_to=''):
-        max_length = max(len(zip_from), len(zip_to))
-        if zip_from.isdigit():
-            zip_from = zip_from.rjust(max_length, '0')
-        if zip_to.isdigit():
-            zip_to = zip_to.rjust(max_length, '0')
+        if zip_from and zip_to:
+            max_length = max(len(zip_from), len(zip_to))
+            if zip_from.isdigit():
+                zip_from = zip_from.rjust(max_length, '0')
+            if zip_to.isdigit():
+                zip_to = zip_to.rjust(max_length, '0')
         return zip_from, zip_to
 
     @api.model_create_multi
@@ -172,52 +176,49 @@ class AccountFiscalPosition(models.Model):
                 vals['zip_from'], vals['zip_to'] = self._convert_zip_values(zip_from or rec.zip_from, zip_to or rec.zip_to)
         return super(AccountFiscalPosition, self).write(vals)
 
-    @api.model
-    def _get_fpos_by_region(self, country_id=False, state_id=False, zipcode=False, vat_required=False):
-        if not country_id:
-            return False
-        base_domain = self._prepare_fpos_base_domain(vat_required)
-        null_state_dom = state_domain = [('state_ids', '=', False)]
-        null_zip_dom = zip_domain = [('zip_from', '=', False), ('zip_to', '=', False)]
-        null_country_dom = [('country_id', '=', False), ('country_group_id', '=', False)]
-
-        if zipcode:
-            zip_domain = [('zip_from', '<=', zipcode), ('zip_to', '>=', zipcode)]
-
-        if state_id:
-            state_domain = [('state_ids', '=', state_id)]
-
-        domain_country = base_domain + [('country_id', '=', country_id)]
-        domain_group = base_domain + [('country_group_id.country_ids', '=', country_id)]
-
-        # Build domain to search records with exact matching criteria
-        fpos = self.search(domain_country + state_domain + zip_domain, limit=1)
-        # return records that fit the most the criteria, and fallback on less specific fiscal positions if any can be found
-        if not fpos and state_id:
-            fpos = self.search(domain_country + null_state_dom + zip_domain, limit=1)
-        if not fpos and zipcode:
-            fpos = self.search(domain_country + state_domain + null_zip_dom, limit=1)
-        if not fpos and state_id and zipcode:
-            fpos = self.search(domain_country + null_state_dom + null_zip_dom, limit=1)
-
-        # fallback: country group with no state/zip range
-        if not fpos:
-            fpos = self.search(domain_group + null_state_dom + null_zip_dom, limit=1)
-
-        if not fpos:
-            # Fallback on catchall (no country, no group)
-            fpos = self.search(base_domain + null_country_dom, limit=1)
-        return fpos
-
     def _get_vat_valid(self, delivery, company=None):
         """ Hook for determining VAT validity with more complex VAT requirements """
         return bool(delivery.vat)
 
-    def _prepare_fpos_base_domain(self, vat_required):
+    def _get_fpos_ranking_functions(self, partner):
+        """Get comparison functions to rank fiscal positions.
+
+        All functions are applied to the fiscal position and return a value.
+        These values are taken in order to build a tuple that will be the comparator
+        value between fiscal positions.
+
+        If the value returned by one of the function is falsy, the fiscal position is
+        filtered out and not even considered for the ranking.
+
+        :param partner: the partner to consider for the ranking of the fiscal positions
+        :type partner: :class:`res.partner`
+        :return: a list of tuples with a name and the function to apply. The name is only
+            used to facilitate extending the comparators.
+        :rtype: list[tuple[str, function]
+        """
         return [
-            *self._check_company_domain(self.env.company),
-            ('auto_apply', '=', True),
-            ('vat_required', '=', vat_required),
+            ('vat_required', lambda fpos: (
+                not fpos.vat_required
+                or (self._get_vat_valid(partner, self.env.company) and 2)
+            )),
+            ('company_id', lambda fpos: len(fpos.company_id.parent_ids)),
+            ('zipcode', lambda fpos:(
+                not (fpos.zip_from and fpos.zip_to)
+                or (partner.zip and (fpos.zip_from <= partner.zip <= fpos.zip_to) and 2)
+            )),
+            ('state_id', lambda fpos: (
+                not fpos.state_ids
+                or (partner.state_id in fpos.state_ids and 2)
+            )),
+            ('country_id', lambda fpos: (
+                not fpos.country_id
+                or (partner.country_id == fpos.country_id and 2)
+            )),
+            ('country_group', lambda fpos: (
+                not fpos.country_group_id
+                or (partner.country_id in fpos.country_group_id.country_ids and 2)
+            )),
+            ('sequence', lambda fpos: fpos.sequence or 0.1),  # do not filter out sequence=0
         ]
 
     @api.model
@@ -248,15 +249,22 @@ class AccountFiscalPosition(models.Model):
         if manual_fiscal_position:
             return manual_fiscal_position
 
-        # First search only matching VAT positions
-        vat_valid = self._get_vat_valid(delivery, company)
-        fp = self._get_fpos_by_region(delivery.country_id.id, delivery.state_id.id, delivery.zip, vat_valid)
+        if not partner.country_id:
+            return self.env['account.fiscal.position']
 
-        # Then if VAT required found no match, try positions that do not require it
-        if not fp and vat_valid:
-            fp = self._get_fpos_by_region(delivery.country_id.id, delivery.state_id.id, delivery.zip, False)
+        # Search for a an auto applied fiscal position matching the partner
+        ranking_subfunctions = self._get_fpos_ranking_functions(delivery)
+        def ranking_function(fpos):
+            return tuple(rank[1](fpos) for rank in ranking_subfunctions)
 
-        return fp or self.env['account.fiscal.position']
+        all_auto_apply_fpos = self.search(self._check_company_domain(self.env.company) + [('auto_apply', '=', True)])
+        fpo_with_ranking = ((fpos, ranking_function(fpos)) for fpos in all_auto_apply_fpos)
+        valid_auto_apply_fpos = filter(lambda x: all(x[1]), fpo_with_ranking)
+        return max(
+            valid_auto_apply_fpos,
+            key=lambda x: x[1],
+            default=(self.env['account.fiscal.position'], False)
+        )[0]
 
     def action_create_foreign_taxes(self):
         self.ensure_one()
@@ -340,32 +348,37 @@ class ResPartner(models.Model):
             self.debit = False
             self.credit = False
             return
-        tables, where_clause, where_params = self.env['account.move.line']._where_calc([
+        query = self.env['account.move.line']._where_calc([
             ('parent_state', '=', 'posted'),
             ('company_id', 'child_of', self.env.company.root_id.id)
-        ]).get_sql()
-
-        where_params = [tuple(self.ids)] + where_params
-        if where_clause:
-            where_clause = 'AND ' + where_clause
-        self._cr.execute("""SELECT account_move_line.partner_id, a.account_type, SUM(account_move_line.amount_residual)
-                      FROM """ + tables + """
-                      LEFT JOIN account_account a ON (account_move_line.account_id=a.id)
-                      WHERE a.account_type IN ('asset_receivable','liability_payable')
-                      AND account_move_line.partner_id IN %s
-                      AND account_move_line.reconciled IS NOT TRUE
-                      """ + where_clause + """
-                      GROUP BY account_move_line.partner_id, a.account_type
-                      """, where_params)
+        ])
+        self.env['account.move.line'].flush_model(
+            ['account_id', 'amount_residual', 'company_id', 'parent_state', 'partner_id', 'reconciled']
+        )
+        self.env['account.account'].flush_model(['account_type'])
+        sql = SQL("""
+            SELECT account_move_line.partner_id, a.account_type, SUM(account_move_line.amount_residual)
+            FROM %s
+            LEFT JOIN account_account a ON (account_move_line.account_id=a.id)
+            WHERE a.account_type IN ('asset_receivable','liability_payable')
+            AND account_move_line.partner_id IN %s
+            AND account_move_line.reconciled IS NOT TRUE
+            AND %s
+            GROUP BY account_move_line.partner_id, a.account_type
+            """,
+            query.from_clause,
+            tuple(self.ids),
+            query.where_clause or SQL("TRUE"),
+        )
         treated = self.browse()
-        for pid, type, val in self._cr.fetchall():
+        for pid, account_type, val in self.env.execute_query(sql):
             partner = self.browse(pid)
-            if type == 'asset_receivable':
+            if account_type == 'asset_receivable':
                 partner.credit = val
                 if partner not in treated:
                     partner.debit = False
                     treated |= partner
-            elif type == 'liability_payable':
+            elif account_type == 'liability_payable':
                 partner.debit = -val
                 if partner not in treated:
                     partner.credit = False
@@ -509,6 +522,7 @@ class ResPartner(models.Model):
             else:
                 partner.currency_id = self.env.company.currency_id
 
+    name = fields.Char(tracking=True)
     credit = fields.Monetary(compute='_credit_debit_get', search=_credit_search,
         string='Total Receivable', help="Total amount this customer owes you.",
         groups='account.group_account_invoice,account.group_account_readonly')
@@ -839,13 +853,13 @@ class ResPartner(models.Model):
         return partner
 
     @api.model
-    def _retrieve_partner_with_phone_mail(self, phone, mail, extra_domain):
+    def _retrieve_partner_with_phone_email(self, phone, email, extra_domain):
         domains = []
         if phone:
             domains.append([('phone', '=', phone)])
             domains.append([('mobile', '=', phone)])
-        if mail:
-            domains.append([('email', '=', mail)])
+        if email:
+            domains.append([('email', '=', email)])
 
         if not domains:
             return None
@@ -861,7 +875,7 @@ class ResPartner(models.Model):
             return None
         return self.env['res.partner'].search([('name', 'ilike', name)] + extra_domain, limit=2)
 
-    def _retrieve_partner(self, name=None, phone=None, mail=None, vat=None, domain=None, company=None):
+    def _retrieve_partner(self, name=None, phone=None, email=None, vat=None, domain=None, company=None):
         '''Search all partners and find one that matches one of the parameters.
         :param name:    The name of the partner.
         :param phone:   The phone or mobile of the partner.
@@ -876,7 +890,7 @@ class ResPartner(models.Model):
             return self._retrieve_partner_with_vat(vat, extra_domain)
 
         def search_with_phone_mail(extra_domain):
-            return self._retrieve_partner_with_phone_mail(phone, mail, extra_domain)
+            return self._retrieve_partner_with_phone_email(phone, email, extra_domain)
 
         def search_with_name(extra_domain):
             return self._retrieve_partner_with_name(name, extra_domain)
@@ -886,9 +900,11 @@ class ResPartner(models.Model):
                 return None
             return self.env['res.partner'].search(domain + extra_domain, limit=1)
 
-        company = company or self.env.company
         for search_method in (search_with_vat, search_with_domain, search_with_phone_mail, search_with_name):
-            for extra_domain in ([*self.env['res.partner']._check_company_domain(company), ('company_id', '!=', False)], []):
+            for extra_domain in (
+                [*self.env['res.partner']._check_company_domain(company or self.env.company), ('company_id', '!=', False)],
+                [('company_id', '=', False)],
+            ):
                 partner = search_method(extra_domain)
                 if partner and len(partner) == 1:
                     return partner
@@ -898,7 +914,7 @@ class ResPartner(models.Model):
         """
         Prevent merging partners that are linked to already hashed journal items.
         """
-        if self.env['account.move.line'].sudo().search([('move_id.inalterable_hash', '!=', False), ('partner_id', 'in', source.ids)], limit=1):
+        if self.env['account.move.line'].sudo().search_count([('move_id.inalterable_hash', '!=', False), ('partner_id', 'in', source.ids)], limit=1):
             raise UserError(_('Partners that are used in hashed entries cannot be merged.'))
         return super()._merge_method(destination, source)
 

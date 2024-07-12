@@ -26,23 +26,24 @@ wTourUtils.registerWebsitePreviewTour('test_custom_snippet', {
     edition: true,
     test: true,
 }, () => [
-    wTourUtils.dragNDrop({
+    ...wTourUtils.dragNDrop({
         id: 's_banner',
         name: 'Banner',
     }),
     {
         content: "customize snippet",
         trigger: ":iframe #wrapwrap .s_banner h1",
-        run: "text",
-        consumeEvent: "input",
+        run: "editor Test",
     },
     {
         content: "save custom snippet",
         trigger: ".snippet-option-SnippetSave we-button",
+        run: "click",
     },
     {
         content: "confirm reload",
         trigger: ".modal-dialog button:contains('Save and Reload')",
+        run: "click",
     },
     {
         content: "ensure custom snippet appeared",
@@ -55,24 +56,27 @@ wTourUtils.registerWebsitePreviewTour('test_custom_snippet', {
         },
     },
     {
+        trigger: ".oe_snippet[name='Custom Banner'] .oe_snippet_thumbnail:not(.o_we_already_dragging)",
+    },
+    {
         content: "rename custom snippet",
         trigger: ".oe_snippet[name='Custom Banner'] we-button.o_rename_btn",
-        extra_trigger: ".oe_snippet[name='Custom Banner'] .oe_snippet_thumbnail:not(.o_we_already_dragging)",
+        run: "click",
     },
     {
         content: "set name",
         trigger: ".oe_snippet[name='Custom Banner'] input",
-        run: "text Bruce Banner",
+        run: "edit Bruce Banner",
     },
     {
         content: "confirm rename",
         trigger: ".oe_snippet[name='Custom Banner'] we-button.o_we_confirm_btn",
+        run: "click",
     },
-    wTourUtils.dragNDrop({ name: "Bruce Banner" }),
+    ...wTourUtils.dragNDrop({ name: "Bruce Banner" }),
     {
         content: "ensure banner section exists",
         trigger: ":iframe #wrap section[data-name='Banner']",
-        run: function () {}, // check
     },
     {
         content: "ensure custom banner section exists",
@@ -85,17 +89,20 @@ wTourUtils.registerWebsitePreviewTour('test_custom_snippet', {
         },
     },
     {
+        trigger: ".oe_snippet[name='Bruce Banner'] .oe_snippet_thumbnail:not(.o_we_already_dragging)",
+    },
+    {
         content: "delete custom snippet",
         trigger: ".oe_snippet[name='Bruce Banner'] we-button.o_delete_btn",
-        extra_trigger: ".oe_snippet[name='Bruce Banner'] .oe_snippet_thumbnail:not(.o_we_already_dragging)",
+        run: "click",
     },
     {
         content: "confirm delete",
         trigger: ".modal-dialog button:contains('Yes')",
+        run: "click",
     },
     {
         content: "ensure custom snippet disappeared",
         trigger: "#oe_snippets:not(:has(.oe_snippet[name='Bruce Banner']))",
-        run: function () {}, // check
     },
 ]);

@@ -32,8 +32,20 @@ patch(Message.prototype, {
             "o_redirect cursor-pointer": this.hasAuthorClickable(),
         };
     },
+    getAuthorAttClass() {
+        return {
+            ...super.getAuthorAttClass(),
+            "cursor-pointer o-hover-text-underline": this.hasAuthorClickable(),
+        };
+    },
     getAuthorText() {
         return this.hasAuthorClickable() ? _t("Open card") : undefined;
+    },
+    getAvatarContainerAttClass() {
+        return {
+            ...super.getAvatarContainerAttClass(),
+            "cursor-pointer": this.hasAuthorClickable(),
+        };
     },
     hasAuthorClickable() {
         return this.message.author?.userId;
@@ -50,7 +62,7 @@ patch(Message.prototype, {
         }
     },
     openRecord() {
-        this.threadService.open(this.message.thread);
+        this.message.thread.open();
     },
 
     /**

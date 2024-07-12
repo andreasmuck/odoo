@@ -65,13 +65,13 @@ class AccountReport(models.Model):
             ('this_quarter', "This Quarter"),
             ('this_month', "This Month"),
             ('today', "Today"),
-            ('last_month', "Last Month"),
-            ('last_quarter', "Last Quarter"),
-            ('last_year', "Last Year"),
+            ('previous_month', "Last Month"),
+            ('previous_quarter', "Last Quarter"),
+            ('previous_year', "Last Year"),
             ('this_tax_period', "This Tax Period"),
-            ('last_tax_period', "Last Tax Period"),
+            ('previous_tax_period', "Last Tax Period"),
         ],
-        compute=lambda x: x._compute_report_option_filter('default_opening_date_filter', 'last_month'),
+        compute=lambda x: x._compute_report_option_filter('default_opening_date_filter', 'previous_month'),
         readonly=False, store=True, depends=['root_report_id', 'section_main_report_ids'],
     )
 
@@ -143,6 +143,11 @@ class AccountReport(models.Model):
         compute=lambda x: x._compute_report_option_filter('filter_aml_ir_filters'), readonly=False, store=True, depends=['root_report_id', 'section_main_report_ids'],
     )
 
+    filter_budgets = fields.Boolean(
+        string="Budgets",
+        compute=lambda x: x._compute_report_option_filter('filter_budgets'), readonly=False, store=True, depends=['root_report_id', 'section_main_report_ids'],
+    )
+
     def _compute_report_option_filter(self, field_name, default_value=False):
         # We don't depend on the different filter fields on the root report, as we don't want a manual change on it to be reflected on all the reports
         # using it as their root (would create confusion). The root report filters are only used as some kind of default values.
@@ -183,8 +188,8 @@ class AccountReport(models.Model):
         for line in self.line_ids:
             if line.parent_id and line.parent_id not in previous_lines:
                 raise ValidationError(
-                    _('Line "%s" defines line "%s" as its parent, but appears before it in the report. '
-                      'The parent must always come first.', line.name, line.parent_id.name))
+                    _('Line "%(line)s" defines line "%(parent_line)s" as its parent, but appears before it in the report. '
+                      'The parent must always come first.', line=line.name, parent_line=line.parent_id.name))
             previous_lines |= line
 
     @api.constrains('section_report_ids')
@@ -305,7 +310,11 @@ class AccountReportLine(models.Model):
     parent_id = fields.Many2one(string="Parent Line", comodel_name='account.report.line', ondelete='set null')
     children_ids = fields.One2many(string="Child Lines", comodel_name='account.report.line', inverse_name='parent_id')
     groupby = fields.Char(string="Group By", help="Comma-separated list of fields from account.move.line (Journal Item). When set, this line will generate sublines grouped by those keys.")
-    user_groupby = fields.Char(string="User Group By", help="Comma-separated list of fields from account.move.line (Journal Item). When set, this line will generate sublines grouped by those keys.")
+    user_groupby = fields.Char(
+        string="User Group By",
+        compute='_compute_user_groupby', store=True, readonly=False, precompute=True,
+        help="Comma-separated list of fields from account.move.line (Journal Item). When set, this line will generate sublines grouped by those keys.",
+    )
     sequence = fields.Integer(string="Sequence")
     code = fields.Char(string="Code", help="Unique identifier for this line.")
     foldable = fields.Boolean(string="Foldable", help="By default, we always unfold the lines that can be. If this is checked, the line won't be unfolded by default, and a folding button will be displayed.")
@@ -317,6 +326,7 @@ class AccountReportLine(models.Model):
     aggregation_formula = fields.Char(string="Aggregation Formula Shortcut", help="Internal field to shorten expression_ids creation for the aggregation engine", inverse='_inverse_aggregation_formula', store=False)
     external_formula = fields.Char(string="External Formula Shortcut", help="Internal field to shorten expression_ids creation for the external engine", inverse='_inverse_external_formula', store=False)
     horizontal_split_side = fields.Selection(string="Horizontal Split Side", selection=[('left', "Left"), ('right', "Right")], compute='_compute_horizontal_split_side', readonly=False, store=True, recursive=True)
+    tax_tags_formula = fields.Char(string="Tax Tags Formula Shortcut", help="Internal field to shorten expression_ids creation for the tax_tags engine", inverse='_inverse_aggregation_tax_formula', store=False)
 
     _sql_constraints = [
         ('code_uniq', 'unique (report_id, code)', "A report line with the same code already exists."),
@@ -343,32 +353,30 @@ class AccountReportLine(models.Model):
             if report_line.parent_id:
                 report_line.horizontal_split_side = report_line.parent_id.horizontal_split_side
 
+    @api.depends('groupby', 'expression_ids.engine')
+    def _compute_user_groupby(self):
+        for report_line in self:
+            if not report_line.id and not report_line.user_groupby:
+                report_line.user_groupby = report_line.groupby
+            try:
+                report_line._validate_groupby()
+            except UserError:
+                report_line.user_groupby = report_line.groupby
+
     @api.constrains('parent_id')
     def _validate_groupby_no_child(self):
         for report_line in self:
             if report_line.parent_id.groupby or report_line.parent_id.user_groupby:
                 raise ValidationError(_("A line cannot have both children and a groupby value (line '%s').", report_line.parent_id.name))
 
-    @api.constrains('expression_ids', 'groupby', 'user_groupby')
-    def _validate_formula(self):
-        for expression in self.expression_ids:
-            if expression.engine == 'aggregation' and (expression.report_line_id.groupby or expression.report_line_id.user_groupby):
-                raise ValidationError(_(
-                    "Groupby feature isn't supported by aggregation engine. Please remove the groupby value on '%s'",
-                    expression.report_line_id.display_name,
-                ))
+    @api.constrains('groupby', 'user_groupby')
+    def _validate_groupby(self):
+        self.expression_ids._validate_engine()
 
     @api.constrains('parent_id')
     def _check_parent_line(self):
         for line in self.filtered(lambda x: x.parent_id == x):
             raise ValidationError(_('Line "%s" defines itself as its parent.', line.name))
-
-    @api.model_create_multi
-    def create(self, vals_list):
-        for vals in vals_list:
-            if 'groupby' in vals:
-                vals['user_groupby'] = vals['groupby']
-        return super().create(vals_list)
 
     def _copy_hierarchy(self, copied_report, parent=None, code_mapping=None):
         ''' Copy the whole hierarchy from this line by copying each line children recursively and adapting the
@@ -420,6 +428,9 @@ class AccountReportLine(models.Model):
     def _inverse_aggregation_formula(self):
         self._create_report_expression(engine='aggregation')
 
+    def _inverse_aggregation_tax_formula(self):
+        self._create_report_expression(engine='tax_tags')
+
     def _inverse_account_codes_formula(self):
         self._create_report_expression(engine='account_codes')
 
@@ -446,6 +457,8 @@ class AccountReportLine(models.Model):
                     subformula = 'editable;rounding=0'
                 elif report_line.external_formula == 'monetary':
                     formula = 'sum'
+            elif engine == 'tax_tags' and report_line.tax_tags_formula:
+                subformula, formula = None, report_line.tax_tags_formula
             else:
                 # If we want to replace a formula shortcut with a full-syntax expression, we need to make the formula field falsy
                 # We can't simply remove it from the xml because it won't be updated
@@ -524,7 +537,6 @@ class AccountReportExpression(models.Model):
             ('from_fiscalyear', 'From the start of the fiscal year'),
             ('to_beginning_of_fiscalyear', 'At the beginning of the fiscal year'),
             ('to_beginning_of_period', 'At the beginning of the period'),
-            ('normal', 'According to each type of account'),
             ('strict_range', 'Strictly on the given dates'),
             ('previous_tax_period', "From previous tax period")
         ],
@@ -564,14 +576,23 @@ class AccountReportExpression(models.Model):
                 domain = ast.literal_eval(expression.formula)
                 self.env['account.move.line']._where_calc(domain)
             except:
-                raise UserError(_("Invalid domain for expression '%s' of line '%s': %s",
-                                expression.label, expression.report_line_name, expression.formula))
+                raise UserError(_("Invalid domain for expression '%(label)s' of line '%(line)s': %(formula)s",
+                                label=expression.label, line=expression.report_line_name, formula=expression.formula))
 
     @api.depends('engine')
     def _compute_auditable(self):
         auditable_engines = self._get_auditable_engines()
         for expression in self:
             expression.auditable = expression.engine in auditable_engines
+
+    @api.constrains('engine', 'report_line_id')
+    def _validate_engine(self):
+        for expression in self:
+            if expression.engine == 'aggregation' and (expression.report_line_id.groupby or expression.report_line_id.user_groupby):
+                raise ValidationError(_(
+                    "Groupby feature isn't supported by aggregation engine. Please remove the groupby value on '%s'",
+                    expression.report_line_id.display_name,
+                ))
 
     def _get_auditable_engines(self):
         return {'tax_tags', 'domain', 'account_codes', 'external', 'aggregation'}
@@ -794,24 +815,6 @@ class AccountReportExpression(models.Model):
             raise UserError(_("Could not determine carryover target automatically for expression %s.", self.label))
 
         return auto_chosen_target
-
-    def action_view_carryover_lines(self, options, column_group_key=None):
-        if column_group_key:
-            options = self.report_line_id.report_id._get_column_group_options(options, column_group_key)
-
-        date_from, date_to, dummy = self.report_line_id.report_id._get_date_bounds_info(options, self.date_scope)
-
-        return {
-            'type': 'ir.actions.act_window',
-            'name': _('Carryover lines for: %s', self.report_line_name),
-            'res_model': 'account.report.external.value',
-            'views': [(False, 'list')],
-            'domain': [
-                ('target_report_expression_id', '=', self.id),
-                ('date', '>=', date_from),
-                ('date', '<=', date_to),
-            ],
-        }
 
 
 class AccountReportColumn(models.Model):

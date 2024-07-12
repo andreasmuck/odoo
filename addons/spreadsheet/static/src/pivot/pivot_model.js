@@ -1,81 +1,23 @@
-/** @odoo-module */
 //@ts-check
+
 import { _t } from "@web/core/l10n/translation";
 import { Domain } from "@web/core/domain";
 import { sprintf } from "@web/core/utils/strings";
 import { PivotModel } from "@web/views/pivot/pivot_model";
 
-import { helpers, constants, EvaluationError } from "@odoo/o-spreadsheet";
-import { SpreadsheetPivotTable } from "@spreadsheet/pivot/pivot_table";
-import { pivotTimeAdapter } from "./pivot_time_adapters";
+import { helpers, constants, EvaluationError, SpreadsheetPivotTable } from "@odoo/o-spreadsheet";
 import { parseGroupField } from "./pivot_helpers";
 
-const { toString, toNumber, toBoolean } = helpers;
+const { toNormalizedPivotValue, toNumber, isDateField, pivotTimeAdapter } = helpers;
 const { DEFAULT_LOCALE } = constants;
 
 /**
- * @typedef {import("@spreadsheet").Field} Field
- * @typedef {import("@spreadsheet").SPTableColumn} SPTableColumn
- * @typedef {import("@spreadsheet").SPTableRow} SPTableRow
+ * @typedef {import("@odoo/o-spreadsheet").PivotTableColumn} PivotTableColumn
+ * @typedef {import("@odoo/o-spreadsheet").PivotTableRow} PivotTableRow
+ * @typedef {import("@odoo/o-spreadsheet").PivotDomain} PivotDomain
  */
 
-const UNSUPPORTED_FIELD_TYPES = ["one2many", "binary", "html"];
 export const NO_RECORD_AT_THIS_POSITION = Symbol("NO_RECORD_AT_THIS_POSITION");
-
-function isNotSupported(fieldType) {
-    return UNSUPPORTED_FIELD_TYPES.includes(fieldType);
-}
-
-function throwUnsupportedFieldError(field) {
-    throw new EvaluationError(
-        sprintf(_t("Field %s is not supported because of its type (%s)"), field.string, field.type)
-    );
-}
-
-/**
- * Parses the value defining a pivot group in a PIVOT formula
- * e.g. given the following formula PIVOT.VALUE("1", "stage_id", "42", "status", "won"),
- * the two group values are "42" and "won".
- * @param {object} field
- * @param {number | boolean | string} groupValue
- * @param {"day" | "week" | "month" | "quarter" | "year" | undefined} aggregateOperator
- * @returns {number | boolean | string}
- */
-export function toNormalizedPivotValue(field, groupValue, aggregateOperator) {
-    const groupValueString =
-        typeof groupValue === "boolean"
-            ? toString(groupValue).toLocaleLowerCase()
-            : toString(groupValue);
-    if (isNotSupported(field.type)) {
-        throwUnsupportedFieldError(field);
-    }
-    // represents a field which is not set (=False server side)
-    if (groupValueString === "false") {
-        return false;
-    }
-    switch (field.type) {
-        case "datetime":
-        case "date":
-            return pivotTimeAdapter(aggregateOperator).normalizeFunctionValue(
-                groupValueString,
-                field
-            );
-        case "selection":
-        case "char":
-        case "text":
-            return toString(groupValueString);
-        case "boolean":
-            return toBoolean(groupValueString);
-        case "float":
-        case "integer":
-        case "monetary":
-        case "many2one":
-        case "many2many":
-            return toNumber(groupValueString, DEFAULT_LOCALE);
-        default:
-            throwUnsupportedFieldError(field);
-    }
-}
 
 /**
  * This class is an extension of PivotModel with some additional information
@@ -135,12 +77,18 @@ export class OdooPivotModel extends PivotModel {
 
     /**
      * Get the value of the given domain for the given measure
+     * @param {string} measure
+     * @param {PivotDomain} domain
      */
     getPivotCellValue(measure, domain) {
         const { cols, rows } = this._getColsRowsValuesFromDomain(domain);
         const group = JSON.stringify([rows, cols]);
         const values = this.data.measurements[group];
-        return (values && values[0][measure]) || "";
+
+        if (values && (values[0][measure] || values[0][measure] === 0)) {
+            return values[0][measure];
+        }
+        return "";
     }
 
     /**
@@ -151,18 +99,20 @@ export class OdooPivotModel extends PivotModel {
      *
      * @param {string} groupFieldString Name of the field
      * @param {string | number | boolean} groupValueString Value of the group by
-     * @returns {string | number}
+     * @returns {string | number | boolean}
      */
     getGroupByCellValue(groupFieldString, groupValueString) {
         if (groupValueString === NO_RECORD_AT_THIS_POSITION) {
             return "";
         }
-        const { field, aggregateOperator } = this.parseGroupField(groupFieldString);
-        const value = toNormalizedPivotValue(field, groupValueString, aggregateOperator);
+        const { field, granularity, dimensionWithGranularity } =
+            this.parseGroupField(groupFieldString);
+        const dimension = this.definition.getDimension(dimensionWithGranularity);
+        const value = toNormalizedPivotValue(dimension, groupValueString);
         const undef = _t("None");
-        if (this._isDateField(field)) {
-            const adapter = pivotTimeAdapter(aggregateOperator);
-            return adapter.toCellValue(value);
+        if (isDateField(field)) {
+            const adapter = pivotTimeAdapter(granularity);
+            return adapter.toValueAndFormat(value).value;
         }
         if (field.relation) {
             if (value === false) {
@@ -186,17 +136,23 @@ export class OdooPivotModel extends PivotModel {
      * e.g. in `PIVOT.HEADER(1, "#stage_id", 1, "#user_id", 1)`
      *      the last group value is the id of the first user of the first stage.
      *
-     * @param {(string | number)[]} domainArgs PIVOT.HEADER arguments
+     * @param {PivotDomain} domain PIVOT.HEADER arguments
+     * @returns {string | boolean | number}
      */
-    getLastPivotGroupValue(domainArgs) {
-        const groupFieldString = domainArgs.at(-2);
-        if (groupFieldString.startsWith("#")) {
-            const { field } = this.parseGroupField(groupFieldString);
-            const { cols, rows } = this._getColsRowsValuesFromDomain(domainArgs);
-            return this._isCol(field) ? cols.at(-1) : rows.at(-1);
+    getLastPivotGroupValue(domain) {
+        const lastNode = domain.at(-1);
+        if (!lastNode) {
+            throw new Error("Domain size should be at least 1");
         }
-        const groupValueString = domainArgs.at(-1);
-        return groupValueString;
+        if (lastNode.field.startsWith("#")) {
+            if (domain.filter((node) => node.value === NO_RECORD_AT_THIS_POSITION).length) {
+                return NO_RECORD_AT_THIS_POSITION;
+            }
+            const { dimensionWithGranularity } = this.parseGroupField(lastNode.field);
+            const { cols, rows } = this._getColsRowsValuesFromDomain(domain);
+            return this._isCol(dimensionWithGranularity) ? cols.at(-1) : rows.at(-1);
+        }
+        return lastNode.value;
     }
 
     //--------------------------------------------------------------------------
@@ -205,6 +161,7 @@ export class OdooPivotModel extends PivotModel {
 
     /**
      * Get the Odoo domain corresponding to the given domain
+     * @param {PivotDomain} domain
      */
     getPivotCellDomain(domain) {
         const { cols, rows } = this._getColsRowsValuesFromDomain(domain);
@@ -222,23 +179,18 @@ export class OdooPivotModel extends PivotModel {
     }
 
     /**
-     * @param {string} fieldName
+     * @param {import("@odoo/o-spreadsheet").PivotDimension} dimension
      * @returns {{ value: string | number | boolean, label: string }[]}
      */
-    getPossibleFieldValues(fieldName) {
-        const field = this.metaData.fields[fieldName];
-        if (!field) {
-            return [];
-        }
+    getPossibleFieldValues(dimension) {
         const valuesWithLabels = [];
         const valuesUniqueness = new Set();
-        const groupBys = (
-            this._isCol(field) ? this.metaData.fullColGroupBys : this.metaData.fullRowGroupBys
-        )
-            .map(this.parseGroupField)
-            .map(({ field }) => field.name);
-        const tree = this._isCol(field) ? this.data.colGroupTree : this.data.rowGroupTree;
-        const groupByIndex = groupBys.indexOf(fieldName);
+        const isCol = this._isCol(dimension.nameWithGranularity);
+        const groupBys = isCol ? this.definition.columns : this.definition.rows;
+        const tree = isCol ? this.data.colGroupTree : this.data.rowGroupTree;
+        const groupByIndex = groupBys.findIndex(
+            (d) => d.nameWithGranularity === dimension.nameWithGranularity
+        );
         const visitTree = (tree) => {
             const { values, labels } = tree.root;
             if (values[groupByIndex] && !valuesUniqueness.has(values[groupByIndex])) {
@@ -264,10 +216,15 @@ export class OdooPivotModel extends PivotModel {
         const rows = this._getSpreadsheetRows(this.data.rowGroupTree);
         rows.push(rows.shift()); //Put the Total row at the end.
         const measures = this.getDefinition().measures.map((measure) => measure.name);
-        const rowTitle = this.getDefinition().rows[0]
-            ? this.getDefinition().rows[0].displayName
-            : "";
-        return new SpreadsheetPivotTable(cols, rows, measures, rowTitle);
+        /** @type {Record<string, string | undefined>} */
+        const fieldsType = {};
+        for (const columns of this.getDefinition().columns) {
+            fieldsType[columns.name] = columns.type;
+        }
+        for (const row of this.getDefinition().rows) {
+            fieldsType[row.name] = row.type;
+        }
+        return new SpreadsheetPivotTable(cols, rows, measures, fieldsType);
     }
 
     //--------------------------------------------------------------------------
@@ -333,21 +290,13 @@ export class OdooPivotModel extends PivotModel {
             });
         if (!displayName) {
             throw new EvaluationError(
-                _t("Unable to fetch the label of %s of model %s", resId, resModel)
+                _t("Unable to fetch the label of %(id)s of model %(model)s", {
+                    id: resId,
+                    model: resModel,
+                })
             );
         }
         return displayName;
-    }
-
-    /**
-     * Determines if the given field is a date or datetime field.
-     *
-     * @param {Field} field Field description
-     * @private
-     * @returns {boolean} True if the type of the field is date or datetime
-     */
-    _isDateField(field) {
-        return ["date", "datetime"].includes(field.type);
     }
 
     /**
@@ -356,13 +305,9 @@ export class OdooPivotModel extends PivotModel {
     _getGroupValues(group, groupBys) {
         return groupBys.map((gb) => {
             const groupBy = this._normalize(gb);
-            const { field, aggregateOperator } = this.parseGroupField(gb);
-            if (this._isDateField(field)) {
-                return pivotTimeAdapter(aggregateOperator).normalizeServerValue(
-                    groupBy,
-                    field,
-                    group
-                );
+            const { field, granularity } = this.parseGroupField(gb);
+            if (isDateField(field)) {
+                return pivotTimeAdapter(granularity).normalizeServerValue(groupBy, field, group);
             }
             return this._sanitizeValue(group[groupBy]);
         });
@@ -371,27 +316,21 @@ export class OdooPivotModel extends PivotModel {
     /**
      * Check if the given field is used as col group by
      */
-    _isCol(field) {
-        return this.metaData.fullColGroupBys
-            .map(this.parseGroupField)
-            .map(({ field }) => field.name)
-            .includes(field.name);
+    _isCol(nameWithGranularity) {
+        return this.metaData.fullColGroupBys.includes(nameWithGranularity);
     }
 
     /**
      * Check if the given field is used as row group by
      */
-    _isRow(field) {
-        return this.metaData.fullRowGroupBys
-            .map(this.parseGroupField)
-            .map(({ field }) => field.name)
-            .includes(field.name);
+    _isRow(nameWithGranularity) {
+        return this.metaData.fullRowGroupBys.includes(nameWithGranularity);
     }
 
     /**
      * Get the value of a field-value for a positional group by
      *
-     * @param {object} field Field of the group by
+     * @param {string} dimensionWithGranularity e.g. create_date:month
      * @param {unknown} groupValueString Value of the group by
      * @param {(number | boolean | string)[]} rows Values for the previous row group bys
      * @param {(number | boolean | string)[]} cols Values for the previous col group bys
@@ -399,10 +338,10 @@ export class OdooPivotModel extends PivotModel {
      * @private
      * @returns {number | boolean | string}
      */
-    _parsePivotFormulaWithPosition(field, groupValueString, cols, rows) {
+    _parsePivotFormulaWithPosition(dimensionWithGranularity, groupValueString, cols, rows) {
         const position = toNumber(groupValueString, DEFAULT_LOCALE) - 1;
         let tree;
-        if (this._isCol(field)) {
+        if (this._isCol(dimensionWithGranularity)) {
             tree = this.data.colGroupTree;
             for (const col of cols) {
                 tree = tree && tree.directSubTrees.get(col);
@@ -424,42 +363,47 @@ export class OdooPivotModel extends PivotModel {
     /**
      * Transform the given domain in the structure used in this class
      *
-     * @param {(number | boolean | string)[]} domain Domain
+     * @param {PivotDomain} domain Domain
      *
      * @private
      */
     _getColsRowsValuesFromDomain(domain) {
         const rows = [];
         const cols = [];
-        let i = 0;
-        while (i < domain.length) {
-            const groupFieldString = domain[i];
-            const groupValue = domain[i + 1];
-            const { field, isPositional, aggregateOperator } =
-                this.parseGroupField(groupFieldString);
+        for (const node of domain) {
+            const { isPositional, dimensionWithGranularity } = this.parseGroupField(node.field);
             let value;
             if (isPositional) {
-                value = this._parsePivotFormulaWithPosition(field, groupValue, cols, rows);
+                value = this._parsePivotFormulaWithPosition(
+                    dimensionWithGranularity,
+                    node.value,
+                    cols,
+                    rows
+                );
             } else {
-                value = toNormalizedPivotValue(field, groupValue, aggregateOperator);
+                const dimension = this.definition.getDimension(dimensionWithGranularity);
+                value = toNormalizedPivotValue(dimension, node.value);
             }
-            if (this._isCol(field)) {
+            if (this._isCol(dimensionWithGranularity)) {
                 cols.push(value);
-            } else if (this._isRow(field)) {
+            } else if (this._isRow(dimensionWithGranularity)) {
                 rows.push(value);
+            } else {
+                throw new EvaluationError(
+                    sprintf(_t("Dimension %s is not a group by"), dimensionWithGranularity)
+                );
             }
-            i += 2;
         }
         return { rows, cols };
     }
 
     /**
      * Get the row structure
-     * @returns {SPTableRow[]}
+     * @returns {PivotTableRow[]}
      */
     _getSpreadsheetRows(tree) {
-        /**@type {SPTableRow[]}*/
-        let rows = [];
+        /**@type {PivotTableRow[]}*/
+        const rows = [];
         const group = tree.root;
         const indent = group.labels.length;
         const rowGroupBys = this.metaData.fullRowGroupBys;
@@ -473,14 +417,14 @@ export class OdooPivotModel extends PivotModel {
         const subTreeKeys = tree.sortedKeys || [...tree.directSubTrees.keys()];
         subTreeKeys.forEach((subTreeKey) => {
             const subTree = tree.directSubTrees.get(subTreeKey);
-            rows = rows.concat(this._getSpreadsheetRows(subTree));
+            rows.push(...this._getSpreadsheetRows(subTree));
         });
         return rows;
     }
 
     /**
      * Get the col structure
-     * @returns {SPTableColumn[][]}
+     * @returns {PivotTableColumn[][]}
      */
     _getSpreadsheetCols() {
         const colGroupBys = this.metaData.fullColGroupBys;
@@ -547,5 +491,39 @@ export class OdooPivotModel extends PivotModel {
         });
 
         return headers;
+    }
+
+    /**
+     * @override
+     * @protected
+     * @return {string[]}
+     */
+    _getMeasureSpecs() {
+        return this.getDefinition().measures.map((measure) => {
+            if (measure.type === "many2one" && !measure.aggregator) {
+                return `${measure.name}:count_distinct`;
+            }
+            if (measure.name === "__count") {
+                // Remove aggregator that is not supported by python
+                return "__count";
+            }
+            return measure.nameWithAggregator;
+        });
+    }
+
+    /**
+     * @override to add the order by clause to the read_group kwargs
+     */
+    _getSubGroups(groupBys, params) {
+        const { columns, rows } = this.getDefinition();
+        const order = columns
+            .concat(rows)
+            .filter(
+                (dimension) => dimension.order && groupBys.includes(dimension.nameWithGranularity)
+            )
+            .map((dimension) => `${dimension.nameWithGranularity} ${dimension.order}`)
+            .join(",");
+        params.kwargs.orderby = order;
+        return super._getSubGroups(groupBys, params);
     }
 }

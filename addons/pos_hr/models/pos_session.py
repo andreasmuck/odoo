@@ -1,63 +1,62 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
-
-from odoo import models
+from odoo import models, api
 
 
 class PosSession(models.Model):
     _inherit = 'pos.session'
 
-
-    def _domain_hr_employee(self):
-        if len(self.config_id.basic_employee_ids) > 0:
-            domain = [
-                '&', ('company_id', '=', self.config_id.company_id.id),
-                '|', ('user_id', '=', self.user_id.id), ('id', 'in', self.config_id.basic_employee_ids.ids + self.config_id.advanced_employee_ids.ids)]
-        else:
-            domain = [('company_id', '=', self.config_id.company_id.id)]
-
-        return domain
-
-
-    def _load_data_params(self, config_id):
-        params = super()._load_data_params(config_id)
-
+    @api.model
+    def _load_pos_data_models(self, config_id):
+        data = super()._load_pos_data_models(config_id)
+        config_id = self.env['pos.config'].browse(config_id)
         if config_id.module_pos_hr:
-            params['product.product']['fields'].append('all_product_tag_ids')
-            params.update({
-                'hr.employee': {
-                    'domain': self._domain_hr_employee(),
-                    'fields': ['name', 'id', 'user_id', 'work_contact_id'],
-                },
-            })
+            data += ['hr.employee']
+        return data
 
-        return params
+    def _aggregate_payments_amounts_by_employee(self, payments):
+        payments_by_employee = {}
 
-    def load_data(self, models_to_load, only_data=False):
-        response = super().load_data(models_to_load, only_data)
+        for employee, payments in payments.grouped('employee_id').items():
+            payments_by_employee[employee.id] = {
+                'id': employee.id,
+                'name': employee.name,
+                'amount': sum(payments.mapped('amount')),
+            }
 
-        if len(models_to_load) == 0 or 'hr.employee' in models_to_load:
-            employees = response['data'].get('hr.employee') or []
-            employee_ids = [employee['id'] for employee in employees]
-            user_ids = [employee['user_id'] for employee in employees if employee['user_id']]
-            manager_ids = self.env['res.users'].browse(user_ids).filtered(lambda user: self.config_id.group_pos_manager_id in user.groups_id).mapped('id')
+        return sorted(payments_by_employee.values(), key=lambda p: p['name'])
 
-            employees_barcode_pin = self.env['hr.employee'].browse(employee_ids).get_barcodes_and_pin_hashed()
-            bp_per_employee_id = {bp_e['id']: bp_e for bp_e in employees_barcode_pin}
+    def _aggregate_moves_by_employee(self):
+        moves_per_employee = {}
+        for employee, moves in self.sudo().statement_line_ids.grouped('employee_id').items():
+            moves_per_employee[employee.id] = {
+                'id': employee.id,
+                'name': employee.name,
+                'amount': sum(moves.mapped('amount')),
+            }
 
-            response['custom']['employee_security'] = {}
-            for employee in employees:
-                if employee['user_id'] and employee['user_id'] in manager_ids or employee['id'] in self.config_id.advanced_employee_ids.ids:
-                    role = 'manager'
-                else:
-                    role = 'cashier'
+        return sorted(moves_per_employee.values(), key=lambda p: -p['amount'])
 
-                response['custom']['employee_security'][employee['id']] = {
-                    'role': role,
-                    'barcode': bp_per_employee_id[employee['id']]['barcode'],
-                    'pin': bp_per_employee_id[employee['id']]['pin'],
-                }
+    def get_closing_control_data(self):
+        data = super().get_closing_control_data()
 
-            response['data']['hr.employee'] = employees
+        orders = self._get_closed_orders()
+        payments = orders.payment_ids.filtered(lambda p: p.payment_method_id.type != "pay_later")
+        cash_payment_method_ids = self.payment_method_ids.filtered(lambda pm: pm.type == 'cash')
+        default_cash_payment_method_id = cash_payment_method_ids[0] if cash_payment_method_ids else None
+        default_cash_payments = payments.filtered(lambda p: p.payment_method_id == default_cash_payment_method_id) if default_cash_payment_method_id else []
+        non_cash_payment_method_ids = self.payment_method_ids - default_cash_payment_method_id if default_cash_payment_method_id else self.payment_method_ids
+        non_cash_payments_grouped_by_method_id = {pm.id: orders.payment_ids.filtered(lambda p: p.payment_method_id == pm) for pm in non_cash_payment_method_ids}
 
-        return response
+        data['default_cash_details']['amount_per_employee'] = self._aggregate_payments_amounts_by_employee(default_cash_payments)
+        for payment_method in data['non_cash_payment_methods']:
+            payment_method['amount_per_employee'] = self._aggregate_payments_amounts_by_employee(non_cash_payments_grouped_by_method_id[payment_method['id']])
+
+        data['default_cash_details']['moves_per_employee'] = self._aggregate_moves_by_employee()
+
+        return data
+
+    def _prepare_account_bank_statement_line_vals(self, session, sign, amount, reason, extras):
+        vals = super()._prepare_account_bank_statement_line_vals(session, sign, amount, reason, extras)
+        vals['employee_id'] = extras['employee_id']
+        return vals

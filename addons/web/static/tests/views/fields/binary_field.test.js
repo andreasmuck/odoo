@@ -1,4 +1,4 @@
-import { after, before, expect, test } from "@odoo/hoot";
+import { after, expect, test } from "@odoo/hoot";
 import { click, queryOne, queryValue, setInputFiles, waitFor } from "@odoo/hoot-dom";
 import { Deferred, animationFrame } from "@odoo/hoot-mock";
 import {
@@ -40,9 +40,7 @@ class Product extends models.Model {
 
 defineModels([Partner, Product]);
 
-before(() => {
-    onRpc("/web/dataset/call_kw/res.users/has_group", () => true);
-});
+onRpc("has_group", () => true);
 
 test("BinaryField is correctly rendered (readonly)", async () => {
     onRpc("/web/content", (request) => {
@@ -99,7 +97,7 @@ test("BinaryField is correctly rendered (readonly)", async () => {
 
     await contains(`.o_field_widget[name="document"] a`).click();
     await deferred;
-    expect(["/web/content"]).toVerifySteps();
+    expect.verifySteps(["/web/content"]);
 });
 
 test("BinaryField is correctly rendered", async () => {
@@ -160,7 +158,7 @@ test("BinaryField is correctly rendered", async () => {
 
     click(`.fa-download`);
     await deferred;
-    expect(["/web/content"]).toVerifySteps();
+    expect.verifySteps(["/web/content"]);
 
     click(`.o_field_binary .o_clear_file_button`);
     await animationFrame();
@@ -324,7 +322,7 @@ test.tags("desktop")("readonly in create mode does not download", async () => {
     expect(`.o_field_widget[name="document"] a > .fa-download`).toHaveCount(0, {
         message: "The download icon should not be present",
     });
-    expect([]).toVerifySteps({ message: "We shouldn't have passed through steps" });
+    expect.verifySteps([]);
 });
 
 test("BinaryField in list view (formatter)", async () => {
@@ -375,7 +373,7 @@ test("filename doesn't exceed 255 bytes", async () => {
         type: "form",
         arch: `<form><field name="document"/></form>`,
     });
-    expect(queryValue(`.o_field_binary input[type=text]`).length).toBe(
+    expect(queryValue(`.o_field_binary input[type=text]`)).toHaveLength(
         toBase64Length(MAX_FILENAME_SIZE_BYTES),
         {
             message: "The filename shouldn't exceed the maximum size in bytes in base64",
@@ -434,6 +432,6 @@ test("isUploading state should be set to false after upload", async () => {
     setInputFiles([file]);
     await waitFor(`.o_form_button_save:visible`);
     await animationFrame();
-    expect([/RPC_ERROR/]).toVerifyErrors();
+    expect.verifyErrors([/RPC_ERROR/]);
     expect(`.o_select_file_button`).toHaveText("Upload your file");
 });

@@ -1,6 +1,5 @@
-/** @odoo-module */
 import { Dialog } from "@web/core/dialog/dialog";
-import { Component, useState } from "@odoo/owl";
+import { Component, useState, onMounted } from "@odoo/owl";
 import { usePos } from "../pos_hook";
 import { ProductCard } from "@point_of_sale/app/generic_components/product_card/product_card";
 import { floatIsZero } from "@web/core/utils/numbers";
@@ -17,10 +16,39 @@ export class ComboConfiguratorPopup extends Component {
     setup() {
         this.pos = usePos();
         this.state = useState({
-            combo: Object.fromEntries(this.props.product.combo_ids.map((elem) => [elem.id, 0])),
+            combo: Object.fromEntries(this.props.product.combo_ids.map((combo) => [combo.id, 0])),
             // configuration: id of combo_line -> ProductConfiguratorPopup payload
             configuration: {},
         });
+
+        onMounted(() => {
+            this.autoSelectSingleChoices();
+            if (!this.hasMultipleChoices()) {
+                this.confirm();
+            }
+        });
+    }
+
+    shouldShowCombo(combo) {
+        return (
+            combo.combo_line_ids.length > 0 &&
+            (combo.combo_line_ids.length > 1 || combo.combo_line_ids[0].product_id.isConfigurable())
+        );
+    }
+
+    autoSelectSingleChoices() {
+        this.props.product.combo_ids.forEach((combo) => {
+            if (
+                combo.combo_line_ids.length === 1 &&
+                !combo.combo_line_ids[0].product_id.isConfigurable()
+            ) {
+                this.state.combo[combo.id] = combo.combo_line_ids[0].id;
+            }
+        });
+    }
+
+    hasMultipleChoices() {
+        return this.props.product.combo_ids.some((combo) => this.shouldShowCombo(combo));
     }
 
     areAllCombosSelected() {
@@ -51,7 +79,7 @@ export class ComboConfiguratorPopup extends Component {
     }
 
     async onClickProduct({ product, combo_line }, ev) {
-        if (product.isConfigurable()) {
+        if (product.isConfigurable() && product.product_template_variant_value_ids.length === 0) {
             const payload = await this.pos.openConfigurator(product);
             if (payload) {
                 this.state.configuration[combo_line.id] = payload;

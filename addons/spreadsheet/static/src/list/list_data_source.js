@@ -18,12 +18,12 @@ const { toNumber } = spreadsheet.helpers;
 const { DEFAULT_LOCALE } = spreadsheet.constants;
 
 /**
- * @typedef {import("@spreadsheet/data_sources/metadata_repository").Field} Field
+ * @typedef {import("@spreadsheet").OdooFields} OdooFields
  *
  * @typedef {Object} ListMetaData
  * @property {Array<string>} columns
  * @property {string} resModel
- * @property {Record<string, Field>} fields
+ * @property {OdooFields} fields
  *
  * @typedef {Object} ListSearchParams
  * @property {Array<string>} orderBy
@@ -45,6 +45,7 @@ export class ListDataSource extends OdooViewsDataSource {
         this.maxPosition = params.limit;
         this.maxPositionFetched = 0;
         this.data = [];
+        this.fieldsToFetch = new Set();
     }
 
     /**
@@ -53,6 +54,16 @@ export class ListDataSource extends OdooViewsDataSource {
      */
     increaseMaxPosition(position) {
         this.maxPosition = Math.max(this.maxPosition, position);
+    }
+
+    /**
+     * @param {string} fieldName
+     */
+    addFieldToFetch(fieldName) {
+        if (this.data.length && fieldName in this.data[0]) {
+            return;
+        }
+        this.fieldsToFetch.add(fieldName);
     }
 
     async _load() {
@@ -78,7 +89,7 @@ export class ListDataSource extends OdooViewsDataSource {
      */
     _getReadSpec() {
         const spec = {};
-        const fields = this._metaData.columns.map((f) => this.getField(f)).filter(Boolean);
+        const fields = [...this.fieldsToFetch].map((f) => this.getField(f)).filter(Boolean);
         for (const field of fields) {
             switch (field.type) {
                 case "monetary":
@@ -104,7 +115,7 @@ export class ListDataSource extends OdooViewsDataSource {
                     };
                     break;
                 default:
-                    spec[field.name] = field;
+                    spec[field.name] = {};
                     break;
             }
         }
@@ -155,8 +166,7 @@ export class ListDataSource extends OdooViewsDataSource {
             );
         }
         if (!(fieldName in record)) {
-            this._metaData.columns.push(fieldName);
-            this._metaData.columns = [...new Set(this._metaData.columns)]; //Remove duplicates
+            this.addFieldToFetch(fieldName);
             this._triggerFetching();
             throw new LoadingDataError();
         }
@@ -221,17 +231,15 @@ export class ListDataSource extends OdooViewsDataSource {
 
     _formatDateTime(dateValue) {
         const date = deserializeDateTime(dateValue);
-        return formatDateTime(date, {
+        return formatDateTime(date.reconfigure({ numberingSystem: "latn" }), {
             format: "yyyy-MM-dd HH:mm:ss",
-            numberingSystem: "latn",
         });
     }
 
     _formatDate(dateValue) {
         const date = deserializeDate(dateValue);
-        return formatDate(date, {
+        return formatDate(date.reconfigure({ numberingSystem: "latn" }), {
             format: "yyyy-MM-dd",
-            numberingSystem: "latn",
         });
     }
 

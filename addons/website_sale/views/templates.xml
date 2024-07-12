@@ -11,7 +11,7 @@
            t-nocache-_item_class="_item_class"
            t-nocache-_link_class="_link_class">
             <t t-set="website_sale_cart_quantity" t-value="request.session['website_sale_cart_quantity'] if 'website_sale_cart_quantity' in request.session else website.sale_get_order().cart_quantity or 0"/>
-            <t t-set="show_cart" t-value="true"/>
+            <t t-set="show_cart" t-value="website.has_ecommerce_access()"/>
             <li t-attf-class="#{_item_class} divider d-none"/> <!-- Make sure the cart and related menus are not folded (see autohideMenu) -->
             <li t-attf-class="o_wsale_my_cart #{not show_cart and 'd-none'} #{_item_class}">
                 <a href="/shop/cart" t-attf-class="#{_link_class}" aria-label="eCommerce cart">
@@ -174,7 +174,7 @@
             <t t-set="display_detail" t-valuef="true"/>
             <t t-if="attrib_values">
                 <t t-foreach="attrib_values" t-as="a">
-                    <input type="hidden" name="attrib" t-att-value="'%s-%s' % (a[0], a[1])" />
+                    <input type="hidden" name="attribute_value" t-att-value="'%s-%s' % (a[0], a[1])" />
                 </t>
             </t>
         </t>
@@ -184,8 +184,7 @@
         <form action="/shop/cart/update" method="post" class="oe_product_cart h-100 d-flex"
             t-att-data-publish="product.website_published and 'on' or 'off'"
             itemscope="itemscope" itemtype="http://schema.org/Product">
-
-            <t t-set="product_href" t-value="keep(product.website_url, page=(pager['page']['num'] if pager['page']['num']&gt;1 else None))" />
+            <t t-set="product_href" t-value="keep(product.website_url, page=(pager['page']['num'] if pager['page']['num']&gt;1 else None)) + selected_attributes_hash" />
             <t t-set="image_type" t-value="product._get_suitable_image_size(ppr, td_product['x'], td_product['y'])"/>
 
             <div class="oe_product_image position-relative h-100 flex-grow-0 overflow-hidden">
@@ -196,10 +195,14 @@
                         t-options="{'widget': 'image', 'preview_image': image_type, 'itemprop': 'image', 'class': 'h-100 w-100 position-absolute'}"
                         class="oe_product_image_img_wrapper d-flex h-100 justify-content-center align-items-center position-absolute"/>
 
-                    <t t-set="bg_color" t-value="td_product['ribbon']['bg_color'] or ''"/>
-                    <t t-set="text_color" t-value="td_product['ribbon']['text_color']"/>
-                    <t t-set="bg_class" t-value="td_product['ribbon']['html_class']"/>
-                    <span t-attf-class="o_ribbon o_not_editable #{bg_class}" t-attf-style="#{text_color and ('color: %s; ' % text_color)}#{bg_color and 'background-color:' + bg_color}" t-out="td_product['ribbon']['html'] or ''"/>
+                    <t t-set="bg_color" t-value="td_product['ribbon'].bg_color"/>
+                    <t t-set="text_color" t-value="td_product['ribbon'].text_color"/>
+                    <t t-set="bg_class" t-value="td_product['ribbon']._get_position_class()"/>
+                    <span
+                        t-attf-class="o_ribbon o_not_editable #{bg_class}"
+                        t-attf-style="#{text_color and ('color: %s;' % text_color)} #{bg_color and 'background-color:' + bg_color}"
+                        t-out="td_product['ribbon'].name or ''"
+                    />
                 </a>
             </div>
             <div class="o_wsale_product_information position-relative d-flex flex-column flex-grow-1 flex-shrink-1">
@@ -211,17 +214,20 @@
                         </a>
                     </h6>
                 </div>
-                <div class="o_wsale_product_sub d-flex justify-content-between align-items-end pb-1">
+                <div class="o_wsale_product_sub d-flex justify-content-between align-items-end gap-2 flex-wrap pb-1">
                     <t t-set="template_price_vals" t-value="get_product_prices(product)"/>
                     <div class="o_wsale_product_btn"/>
                     <div class="product_price" itemprop="offers" itemscope="itemscope" itemtype="http://schema.org/Offer">
+                        <span class="h6 mb-0"
+                              t-if="template_price_vals['price_reduce'] or not website.prevent_zero_price_sale"
+                              t-out="template_price_vals['price_reduce']"
+                              t-options="{'widget': 'monetary', 'display_currency': website.currency_id}"/>
+                        <span class="h6 mb-0" t-else="" t-field="website.prevent_zero_price_sale_text"/>
                         <t t-if="'base_price' in template_price_vals and (template_price_vals['base_price'] &gt; template_price_vals['price_reduce']) and (template_price_vals['price_reduce'] or not website.prevent_zero_price_sale)">
                             <del t-attf-class="text-muted me-1 h6 mb-0" style="white-space: nowrap;">
                                 <em class="small" t-esc="template_price_vals['base_price']" t-options="{'widget': 'monetary', 'display_currency': website.currency_id}" />
                             </del>
                         </t>
-                        <span class="h6 mb-0" t-if="template_price_vals['price_reduce'] or not website.prevent_zero_price_sale" t-esc="template_price_vals['price_reduce']" t-options="{'widget': 'monetary', 'display_currency': website.currency_id}"/>
-                        <span class="h6 mb-0" t-else="" t-field="website.prevent_zero_price_sale_text"/>
                         <span itemprop="price" style="display:none;" t-esc="template_price_vals['price_reduce']" />
                         <span itemprop="priceCurrency" style="display:none;" t-esc="website.currency_id.name" />
                     </div>
@@ -242,6 +248,7 @@
         <xpath expr="//div[hasclass('o_wsale_product_btn')]" position="inside">
             <t t-set="product_variant_id" t-value="product._get_first_possible_variant_id()"/>
             <input name="product_id" t-att-value="product_variant_id" type="hidden"/>
+            <input name="product_template_id" t-att-value="product.id" type="hidden"/>
             <t t-if="product_variant_id and template_price_vals['price_reduce'] or not website.prevent_zero_price_sale">
                 <a t-if="product._website_show_quick_add()"
                    href="#" role="button" class="btn btn-primary a-submit" aria-label="Shopping cart" title="Shopping cart">
@@ -321,7 +328,7 @@
                 <div class="container oe_website_sale pt-2">
                     <div class="row o_wsale_products_main_row align-items-start flex-nowrap">
                         <aside t-if="hasLeftColumn" id="products_grid_before" class="d-none d-lg-block position-sticky col-3 px-3 clearfix">
-                            <div class="o_wsale_products_grid_before_rail vh-100 ms-n2 mt-n2 pt-2 pe-lg-2 pb-lg-5 ps-2 overflow-y-scroll">
+                            <div class="o_wsale_products_grid_before_rail vh-100 ms-n2 mt-n2 pt-2 p-lg-2 pb-lg-5 ps-2 overflow-y-scroll">
                                 <div t-if="opt_wsale_categories" class="products_categories mb-3">
                                     <t t-call="website_sale.products_categories_list"/>
                                 </div>
@@ -527,7 +534,7 @@
                    t-attf-class="css_attribute_color mb-1 #{'active' if v.id in attrib_set else ''}"
             >
                 <input type="checkbox"
-                       name="attrib"
+                       name="attribute_value"
                        t-att-value="'%s-%s' % (a.id, v.id)"
                        t-att-checked="'checked' if v.id in attrib_set else None"
                        t-att-title="v.name"
@@ -687,7 +694,7 @@
                                             <div t-foreach="a.value_ids" t-as="v" class="list-group-item border-0 ps-0 pb-0">
                                                 <div class="form-check mb-1">
                                                     <input type="checkbox"
-                                                           name="attrib"
+                                                           name="attribute_value"
                                                            class="form-check-input"
                                                            t-att-id="'%s-%s' % (a.id,v.id)"
                                                            t-att-value="'%s-%s' % (a.id,v.id)"
@@ -887,7 +894,7 @@
                     <input t-if="category" type="hidden" name="category" t-att-value="category.id" />
                     <input type="hidden" name="search" t-att-value="search" />
                     <input type="hidden" name="order" t-att-value="order"/>
-                    <a t-if="attrib_values or tags" t-att-href="keep('/shop'+ ('/category/'+slug(category)) if category else None, attrib=0, tags=0)" t-attf-class="btn btn-{{navClass}} d-flex align-items-center py-1 mb-2">
+                    <a t-if="attrib_values or tags" t-att-href="keep('/shop' + ('/category/' + slug(category)) if category else None, attribute_value=0, tags=0)" t-attf-class="btn btn-{{navClass}} d-flex align-items-center py-1 mb-2">
                         <small class="mx-auto"><b>Clear Filters</b></small>
                         <i class="oi oi-close"/>
                     </a>
@@ -899,7 +906,7 @@
                                 </h6>
                                 <div t-attf-id="o_products_attributes_{{a.id}}" class="">
                                     <t t-if="a.display_type == 'select'">
-                                        <select class="form-select css_attribute_select mb-2" name="attrib">
+                                        <select class="form-select css_attribute_select mb-2" name="attribute_value">
                                             <option value="" selected="true">All <t t-out="a.name"/></option>
                                             <t t-foreach="a.value_ids" t-as="v">
                                                 <option t-att-value="'%s-%s' % (a.id,v.id)" t-esc="v.name" t-att-selected="v.id in attrib_set" />
@@ -913,7 +920,7 @@
                                         <t t-foreach="a.value_ids" t-as="v">
                                             <div class="form-check mb-1">
                                                 <input type="checkbox"
-                                                       name="attrib"
+                                                       name="attribute_value"
                                                        class="form-check-input"
                                                        t-att-id="'%s-%s' % (a.id,v.id)"
                                                        t-att-value="'%s-%s' % (a.id,v.id)"
@@ -1027,11 +1034,11 @@
                         <div class="col-lg-6 d-flex align-items-center">
                             <ol class="breadcrumb p-0 mb-2 m-lg-0">
                                 <li class="breadcrumb-item o_not_editable">
-                                    <a t-att-href="keep(category=0)">All Products</a>
+                                    <a t-att-href="keep(category=0, attribute_value=0, tags=0)">All Products</a>
                                 </li>
                                 <li t-nocache="The category does not have to be cached, as the product can be accessed via different paths."
                                     t-if="category" class="breadcrumb-item">
-                                    <a t-att-href="keep('/shop/category/%s' % slug(category), category=0)" t-field="category.name" />
+                                    <a t-att-href="keep('/shop/category/%s' % slug(category), category=0, attribute_value=0, tags=0)" t-field="category.name" />
                                 </li>
                                 <li class="breadcrumb-item active">
                                     <span t-field="product.name" />
@@ -1201,7 +1208,7 @@
         </div>
     </template>
 
-    <template id="product_custom_text" inherit_id="website_sale.product" active="True" name="Terms and Conditions" priority="21">
+    <template id="product_custom_text" inherit_id="website_sale.product" customize_show="True" active="True" name="Terms and Conditions" priority="21">
         <xpath expr="//div[@id='o_product_terms_and_share']" position="inside">
             <p class="text-muted mb-0">
                 <a href="/terms" class="text-muted"><u>Terms and Conditions</u></a><br/>
@@ -1322,7 +1329,8 @@
                     itemprop="listPrice"
                 />
                 <t t-if="is_view_active('website_sale.tax_indication')" t-call="website_sale.tax_indication"/>
-                <del t-if="combination_info['compare_list_price'] and (combination_info['compare_list_price'] &gt; combination_info['price'])">
+                <del t-if="combination_info['compare_list_price'] and (combination_info['compare_list_price'] &gt; combination_info['price'])"
+                    class="text-danger ms-1 h5 oe_compare_list_price">
                     <bdi dir="inherit">
                     <span t-esc="combination_info['compare_list_price']"
                           groups="website_sale.group_product_price_comparison"
@@ -1365,7 +1373,7 @@
                 <t t-set="attribute_exclusions" t-value="product._get_attribute_exclusions()"/>
                 <t t-set="filtered_sorted_variants" t-value="product._get_possible_variants_sorted()"/>
                 <ul class="d-none js_add_cart_variants mb-0" t-att-data-attribute_exclusions="json.dumps(attribute_exclusions)"/>
-                <input type="hidden" class="product_template_id" t-att-value="product.id"/>
+                <input type="hidden" class="product_template_id" name="product_template_id" t-att-value="product.id"/>
                 <input type="hidden" t-if="len(filtered_sorted_variants) == 1" class="product_id" name="product_id" t-att-value="filtered_sorted_variants[0].id"/>
                 <t t-if="len(filtered_sorted_variants) &gt; 1">
                     <t t-set="template_combination_info" t-value="product._get_combination_info(only_template=True)"/>
@@ -1554,7 +1562,7 @@
                                        class="js_add_cart_json btn btn-link d-inline-block border-end-0"
                                        aria-label="Remove one"
                                        title="Remove one">
-                                        <i class="position-relative z-index-1 fa fa-minus"/>
+                                        <i class="position-relative z-1 fa fa-minus"/>
                                     </a>
                                     <input type="text"
                                            class="js_quantity quantity form-control border-start-0 border-end-0"
@@ -1574,7 +1582,7 @@
                                        class="js_add_cart_json d-inline-block float_left btn btn-link border-start-0"
                                        aria-label="Add one"
                                        title="Add one">
-                                        <i class="fa fa-plus position-relative z-index-1"/>
+                                        <i class="fa fa-plus position-relative z-1"/>
                                     </a>
                                 </t>
                                 <t t-else="">
@@ -1693,8 +1701,7 @@
                     </div>
                     <div class="d-flex flex-column align-items-end">
                         <input class="js_quantity" name="product_id" t-att-data-product-id="product.id" type="hidden"/>
-                        <a t-if="product._website_show_quick_add()"
-                           role="button"
+                        <a role="button"
                            class="js_add_suggested_products btn btn-md btn-outline-primary text-nowrap">
                             <span class="d-md-none fa fa-shopping-cart"/>
                             <span class="d-none d-md-inline">Add to cart</span>
@@ -1800,27 +1807,31 @@
             <div id="shop_checkout">
                 <div class="row">
                     <div class="col-lg-12">
-                        <h3 class="mb-4">Address</h3>
-                        <h4>Billing</h4>
+                        <h4 class="text-uppercase small fs-6 fw-bold">Billing address</h4>
                     </div>
                 </div>
                 <t t-call="website_sale.row_addresses">
                     <t t-set="order" t-value="order"/>
                     <t t-set="is_invoice" t-value="True"/>
-                    <t t-set="addresses" t-value="billings"/>
+                    <t t-set="addresses" t-value="billing_addresses"/>
                     <t t-set="selected_address" t-value="order.partner_invoice_id"/>
                 </t>
-                <t t-if="not only_services" groups="account.group_delivery_invoice_address">
-                    <div class="row">
-                        <div class="col-lg-12">
-                            <h4>Shipping</h4>
+                <t t-if="order._has_deliverable_products()">
+                    <t groups="account.group_delivery_invoice_address">
+                        <div class="row">
+                            <div class="col-lg-12">
+                                <h4 class="text-uppercase small fs-6 fw-bold">Delivery address</h4>
+                            </div>
                         </div>
-                    </div>
-                    <t t-call="website_sale.row_addresses">
-                        <t t-set="order" t-value="order"/>
-                        <t t-set="is_invoice" t-value="False"/>
-                        <t t-set="addresses" t-value="shippings"/>
-                        <t t-set="selected_address" t-value="order.partner_shipping_id"/>
+                        <t t-call="website_sale.row_addresses">
+                            <t t-set="order" t-value="order"/>
+                            <t t-set="is_invoice" t-value="False"/>
+                            <t t-set="addresses" t-value="delivery_addresses"/>
+                            <t t-set="selected_address" t-value="order.partner_shipping_id"/>
+                        </t>
+                    </t>
+                    <t t-call="website_sale.delivery_form">
+                        <t t-set="selected_dm_id" t-value="order.carrier_id.id"/>
                     </t>
                 </t>
             </div>
@@ -1828,7 +1839,7 @@
     </template>
 
     <template id="row_addresses">
-        <div t-attf-class="{{'all_billing' if is_invoice else 'all_shipping'}} row row-cols-md-2 row-cols-lg-3 g-3 flex-nowrap flex-md-wrap mb32">
+        <div t-attf-class="{{'all_billing' if is_invoice else 'all_delivery'}} row row-cols-md-2 row-cols-lg-3 g-3 flex-nowrap flex-md-wrap mb32">
             <div t-foreach="addresses" t-as="addr"
                     class="one_kanban col-md">
                 <t t-call="website_sale.address_kanban">
@@ -1839,10 +1850,10 @@
             <div t-if="not is_invoice or not order.website_id.is_public_user()" class="one_kanban col-md">
                 <!-- We do not allow public users to have multiple billing addresses -->
                 <t t-if="is_invoice">
-                    <t t-set="new_address_href" t-valuef="/shop/address?mode=billing"/>
+                    <t t-set="new_address_href" t-valuef="/shop/address?address_type=billing"/>
                 </t>
                 <t t-else="">
-                    <t t-set="new_address_href" t-valuef="/shop/address?mode=shipping"/>
+                    <t t-set="new_address_href" t-valuef="/shop/address?address_type=delivery"/>
                 </t>
                 <a role="button" t-att-href="new_address_href" class="o_wsale_add_address d-flex align-items-center justify-content-center h-100 px-4 border rounded mx-auto no-decoration">
                     <i class="fa fa-plus me-md-2"/><span class="d-none d-md-inline">Add address</span>
@@ -1853,14 +1864,14 @@
 
     <!-- Card view of addresses. Called in `website_sale.checkout`. -->
     <template id="address_kanban" name="Kanban address">
-        <t t-set="mode" t-value="is_invoice and 'billing' or 'shipping'"/>
-        <div t-attf-class="card position-relative h-100 #{selected and 'bg-primary border border-primary' or is_invoice and 'js_change_billing' or 'js_change_shipping'}"
-             t-att-mode="mode"
-             t-att-partner_id="contact.id">
+        <t t-set="address_type" t-value="is_invoice and 'billing' or 'delivery'"/>
+        <div t-attf-class="card position-relative h-100 #{selected and 'bg-primary border border-primary' or is_invoice and 'js_change_billing' or 'js_change_delivery'}"
+             t-att-data-address-type="address_type"
+             t-att-data-partner-id="contact.id">
             <div class="card-body d-flex flex-column align-items-start">
                 <t t-esc="contact" t-options="dict(widget='contact', fields=['name', 'address'], no_marker=True)"/>
-                <t t-if="contact._can_be_edited_by_current_customer(website_sale_order, mode)">
-                    <t t-set="new_address_href" t-value="'/shop/address?mode=' + mode"/>
+                <t t-if="contact._can_be_edited_by_current_customer(website_sale_order, address_type)">
+                    <t t-set="new_address_href" t-value="'/shop/address?address_type=' + address_type"/>
                     <a
                         t-att-href="new_address_href + '&amp;partner_id=' + str(contact.id)"
                         class="js_edit_address btn btn-link p-0 mt-auto"
@@ -1875,7 +1886,7 @@
     </template>
 
     <!-- /shop/address route -->
-    <template id="address" name="Address Management">
+    <template id="website_sale.address" name="Address Management">
         <t t-set="no_footer" t-value="1"/>
         <t t-call="website.layout">
             <div id="wrap">
@@ -1888,135 +1899,205 @@
                     <div class="row">
                         <div class="oe_cart col-12 col-lg-8">
                             <div>
-                                <t t-set="address_mode" t-value="mode[1]"/>
-                                <t t-if="is_public_order">
-                                    <h3 class="mb-3">
-                                        <span t-if="account_on_checkout != 'mandatory'">Fill in your address</span>
-                                        <small class="text-muted" t-if="account_on_checkout == 'optional'"> or </small>
-                                        <a t-if="account_on_checkout != 'disabled'" role="button" href='/web/login?redirect=/shop/checkout'  style="margin-top: -11px"> Sign in</a>
-                                    </h3>
-                                </t>
-                                <t t-elif="address_mode == 'billing'">
-                                    <h3 class="mb-3">Billing address</h3>
-                                </t>
-                                <t t-else="">
-                                    <h3 class="mb-3">Shipping address</h3>
+                                <t t-if="not is_anonymous_cart">
+                                    <t t-if="address_type == 'billing'">
+                                        <h3 class="mb-3">Billing address</h3>
+                                    </t>
+                                    <t t-else="">
+                                        <h3 class="mb-3">Delivery address</h3>
+                                    </t>
                                 </t>
                                 <t t-if="partner_id == website_sale_order.partner_shipping_id.id == website_sale_order.partner_invoice_id.id">
-                                    <div class="alert alert-warning" role="alert" t-if="not only_services" groups="account.group_delivery_invoice_address">
+                                    <div t-if="not only_services" class="alert alert-warning" role="alert" groups="account.group_delivery_invoice_address">
                                         <h4 class="alert-heading">Be aware!</h4>
                                         <p>
-                                            You are editing your <b>billing and shipping</b> addresses at the same time!<br/>
-                                            If you want to modify your shipping address, create a <a href='/shop/address'>new address</a>.
+                                            You are editing your <b>billing and delivery</b> addresses at the same time!<br/>
+                                            If you want to modify your delivery address, create a <a href="/shop/address?address_type=delivery">new address</a>.
                                         </p>
                                     </div>
                                 </t>
-                                <t t-if="error" t-foreach="error.get('error_message', [])" t-as="err">
-                                    <h5 class="text-danger" t-esc="err" />
-                                </t>
-                                <form t-if="account_on_checkout != 'mandatory' or not is_public_user" action="/shop/address" method="post" class="checkout_autoformat">
+                                <div id="errors"/> <!-- for js -->
+                                <form
+                                    action="/shop/address/submit"
+                                    method="post"
+                                    class="checkout_autoformat"
+                                    t-att-data-company-country-code="res_company.country_id.code"
+                                >
+                                    <t t-if="is_anonymous_cart">
+                                        <div id="div_email_public" t-attf-class="col-lg-12">
+                                            <label class="col-form-label" for="o_email">Email</label>
+                                            <div class="align-items-center float-end" style="margin-top: -11px">
+                                                <span>Already have an account?</span>
+                                                <a
+                                                    t-if="account_on_checkout != 'disabled'"
+                                                    role="button"
+                                                    href='/web/login?redirect=/shop/checkout'
+                                                    class="btn btn-primary"
+                                                >
+                                                    Sign in
+                                                </a>
+                                            </div>
+                                            <input
+                                                id="o_email"
+                                                type="email"
+                                                name="email"
+                                                class="form-control"
+                                                t-att-value="partner_sudo.email"
+                                            />
+                                        </div>
+                                        <h4 class="mb-1 mt-5">Fill in your address</h4>
+                                    </t>
                                     <div class="row">
-                                        <div t-attf-class="#{error.get('name') and 'o_has_error'} div_name col-lg-12 mb-2">
-                                            <label class="col-form-label" for="name">Full name</label>
-                                            <input type="text" name="name" t-attf-class="form-control #{error.get('name') and 'is-invalid' or ''}" t-att-value="'name' in checkout and checkout['name']" />
+                                        <div id="div_name" class="col-lg-12 mb-2">
+                                            <label class="col-form-label" for="o_name">Full name</label>
+                                            <input
+                                                id="o_name"
+                                                type="text"
+                                                name="name"
+                                                t-att-value="partner_sudo.name"
+                                                class="form-control"
+                                            />
                                         </div>
                                         <div class="w-100"/>
-                                        <div t-attf-class="#{error.get('email') and 'o_has_error'} col-lg-6 mb-2" id="div_email">
-                                            <label t-attf-class="col-form-label #{mode[1] == 'shipping' and 'label-optional' or ''}" for="email">Email</label>
-                                            <input type="email" name="email" t-attf-class="form-control #{error.get('email') and 'is-invalid' or ''}" t-att-value="'email' in checkout and checkout['email']" />
+                                        <div
+                                            t-if="not is_anonymous_cart"
+                                            id="div_email"
+                                            class="col-lg-6 mb-2"
+                                        >
+                                            <label class="col-form-label" for="o_email">Email</label>
+                                            <input
+                                                id="o_email"
+                                                type="email"
+                                                name="email"
+                                                t-att-value="partner_sudo.email"
+                                                class="form-control"
+                                            />
                                         </div>
-                                        <div t-attf-class="#{error.get('phone') and 'o_has_error'} col-lg-6 mb-2" id="div_phone">
-                                            <label class="col-form-label" for="phone">Phone</label>
-                                            <input type="tel" name="phone" t-attf-class="form-control #{error.get('phone') and 'is-invalid' or ''}" t-att-value="'phone' in checkout and checkout['phone']" />
+                                        <div id="div_phone" class="col-lg-6 mb-2">
+                                            <label class="col-form-label" for="o_phone">Phone</label>
+                                            <input
+                                                id="o_phone"
+                                                type="tel"
+                                                name="phone"
+                                                t-att-value="partner_sudo.phone"
+                                                class="form-control"
+                                            />
                                         </div>
                                         <t t-if="website._display_partner_b2b_fields()">
                                             <div class="w-100"/>
-                                            <t t-set='vat_warning' t-value="'vat' in checkout and checkout['vat'] and not can_edit_vat" />
-                                            <t t-if="(mode == ('new', 'billing') and is_public_order
-                                                or mode == ('edit', 'billing') and partner_id == website_sale_order.partner_id.id)
-                                                and (can_edit_vat or 'vat' in checkout and checkout['vat'])"
-                                            >
-                                                <div t-attf-class="#{error.get('company_name') and 'o_has_error'} col-lg-6 mb-2">
-                                                    <label class="col-form-label fw-normal label-optional" for="company_name">Company Name</label>
-                                                    <input type="text" name="company_name" t-attf-class="form-control #{error.get('company_name') and 'is-invalid' or ''}" t-att-value="'commercial_company_name' in checkout and checkout['commercial_company_name'] or 'company_name' in checkout and checkout['company_name']" t-att-readonly="'1' if vat_warning else None" />
-                                                    <small t-if="vat_warning" class="form-text text-muted d-block d-lg-none">Changing company name is not allowed once document(s) have been issued for your account. Please contact us directly for this operation.</small>
+                                            <t t-if="show_vat">
+                                                <t t-set="vat_warning" t-value="partner_sudo.vat and not can_edit_vat"/>
+                                                <div id="company_name_div" class="col-lg-6 mb-2">
+                                                    <label
+                                                        class="col-form-label fw-normal label-optional"
+                                                        for="o_company_name"
+                                                    >
+                                                        Company Name
+                                                    </label>
+                                                    <input
+                                                        id="o_company_name"
+                                                        type="text"
+                                                        name="company_name"
+                                                        t-att-value="partner_sudo.commercial_company_name"
+                                                        t-att-readonly="'1' if vat_warning else None"
+                                                        class="form-control"
+                                                    />
+                                                    <small t-if="vat_warning" class="form-text text-muted d-block d-lg-none">
+                                                        Changing company name is not allowed once document(s) have been issued for your account. Please contact us directly for this operation.
+                                                    </small>
                                                 </div>
-                                                <div t-attf-class="#{error.get('vat') and 'o_has_error'} div_vat col-lg-6 mb-2">
-                                                    <label class="col-form-label fw-normal label-optional" for="vat">VAT</label>
-                                                    <input type="text" name="vat" t-attf-class="form-control #{error.get('vat') and 'is-invalid' or ''}" t-att-value="'vat' in checkout and checkout['vat']" t-att-readonly="'1' if vat_warning else None"/>
-                                                    <small t-if="vat_warning" class="form-text text-muted d-block d-lg-none">Changing VAT number is not allowed once document(s) have been issued for your account. Please contact us directly for this operation.</small>
+                                                <div id="div_vat" class="col-lg-6 mb-2">
+                                                    <label class="col-form-label fw-normal label-optional" for="o_vat">
+                                                        <t t-out="vat_label"/>
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        id="o_vat"
+                                                        name="vat"
+                                                        t-att-value="partner_sudo.vat"
+                                                        t-att-readonly="'1' if vat_warning else None"
+                                                        class="form-control"
+                                                    />
+                                                    <small t-if="vat_warning" class="form-text text-muted d-block d-lg-none">
+                                                        Changing VAT number is not allowed once document(s) have been issued for your account. Please contact us directly for this operation.
+                                                    </small>
                                                 </div>
                                                 <div t-if="vat_warning" class="col-12 d-none d-lg-block mb-1">
-                                                    <small class="form-text text-muted">Changing company name or VAT number is not allowed once document(s) have been issued for your account. Please contact us directly for this operation.</small>
+                                                    <small class="form-text text-muted">
+                                                        Changing company name or VAT number is not allowed once document(s) have been issued for your account. Please contact us directly for this operation.
+                                                    </small>
                                                 </div>
                                             </t>
                                         </t>
-                                        <div t-attf-class="#{error.get('street') and 'o_has_error'} div_street col-lg-12 mb-2">
-                                            <label class="col-form-label" for="street">Street and Number</label>
-                                            <input type="text" name="street" t-attf-class="form-control #{error.get('street') and 'is-invalid' or ''}" t-att-value="'street' in checkout and checkout['street']" />
+                                        <div id="div_street" class="col-lg-12 mb-2">
+                                            <label class="col-form-label" for="o_street">Street and Number</label>
+                                            <input id="o_street" type="text" name="street" class="form-control" t-att-value="partner_sudo.street"/>
                                         </div>
-                                        <div t-attf-class="mb-2 #{error.get('street2') and 'o_has_error' or ''} col-lg-12 div_street2">
-                                            <label class="col-form-label label-optional" for="street2">Apartment, suite, etc.</label>
-                                            <input type="text" name="street2" t-attf-class="form-control #{error.get('street2') and 'is-invalid' or ''}" t-att-value="'street2' in checkout and checkout['street2']" />
+                                        <div id="div_street2" class="col-lg-12 mb-2">
+                                            <label class="col-form-label label-optional" for="o_street2">Apartment, suite, etc.</label>
+                                            <input id="o_street2" type="text" name="street2" class="form-control" t-att-value="partner_sudo.street2" />
                                         </div>
                                         <div class="w-100"/>
-                                        <t t-set='zip_city' t-value='country and [x for x in country.get_address_fields() if x in ["zip", "city"]] or ["city", "zip"]'/>
-                                        <t t-if="'zip' in zip_city and zip_city.index('zip') &lt; zip_city.index('city')">
-                                            <div t-attf-class="#{error.get('zip') and 'o_has_error'} div_zip col-md-4 mb-2">
-                                                <label class="col-form-label label-optional" for="zip">Zip Code</label>
-                                                <input type="text" name="zip" t-attf-class="form-control #{error.get('zip') and 'is-invalid' or ''}" t-att-value="'zip' in checkout and checkout['zip']" />
+                                        <t t-if="zip_before_city">
+                                            <div id="div_zip" class="col-md-4 mb-2">
+                                                <label class="col-form-label label-optional" for="o_zip">Zip Code</label>
+                                                <input id="o_zip" type="text" name="zip" class="form-control" t-att-value="partner_sudo.zip"/>
                                             </div>
                                         </t>
-                                        <div t-attf-class="#{error.get('city') and 'o_has_error' or ''} div_city col-md-8 mb-2">
-                                            <label class="col-form-label" for="city">City</label>
-                                            <input type="text" name="city" t-attf-class="form-control #{error.get('city') and 'is-invalid' or ''}" t-att-value="'city' in checkout and checkout['city']" />
+                                        <div id="div_city" class="col-md-8 mb-2">
+                                            <label class="col-form-label" for="o_city">City</label>
+                                            <input id="o_city" type="text" name="city" class="form-control" t-att-value="partner_sudo.city"/>
                                         </div>
-                                        <t t-if="'zip' in zip_city and zip_city.index('zip') &gt; zip_city.index('city')">
-                                            <div t-attf-class="#{error.get('zip') and 'o_has_error'} div_zip col-md-4 mb-2">
-                                                <label class="col-form-label label-optional" for="zip">Zip Code</label>
-                                                <input type="text" name="zip" t-attf-class="form-control #{error.get('zip') and 'is-invalid' or ''}" t-att-value="'zip' in checkout and checkout['zip']" />
+                                        <t t-if="not zip_before_city">
+                                            <div id="div_zip" class="col-md-4 mb-2">
+                                                <label class="col-form-label label-optional" for="o_zip">Zip Code</label>
+                                                <input id="o_zip" type="text" name="zip" class="form-control" t-att-value="partner_sudo.zip"/>
                                             </div>
                                         </t>
                                         <div class="w-100"/>
-                                        <div t-attf-class="#{error.get('country_id') and 'o_has_error'} div_country col-lg-6 mb-2">
-                                            <label class="col-form-label" for="country_id">Country</label>
-                                            <select id="country_id" name="country_id" t-attf-class="form-select #{error.get('country_id') and 'is-invalid' or ''}" t-att-mode="mode[1]">
+                                        <div id="div_country" class="col-lg-6 mb-2">
+                                            <label class="col-form-label" for="o_country_id">Country</label>
+                                            <select id="o_country_id" name="country_id" class="form-select">
                                                 <option value="">Country...</option>
                                                 <t t-foreach="countries" t-as="c">
-                                                    <option t-att-value="c.id" t-att-selected="c.id == (country and country.id or -1)">
+                                                    <option t-att-value="c.id" t-att-selected="c.id == country.id" t-att-code="c.code">
                                                         <t t-esc="c.name" />
                                                     </option>
                                                 </t>
                                             </select>
                                         </div>
-                                        <div t-attf-class="#{error.get('state_id') and 'o_has_error'} div_state col-lg-6 mb-2" t-att-style="(not country or not country.state_ids) and 'display: none'">
-                                            <label class="col-form-label" for="state_id">State / Province</label>
-                                            <select name="state_id" t-attf-class="form-select #{error.get('state_id') and 'is-invalid' or ''}" data-init="1">
+                                        <div id="div_state" class="col-lg-6 mb-2"
+                                             t-att-style="not country_states and 'display: none'">
+                                            <label class="col-form-label" for="o_state_id">State / Province</label>
+                                            <select id="o_state_id" name="state_id" class="form-select">
                                                 <option value="">State / Province...</option>
                                                 <t t-foreach="country_states" t-as="s">
-                                                    <option t-att-value="s.id" t-att-selected="s.id == ('state_id' in checkout and country and checkout['state_id'] != '' and int(checkout['state_id']))">
+                                                    <option t-att-value="s.id" t-att-selected="s.id == state_id">
                                                         <t t-esc="s.name" />
                                                     </option>
                                                 </t>
                                             </select>
                                         </div>
                                         <div class="w-100"/>
-                                        <t t-if="mode == ('new', 'billing') and not only_services">
+                                        <t t-if="address_type == 'billing' and not partner_id and not only_services">
                                             <div class="col-lg-12">
                                                 <div class="form-check form-switch mt-2 mb-3">
                                                     <label>
                                                         <input
                                                             type="checkbox"
-                                                            id="shipping_use_same"
-                                                            class="form-check-input mr8"
+                                                            id="use_same_as_delivery"
                                                             name="use_same"
                                                             value="1"
-                                                            t-att-checked="use_same"/>Ship to the same address
+                                                            t-att-checked="use_same"
+                                                            class="form-check-input mr8"
+                                                        />Deliver to the same address
                                                         <span
-                                                            t-if="is_public_user"
+                                                            t-if="is_anonymous_cart"
+                                                            name="o_wsale_separate_delivery_notice"
                                                             class="form-check-label ship_to_other text-muted"
-                                                            style="display: none">
-                                                            &amp;nbsp;(<i>Your shipping address will be requested later)</i>
+                                                            style="display: none"
+                                                        >
+                                                            &amp;nbsp;(<i>Your delivery address will be requested later)</i>
                                                         </span>
                                                     </label>
                                                 </div>
@@ -2026,18 +2107,20 @@
                                             <input type="hidden" name="use_same" t-att-value="partner_id == website_sale_order.partner_shipping_id.id == website_sale_order.partner_invoice_id.id"/>
                                         </t>
                                     </div>
-
                                     <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()" t-nocache="The csrf token must always be up to date."/>
-                                    <input type="hidden" name="submitted" value="1" />
-                                    <input type="hidden" name="partner_id" t-att-value="partner_id or '0'" />
-                                    <input type="hidden" name="mode" t-att-value="mode[1]"/>
-                                    <input type="hidden" name="callback" t-att-value="callback" />
+                                    <input type="hidden" name="address_type" t-att-value="address_type"/>
+                                    <t t-if="partner_id">
+                                        <input type="hidden" name="partner_id" t-att-value="partner_id"/>
+                                    </t>
+                                    <t t-if="callback">
+                                        <input type="hidden" name="callback" t-att-value="callback"/>
+                                    </t>
 
                                     <!-- Example -->
-                                    <input type="hidden" name="field_required" t-att-value="'name,street'" />
+                                    <input type="hidden" name="required_fields" t-att-value="'name,country_id'"/>
 
                                     <div class="d-flex flex-column flex-md-row align-items-center justify-content-between mt32 mb32">
-                                        <a role="button" t-att-href="mode == ('new', 'billing') and '/shop/cart' or '/shop/checkout'" class="btn btn-outline-secondary w-100 w-md-auto order-md-1 order-3">
+                                        <a role="button" t-att-href="discard_url" class="btn btn-outline-secondary w-100 w-md-auto order-md-1 order-3">
                                             <i class="fw-light fa fa-angle-left me-2"/>Discard
                                         </a>
                                         <div class="position-relative w-100 d-flex d-md-none justify-content-center align-items-center order-2 my-2 opacity-75">
@@ -2045,15 +2128,15 @@
                                             <span class="px-3">or</span>
                                             <hr class="w-100"/>
                                         </div>
-                                        <a role="button" href="#" class="a-submit a-submit-disable a-submit-loading btn btn-primary w-100 w-md-auto order-1 order-md-3">
-                                            <t t-if="mode == ('new', 'billing')">
+                                        <button id="save_address" class="btn btn-primary w-100 w-md-auto order-1 order-md-3">
+                                            <t t-if="is_anonymous_cart">
                                                 Continue checkout
                                             </t>
                                             <t t-else="">
                                                 Save address
                                             </t>
                                             <i class="fw-light fa fa-angle-right ms-2"/>
-                                        </a>
+                                        </button>
                                     </div>
                                 </form>
                             </div>
@@ -2065,21 +2148,34 @@
     </template>
 
     <!-- Deactivatable through the website editor. -->
-    <template id="address_b2b" inherit_id="address" name="Show b2b fields" />
+    <template id="address_b2b" inherit_id="website_sale.address" name="Show b2b fields" />
 
     <!-- Called in `website_sale.payment`. -->
     <template id="address_on_payment" name="Address on payment">
         <div class="card">
             <div class="card-body" id="shipping_and_billing">
                 <a class="float-end no-decoration" href="/shop/checkout"><i class="fa fa-pencil me-1"/>Edit</a>
-                <t t-set="same_shipping" t-value="bool(order.partner_shipping_id==order.partner_invoice_id or only_services)" />
+                <t
+                    t-set="separate_billing_address"
+                    t-value="order.partner_invoice_id != order.partner_shipping_id or order.pickup_location_data"
+                />
                 <div>
-                    <b>Billing<t t-if="same_shipping and not only_services"> &amp; Shipping</t>: </b>
+                    <b>Billing<t t-if="not separate_billing_address and not only_services"> &amp; Delivery</t>: </b>
                     <span t-esc="order.partner_invoice_id" t-options="dict(widget='contact', fields=['address'], no_marker=True, separator=', ')" class="address-inline"/>
                 </div>
-                <div t-if="not same_shipping and not only_services" groups="account.group_delivery_invoice_address">
-                    <b>Shipping: </b>
-                    <span t-esc="order.partner_shipping_id" t-options="dict(widget='contact', fields=['address'], no_marker=True, separator=', ')" class="address-inline"/>
+                <div t-if="separate_billing_address and order._has_deliverable_products()" groups="account.group_delivery_invoice_address">
+                    <t t-if="order.pickup_location_data">
+                        <b>Deliver to pickup point: </b>
+                        <t t-out="order.pickup_location_data.get('name', '') + ', ' + order.pickup_location_data.get('street', '') + ' ' + order.pickup_location_data.get('zip_code', '') + ' ' + order.pickup_location_data.get('city','')"/>
+                    </t>
+                    <t t-else="">
+                        <b>Delivery: </b>
+                        <span
+                            t-out="order.partner_shipping_id"
+                            t-options="dict(widget='contact', fields=['address'], no_marker=True, separator=', ')"
+                            class="address-inline"
+                        />
+                    </t>
                 </div>
             </div>
         </div>
@@ -2115,43 +2211,12 @@
             </div>
             <div class="oe_structure clearfix mt-3" id="oe_structure_website_sale_payment_1"/>
 
-            <t t-if="not errors and website_sale_order.amount_total" name="website_sale_non_free_cart">
-                <div class="mt-4">
-                    <h3>Pay with</h3>
-                </div>
-                <div t-if="payment_methods_sudo or tokens_sudo"
-                        id="payment_method"
-                        class="o_not_editable mt-4">
+            <div t-if="not errors and website_sale_order.amount_total" name="website_sale_non_free_cart">
+                <div id="payment_method" class="o_not_editable mt-4">
                     <t t-call="payment.form"/>
                 </div>
-                <div t-else="" class="alert alert-warning">
-                    <t t-set="hide_payment_button" t-value="True"/>
-                    <strong>No suitable payment option could be found.</strong><br/>
-                    <div t-if="not request.env.is_admin()">
-                        If you believe that it is an error, please contact the website administrator.
-                    </div>
-                    <div class="mt-2" groups="base.group_system">
-                        <a t-if="request.env.company.country_id.is_stripe_supported_country"
-                            t-attf-href="/web#action=#{action_activate_stripe_id}"
-                            role="button"
-                            class="btn btn-primary"
-                            t-out="'ACTIVATE STRIPE'"
-                        />
-                        <div t-else=""
-                                class="d-inline"
-                                title="Stripe Connect is not available in your country, please use another payment provider."
-                        >
-                            <button t-out="'ACTIVATE STRIPE'" class="btn btn-primary" disabled="true"/>
-                        </div>
-                        <a role="button"
-                            class="btn-link alert-warning ps-2"
-                            t-attf-href="/web#action=#{payment_action_id}"
-                        >
-                            <strong><i class="oi oi-arrow-right"></i> View alternatives</strong>
-                        </a>
-                    </div>
-                </div>
-            </t>
+                <t t-if="not (payment_methods_sudo or tokens_sudo)" t-set="hide_payment_button" t-value="True"/>
+            </div>
         </t>
     </template>
 
@@ -2211,14 +2276,14 @@
                         <div t-else=""
                              class="o_wsale_accordion accordion sticky-lg-top offset-xl-1 col-12 col-lg-5 col-xl-4 order-lg-2 rounded"
                              id="o_wsale_total_accordion">
-                            <div class="o_total_card">
-                                <div class="accordion-item p-lg-4 border-0">
-                                    <div class="accordion-header d-block d-lg-none align-items-center mb-4">
+                            <div class="o_total_card sticky-lg-top">
+                                <div id="o_wsale_total_accordion_item" class="accordion-item p-lg-4 border-0">
+                                    <div class="accordion-header d-block align-items-center mb-4">
                                         <button class="accordion-button px-0 collapsed"
                                                 data-bs-toggle="collapse"
-                                                data-bs-target="#o_wsale_total_accordion_item"
+                                                data-bs-target="#o_wsale_accordion_item"
                                                 aria-expanded="false"
-                                                aria-controls="o_wsale_total_accordion_item">
+                                                aria-controls="o_wsale_accordion_item">
                                             <div class="d-flex flex-wrap">
                                                 <b class="w-100">Order summary</b>
                                                 <span t-out="str(website_sale_order.cart_quantity)"/>
@@ -2233,11 +2298,10 @@
                                     <div name="cart_summary_info" t-if="not website_sale_order or not website_sale_order.website_order_line" class="alert alert-info">
                                         Your cart is empty!
                                     </div>
-                                    <!-- Cart lines are showed in desktop but are in an hidden accordion in mobile -->
-                                    <div id="o_wsale_total_accordion_item"
+                                    <div id="o_wsale_accordion_item"
                                         class="accordion-collapse collapse mb-4 mb-lg-0"
                                         data-bs-parent="#o_wsale_total_accordion">
-                                        <div t-att-class="len(website_sale_order.website_order_line) &gt; 4 and 'o_wsale_scrollable_table mt-n4 me-n4 pt-4 pe-4'">
+                                        <div t-att-class="len(website_sale_order.website_order_line) &gt; 3 and 'o_wsale_scrollable_table mt-n4 me-n4 pt-4 pe-4'">
                                             <table t-if="website_sale_order and website_sale_order.website_order_line"
                                                 class="table accordion-body mb-0"
                                                 id="cart_products">
@@ -2290,10 +2354,10 @@
                                                 <strong>Warning!</strong> <t t-esc='website_sale_order._get_shop_warning()'/>
                                             </div>
                                         </t>
-                                        <t t-call="website_sale.total">
-                                            <t t-set="_cart_total_classes" t-valuef="border-top pt-3"/>
-                                        </t>
                                     </div>
+                                    <t t-call="website_sale.total">
+                                        <t t-set="_cart_total_classes" t-valuef="border-top pt-3"/>
+                                    </t>
                                     <div t-if="show_navigation_button" class="o_cta_navigation_container position-absolute position-lg-static start-0 bottom-0 col-12">
                                         <t t-call="website_sale.navigation_buttons"/>
                                     </div>
@@ -2355,7 +2419,7 @@
             </t>
             <t t-if="request.env['res.users']._get_signup_invitation_scope() == 'b2c' and request.website.is_public_user()">
                 <p class="alert alert-info mt-3" role="status">
-                    <a role="button" t-att-href="order.partner_id.signup_prepare() and order.partner_id.with_context(relative_url=True).signup_url" class="btn btn-primary">Sign Up</a>
+                    <a role="button" t-att-href="order.partner_id.signup_prepare() and order.partner_id.with_context(relative_url=True)._get_signup_url()" class="btn btn-primary">Sign Up</a>
                     to follow your order.
                 </p>
             </t>
@@ -2380,8 +2444,8 @@
             <div class="card mt-3">
                 <div class="card-body">
                     <t t-set="same_shipping" t-value="bool(order.partner_shipping_id == order.partner_invoice_id or only_services)" />
-                    <div><b>Billing <t t-if="same_shipping and not only_services"> &amp; Shipping</t>: </b><span t-esc='order.partner_invoice_id' t-options="dict(widget='contact', fields=['address'], no_marker=True, separator=', ')" class="address-inline"/></div>
-                    <div t-if="not same_shipping and not only_services" groups="account.group_delivery_invoice_address"><b>Shipping: </b><span t-esc='order.partner_shipping_id' t-options="dict(widget='contact', fields=['address'], no_marker=True, separator=', ')"  class="address-inline"/></div>
+                    <div><b>Billing <t t-if="same_shipping and not only_services"> &amp; Delivery</t>: </b><span t-esc='order.partner_invoice_id' t-options="dict(widget='contact', fields=['address'], no_marker=True, separator=', ')" class="address-inline"/></div>
+                    <div t-if="not same_shipping and not only_services" groups="account.group_delivery_invoice_address"><b>Delivery: </b><span t-esc='order.partner_shipping_id' t-options="dict(widget='contact', fields=['address'], no_marker=True, separator=', ')"  class="address-inline"/></div>
                 </div>
             </div>
             <div class="oe_structure mt-3" id="oe_structure_website_sale_confirmation_2"/>
@@ -2393,6 +2457,23 @@
     <template id="total">
         <div id="cart_total" t-if="website_sale_order and website_sale_order.website_order_line" t-att-class="_cart_total_classes">
             <table class="table mb-0">
+                <tr t-if="website_sale_order._has_deliverable_products()" id="order_delivery">
+                    <td
+                        class="ps-0 pt-0 pb-2 border-0 text-muted"
+                        colspan="2"
+                        title="Delivery will be updated after choosing a new delivery method"
+                    >
+                        Delivery
+                    </td>
+                    <td class="text-end pe-0 pt-0 pb-2 border-0">
+                        <span
+                            t-out="website_sale_order.amount_delivery"
+                            class="monetary_field"
+                            style="white-space: nowrap;"
+                            t-options="{'widget': 'monetary', 'display_currency': website_sale_order.currency_id}"
+                        />
+                    </td>
+                </tr>
                 <tr id="order_total_untaxed">
                     <td id="cart_total_subtotal"
                         class="border-0 pb-2 ps-0 pt-0 text-start text-muted"
@@ -2528,10 +2609,10 @@
     <!-- Product page images -->
     <template id="website_sale.shop_product_images" name="Shop Product Images">
         <t t-set="product_images" t-value="product_variant._get_images() if product_variant else product._get_images()"/>
-        <t t-set="ribbon" t-value="product_variant.sudo().ribbon_id or product.sudo().website_ribbon_id"/>
+        <t t-set="ribbon" t-value="product_variant.sudo().variant_ribbon_id or product.sudo().website_ribbon_id"/>
         <t t-set="bg_color" t-value="ribbon['bg_color'] or ''"/>
         <t t-set="text_color" t-value="ribbon['text_color']"/>
-        <t t-set="bg_class" t-value="ribbon['html_class']"/>
+        <t t-set="bg_class" t-value="ribbon._get_position_class()"/>
         <t t-call="website_sale.shop_product_#{website.product_page_image_layout}"/>
     </template>
 
@@ -2542,9 +2623,9 @@
         <div t-elif="len(product_images) == 1 and website.product_page_image_layout != 'grid'"
              class="position-relative d-inline-flex overflow-hidden m-auto h-100"
         >
-            <span t-attf-class="o_ribbon #{ribbon['html_class']} z-index-1"
+            <span t-attf-class="o_ribbon #{ribbon._get_position_class()} z-1"
                   t-attf-style="#{text_color and ('color: %s; ' % text_color)}#{bg_color and 'background-color:' + bg_color}"
-                  t-out="ribbon['html'] or ''"
+                  t-out="ribbon['name'] or ''"
             />
             <div t-field="product_image.image_1920"
                  name="o_img_with_max_suggested_width"
@@ -2558,12 +2639,12 @@
     <!-- Product page images: Carousel -->
     <template id="website_sale.shop_product_carousel" name="Shop Product Carousel">
         <t t-set="product_carousel_block_name">Product Carousel</t>
-        <div id="o-carousel-product" class="carousel slide position-sticky mb-3 overflow-hidden" data-bs-ride="carousel" data-bs-interval="0" t-att-data-name="product_carousel_block_name">
+        <div id="o-carousel-product" class="carousel slide position-sticky mb-3 overflow-hidden" data-bs-ride="true" t-att-data-name="product_carousel_block_name">
             <div class="o_carousel_product_outer carousel-outer position-relative flex-grow-1 overflow-hidden">
                 <span t-if="len(product_images) > 1"
-                      t-attf-class="o_ribbon #{ribbon['html_class']} z-index-1"
+                      t-attf-class="o_ribbon #{ribbon._get_position_class()} z-1"
                       t-attf-style="#{text_color and ('color: %s; ' % text_color)}#{bg_color and 'background-color:' + bg_color}"
-                      t-out="ribbon['html'] or ''"
+                      t-out="ribbon['name'] or ''"
                 />
                 <div class="carousel-inner h-100">
                     <t t-set="image_classes" t-value="'d-flex align-items-center justify-content-center h-100'"/>
@@ -2622,9 +2703,9 @@
     <template id="website_sale.shop_product_grid" name="Shop Product Grid">
         <div id="o-grid-product" class="o_wsale_product_page_grid mb-3" data-name="Product Grid" t-att-data-image_spacing="website.product_page_image_spacing" t-att-data-grid_columns="website.product_page_grid_columns">
             <div class="container position-relative overflow-hidden">
-                <span t-attf-class="o_ribbon #{ribbon['html_class']}"
+                <span t-attf-class="o_ribbon #{ribbon._get_position_class()}"
                       t-attf-style="#{text_color and ('color: %s; ' % text_color)}#{bg_color and 'background-color:' + bg_color}"
-                      t-out="ribbon['html'] or ''"
+                      t-out="ribbon['name'] or ''"
                 />
                 <!-- One row for every two images -->
                 <t t-set="image_classes" t-value="'w-100'"/>
@@ -2685,7 +2766,7 @@
     <template id="sale_order_re_order_btn" inherit_id="sale.sale_order_portal_template" name="Sale Order Order Again">
         <xpath expr="//t[@t-set='entries']/div/div/div[hasclass('o_download_pdf')]" position="before">
             <t t-if="request.website.enabled_portal_reorder_button and sale_order.with_user(request.env.user).sudo()._is_reorder_allowed()">
-                <button class="btn btn-primary o_wsale_reorder_button w-100" t-att-data-sale-order-id="sale_order.id">
+                <button class="btn btn-primary o_wsale_reorder_button" t-att-data-sale-order-id="sale_order.id">
                     <i class="fa fa-rotate-right me-1"/>
                     Order Again
                 </button>

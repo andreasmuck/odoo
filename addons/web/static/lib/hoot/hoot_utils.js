@@ -4,6 +4,7 @@ import { reactive, useExternalListener } from "@odoo/owl";
 import { isNode } from "@web/../lib/hoot-dom/helpers/dom";
 import { isIterable, toSelector } from "@web/../lib/hoot-dom/hoot_dom_utils";
 import { DiffMatchPatch } from "./lib/diff_match_patch";
+import { getRunner } from "./main_runner";
 
 /**
  * @typedef {ArgumentPrimitive | `${ArgumentPrimitive}[]` | null} ArgumentType
@@ -33,6 +34,8 @@ import { DiffMatchPatch } from "./lib/diff_match_patch";
  *  tests: number;
  *  todo: number;
  * }} Reporting
+ *
+ * @typedef {import("./core/runner").Runner} Runner
  */
 
 /**
@@ -50,19 +53,29 @@ import { DiffMatchPatch } from "./lib/diff_match_patch";
 //-----------------------------------------------------------------------------
 
 const {
-    Array,
+    Array: { isArray: $isArray },
+    Boolean,
     clearTimeout,
-    console,
+    console: { debug: $debug },
     Date,
     Error,
     ErrorEvent,
     Map,
-    Math,
-    navigator,
-    Object,
+    Math: { floor },
+    Number: { isInteger: $isInteger, isNaN: $isNaN, parseFloat: $parseFloat },
+    navigator: { clipboard: $clipboard },
+    Object: {
+        assign: $assign,
+        create: $create,
+        defineProperty: $defineProperty,
+        entries: $entries,
+        fromEntries: $fromEntries,
+        getPrototypeOf: $getPrototypeOf,
+        keys: $keys,
+    },
     Promise,
     PromiseRejectionEvent,
-    Reflect,
+    Reflect: { ownKeys: $ownKeys },
     RegExp,
     Set,
     setTimeout,
@@ -70,10 +83,31 @@ const {
     TypeError,
     window,
 } = globalThis;
+/** @type {Clipboard["readText"]} */
+const $readText = $clipboard?.readText.bind($clipboard);
+/** @type {Clipboard["writeText"]} */
+const $writeText = $clipboard?.writeText.bind($clipboard);
 
 //-----------------------------------------------------------------------------
 // Internal
 //-----------------------------------------------------------------------------
+
+/**
+ * @template {(...args: any[]) => T} T
+ * @param {T} instanceGetter
+ * @returns {T}
+ */
+const memoize = (instanceGetter) => {
+    let called = false;
+    let value;
+    return function memoized(...args) {
+        if (!called) {
+            called = true;
+            value = instanceGetter(...args);
+        }
+        return value;
+    };
+};
 
 /**
  * @param {unknown} number
@@ -133,11 +167,56 @@ export function consumeCallbackList(callbacks, method, ...args) {
  */
 export async function copy(text) {
     try {
-        await navigator.clipboard.writeText(text);
-        console.debug(`Copied to clipboard: "${text}"`);
-    } catch (err) {
-        console.warn("Could not copy to clipboard:", err);
+        await $writeText(text);
+        $debug(`Copied to clipboard: "${text}"`);
+    } catch (error) {
+        console.warn("Could not copy to clipboard:", error);
     }
+}
+
+/**
+ * @template T
+ * @template {(previous: T | null) => T} F
+ * @param {F} instanceGetter
+ * @param {() => any} [afterCallback]
+ * @returns {F}
+ */
+export function createJobScopedGetter(instanceGetter, afterCallback) {
+    /** @type {F} */
+    const getInstance = () => {
+        if (runner.dry) {
+            return memoized();
+        }
+
+        const currentJob = runner.state.currentTest || runner.suiteStack.at(-1) || runner;
+        if (!instances.has(currentJob)) {
+            const parentInstance = [...instances.values()].at(-1);
+            instances.set(currentJob, instanceGetter(parentInstance));
+
+            if (canCallAfter) {
+                runner.after(() => {
+                    instances.delete(currentJob);
+
+                    canCallAfter = false;
+                    afterCallback?.();
+                    canCallAfter = true;
+                });
+            }
+        }
+
+        return instances.get(currentJob);
+    };
+
+    const memoized = memoize(instanceGetter);
+
+    /** @type {Map<Job, T>} */
+    const instances = new Map();
+    const runner = getRunner();
+    let canCallAfter = true;
+
+    runner.after(() => instances.clear());
+
+    return getInstance;
 }
 
 /**
@@ -148,7 +227,7 @@ export function createReporting(parentReporting) {
      * @param {Partial<Reporting>} values
      */
     const add = (values) => {
-        for (const [key, value] of Object.entries(values)) {
+        for (const [key, value] of $entries(values)) {
             reporting[key] += value;
         }
 
@@ -172,22 +251,22 @@ export function createReporting(parentReporting) {
 /**
  * @template T
  * @param {T} target
- * @param {Record<string, PropertyDescriptor>} descriptors
+ * @param {Record<keyof T, PropertyDescriptor>} descriptors
  * @returns {T}
  */
 export function createMock(target, descriptors) {
-    const mock = Object.create(target);
+    const mock = $create(target);
     let owner = target;
     let keys;
 
     while (!keys?.length) {
-        keys = Reflect.ownKeys(owner);
-        owner = Object.getPrototypeOf(owner);
+        keys = $ownKeys(owner);
+        owner = $getPrototypeOf(owner);
     }
 
     // Copy original descriptors
     for (const property of keys) {
-        Object.defineProperty(mock, property, {
+        $defineProperty(mock, property, {
             get() {
                 return target[property];
             },
@@ -199,11 +278,50 @@ export function createMock(target, descriptors) {
     }
 
     // Apply new descriptors
-    for (const [property, descriptor] of Object.entries(descriptors)) {
-        Object.defineProperty(mock, property, descriptor);
+    for (const [property, descriptor] of $entries(descriptors)) {
+        $defineProperty(mock, property, descriptor);
     }
 
     return mock;
+}
+
+/**
+ * @template T
+ * @param {T} value
+ * @returns {T}
+ */
+export function deepCopy(value) {
+    if (!value) {
+        return value;
+    }
+    if (typeof value === "function") {
+        if (value.name) {
+            return `<function ${value.name}>`;
+        } else {
+            return "<anonymous function>";
+        }
+    }
+    if (typeof value === "object" && !Markup.isMarkup(value)) {
+        if (isNode(value)) {
+            // Nodes
+            return value.cloneNode(true);
+        } else if (isIterable(value)) {
+            // Iterables
+            const copy = [...value].map(deepCopy);
+            if (value instanceof Set || value instanceof Map) {
+                return new value.constructor(copy);
+            } else {
+                return copy;
+            }
+        } else if (value instanceof Date) {
+            // Dates
+            return new value.constructor(value);
+        } else {
+            // Other objects
+            return $fromEntries($entries(value).map(([key, value]) => [key, deepCopy(value)]));
+        }
+    }
+    return value;
 }
 
 /**
@@ -272,30 +390,46 @@ export function deepEqual(a, b, cache = new Set()) {
         return true;
     }
     const aType = typeof a;
-    if (aType !== typeof b || !a || !b) {
+    if (aType !== typeof b || !a || !b || aType !== "object") {
         return false;
     }
-    if (aType === "object") {
-        cache.add(a);
-        if (a instanceof File) {
-            return a.name === b.name && a.size === b.size && a.type === b.type;
-        }
-        if (isIterable(a) && isIterable(b)) {
-            if (!Array.isArray(a)) {
-                a = [...a];
-            }
-            if (!Array.isArray(b)) {
-                b = [...b];
-            }
-            return a.length === b.length && a.every((v, i) => deepEqual(v, b[i], cache));
-        }
-        const aEntries = Object.entries(a);
-        if (aEntries.length !== Object.keys(b).length) {
-            return false;
-        }
-        return aEntries.every(([key, value]) => deepEqual(value, b[key], cache));
+
+    cache.add(a);
+    if (isNode(a)) {
+        return isNode(b) && a.isEqualNode(b);
     }
-    return false;
+    if (a instanceof File) {
+        // Files
+        return a.name === b.name && a.size === b.size && a.type === b.type;
+    }
+    if (a instanceof Date || a instanceof RegExp) {
+        // Dates & regular expressions
+        return strictEqual(String(a), String(b));
+    }
+
+    const aIsIterable = isIterable(a);
+    if (aIsIterable !== isIterable(b)) {
+        return false;
+    }
+    if (!aIsIterable) {
+        // All non-iterable objects
+        const aKeys = $ownKeys(a);
+        return (
+            aKeys.length === $ownKeys(b).length &&
+            aKeys.every((key) => deepEqual(a[key], b[key], cache))
+        );
+    }
+
+    // Iterables
+    const aIsArray = $isArray(a);
+    if (aIsArray !== $isArray(b)) {
+        return false;
+    }
+    if (!aIsArray) {
+        a = [...a];
+        b = [...b];
+    }
+    return a.length === b.length && a.every((v, i) => deepEqual(v, b[i], cache));
 }
 
 /**
@@ -385,7 +519,7 @@ export function formatHumanReadable(value, options) {
             return `${constructorPrefix}[${content}]`;
         } else {
             const depth = options?.depth || 0;
-            const keys = Object.keys(value);
+            const keys = $keys(value);
             const constructorPrefix =
                 value.constructor.name === "Object" ? "" : `${value.constructor.name} `;
             let content = "";
@@ -423,12 +557,12 @@ export function formatTechnical(
         return `${baseIndent}${prefix} { ... }`;
     } else if (value && typeof value === "object") {
         if (cache.has(value)) {
-            return `${baseIndent}${Array.isArray(value) ? "[...]" : "{ ... }"}`;
+            return `${baseIndent}${$isArray(value) ? "[...]" : "{ ... }"}`;
         } else {
             cache.add(value);
             const startIndent = " ".repeat((depth + 1) * 2);
             const endIndent = " ".repeat(depth * 2);
-            if (value instanceof RegExp) {
+            if (value instanceof RegExp || value instanceof Error) {
                 return `${baseIndent}${value.toString()}`;
             } else if (value instanceof Date) {
                 return `${baseIndent}${value.toISOString()}`;
@@ -450,7 +584,7 @@ export function formatTechnical(
             } else {
                 const proto =
                     value.constructor.name === "Object" ? "" : `${value.constructor.name} `;
-                return `${baseIndent}${proto}{\n${Object.entries(value)
+                return `${baseIndent}${proto}{\n${$entries(value)
                     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
                     .map(
                         ([k, v]) =>
@@ -478,19 +612,19 @@ export function formatTime(value, unit) {
             value /= 1_000;
         }
         if (value < 10) {
-            value = Number(value.toFixed(3));
+            value = $parseFloat(value.toFixed(3));
         } else if (value < 100) {
-            value = Number(value.toFixed(2));
+            value = $parseFloat(value.toFixed(2));
         } else if (value < 1_000) {
-            value = Number(value.toFixed(1));
+            value = $parseFloat(value.toFixed(1));
         } else {
-            const str = String(Math.floor(value));
+            const str = String(floor(value));
             return `${str.slice(0, -3) + "," + str.slice(-3)}${unit}`;
         }
         return value + unit;
     }
 
-    value = Math.floor(value / 1_000);
+    value = floor(value / 1_000);
 
     const seconds = value % 60;
     value -= seconds;
@@ -558,6 +692,10 @@ export function getFuzzyScore(pattern, string) {
     return patternIndex === pattern.length ? totalScore : 0;
 }
 
+export function hasClipboard() {
+    return Boolean($clipboard);
+}
+
 /**
  * Returns whether the given value is either `null` or `undefined`.
  *
@@ -588,7 +726,7 @@ export function isOfType(value, type) {
         case "error":
             return value instanceof Error;
         case "integer":
-            return Number.isInteger(value);
+            return $isInteger(value);
         case "node":
             return isNode(value);
         case "regex":
@@ -643,79 +781,6 @@ export function lookup(pattern, items, mapFn = normalize) {
     }
 }
 
-export function makeCallbacks() {
-    /**
-     * @template P
-     * @param {string} type
-     * @param {MaybePromise<(...args: P[]) => MaybePromise<((...args: P[]) => void) | void>>} callback
-     * @param {boolean} [once]
-     */
-    const addCallback = (type, callback, once) => {
-        if (callback instanceof Promise) {
-            callback = () =>
-                Promise.resolve(callback).then((result) => {
-                    if (typeof result === "function") {
-                        result();
-                    }
-                });
-        } else if (typeof callback !== "function") {
-            return;
-        }
-
-        if (once) {
-            // Convert callback to be automatically removed
-            const originalCallback = callback;
-            callback = (...args) => {
-                callbackMap.set(
-                    type,
-                    callbackMap.get(type).filter((fn) => fn !== callback)
-                );
-                return originalCallback(...args);
-            };
-            Object.assign(callback, { original: originalCallback });
-        }
-
-        if (!callbackMap.has(type)) {
-            callbackMap.set(type, []);
-        }
-        if (type.startsWith("after")) {
-            callbackMap.get(type).unshift(callback);
-        } else {
-            callbackMap.get(type).push(callback);
-        }
-    };
-
-    /**
-     * @param {string} type
-     * @param {...any} args
-     */
-    const call = async (type, ...args) => {
-        const fns = callbackMap.get(type);
-        if (!fns?.length) {
-            return;
-        }
-
-        let afterCallback = () => {};
-        if (type.startsWith("before")) {
-            const relatedType = `after${type.slice(6)}`;
-            afterCallback = (result) => addCallback(relatedType, result, true);
-        }
-
-        for (const fn of fns) {
-            await Promise.resolve(fn(...args)).then(afterCallback, console.error);
-        }
-    };
-
-    const clearCallbacks = () => {
-        callbackMap.clear();
-    };
-
-    /** @type {Map<string, ((...args: any[]) => MaybePromise<((...args: any[]) => void) | void>)[]>} */
-    const callbackMap = new Map();
-
-    return { add: addCallback, call, clear: clearCallbacks };
-}
-
 /**
  * @param {EventTarget} target
  * @param {string[]} types
@@ -723,7 +788,7 @@ export function makeCallbacks() {
 export function makePublicListeners(target, types) {
     for (const type of types) {
         let listener = null;
-        Object.defineProperty(target, `on${type}`, {
+        $defineProperty(target, `on${type}`, {
             get() {
                 return listener;
             },
@@ -733,6 +798,32 @@ export function makePublicListeners(target, types) {
         });
         target.addEventListener(type, (...args) => listener?.(...args));
     }
+}
+
+/**
+ * @template {keyof Runner} T
+ * @param {T} name
+ * @returns {Runner[T]}
+ */
+export function makeRuntimeHook(name) {
+    return {
+        [name](...callbacks) {
+            const runner = getRunner();
+            if (runner.dry) {
+                return;
+            }
+            let valid = Boolean(runner.suiteStack.length);
+            const last = callbacks.at(-1);
+            if (last && typeof last === "object") {
+                callbacks.pop();
+                valid ||= Boolean(last.global);
+            }
+            if (!valid) {
+                throw new HootError(`cannot call "${name}" callback outside of a suite`);
+            }
+            return runner[name](...callbacks);
+        },
+    }[name];
 }
 
 /**
@@ -779,9 +870,9 @@ export function normalize(string) {
 
 export async function paste() {
     try {
-        await navigator.clipboard.readText();
-    } catch (err) {
-        console.warn("Could not paste from clipboard:", err);
+        await $readText();
+    } catch (error) {
+        console.warn("Could not paste from clipboard:", error);
     }
 }
 
@@ -791,7 +882,7 @@ export async function paste() {
  * @returns {boolean}
  */
 export function strictEqual(a, b) {
-    return Number.isNaN(a) ? Number.isNaN(b) : a === b;
+    return $isNaN(a) ? $isNaN(b) : a === b;
 }
 
 /**
@@ -802,7 +893,7 @@ export function stringToNumber(string) {
     for (let i = 0; i < string.length; i++) {
         result += string.charCodeAt(i);
     }
-    return Number(result);
+    return $parseFloat(result);
 }
 
 /**
@@ -815,6 +906,121 @@ export function title(string) {
 /** @type {EventTarget["addEventListener"]} */
 export function useWindowListener(type, callback, options) {
     return useExternalListener(windowTarget, type, (ev) => ev.isTrusted && callback(ev), options);
+}
+
+export class Callbacks {
+    /** @type {Map<string, ((...args: any[]) => MaybePromise<((...args: any[]) => void) | void>)[]>} */
+    _callbacks = new Map();
+
+    /**
+     * @template P
+     * @param {string} type
+     * @param {MaybePromise<(...args: P[]) => MaybePromise<((...args: P[]) => void) | void>>} callback
+     * @param {boolean} [once]
+     */
+    add(type, callback, once) {
+        if (callback instanceof Promise) {
+            callback = () =>
+                Promise.resolve(callback).then((result) => {
+                    if (typeof result === "function") {
+                        result();
+                    }
+                });
+        } else if (typeof callback !== "function") {
+            return;
+        }
+
+        if (once) {
+            // Convert callback to be automatically removed
+            const originalCallback = callback;
+            callback = (...args) => {
+                this._callbacks.set(
+                    type,
+                    this._callbacks.get(type).filter((fn) => fn !== callback)
+                );
+                return originalCallback(...args);
+            };
+            $assign(callback, { original: originalCallback });
+        }
+
+        if (!this._callbacks.has(type)) {
+            this._callbacks.set(type, []);
+        }
+        if (type.startsWith("after")) {
+            this._callbacks.get(type).unshift(callback);
+        } else {
+            this._callbacks.get(type).push(callback);
+        }
+    }
+
+    /**
+     * @template T
+     * @param {string} type
+     * @param {T} detail
+     * @param {(error: Error) => any} [onError]
+     */
+    async call(type, detail, onError) {
+        const fns = this._callbacks.get(type);
+        if (!fns?.length) {
+            return;
+        }
+
+        const afterCallback = this._getAfterCallback(type);
+        for (const fn of fns) {
+            try {
+                const result = await fn(detail);
+                afterCallback(result);
+            } catch (error) {
+                if (typeof onError === "function") {
+                    onError(error);
+                } else {
+                    throw error;
+                }
+            }
+        }
+    }
+
+    /**
+     * @template T
+     * @param {string} type
+     * @param {T} detail
+     * @param {(error: Error) => any} [onError]
+     */
+    callSync(type, detail, onError) {
+        const fns = this._callbacks.get(type);
+        if (!fns?.length) {
+            return;
+        }
+
+        const afterCallback = this._getAfterCallback(type);
+        for (const fn of fns) {
+            try {
+                const result = fn(detail);
+                afterCallback(result);
+            } catch (error) {
+                if (typeof onError === "function") {
+                    onError(error);
+                } else {
+                    throw error;
+                }
+            }
+        }
+    }
+
+    clear() {
+        this._callbacks.clear();
+    }
+
+    /**
+     * @param {string} type
+     */
+    _getAfterCallback(type) {
+        if (!type.startsWith("before")) {
+            return () => {};
+        }
+        const relatedType = `after${type.slice(6)}`;
+        return (result) => this.add(relatedType, result, true);
+    }
 }
 
 export class HootError extends Error {
@@ -833,7 +1039,7 @@ export class Markup {
     constructor(params) {
         this.className = params.className || "";
         this.tagName = params.tagName || "div";
-        this.content = params.content || "";
+        this.content = deepCopy(params.content) || "";
         this.technical = params.technical;
     }
 
@@ -868,6 +1074,13 @@ export class Markup {
         return new this({ className: "text-pass", content });
     }
 
+    /**
+     * @param {unknown} object
+     */
+    static isMarkup(object) {
+        return object instanceof Markup;
+    }
+
     /** @param {string} content */
     static red(content) {
         return new this({ className: "text-fail", content });
@@ -881,3 +1094,9 @@ export class Markup {
         return new this({ ...options, content });
     }
 }
+
+export const INCLUDE_LEVEL = {
+    url: 1,
+    tag: 2,
+    preset: 3,
+};

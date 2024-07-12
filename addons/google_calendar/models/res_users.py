@@ -33,6 +33,8 @@ class User(models.Model):
         status = "sync_active"
         if str2bool(self.env['ir.config_parameter'].sudo().get_param("google_calendar_sync_paused"), default=False):
             status = "sync_paused"
+        elif self.sudo().google_calendar_rtoken and not self.sudo().google_synchronization_stopped:
+            status = "sync_active"
         elif self.sudo().google_synchronization_stopped:
             status = "sync_stopped"
         return status
@@ -47,8 +49,17 @@ class User(models.Model):
         send_updates = not full_sync
         events.clear_type_ambiguity(self.env)
         recurrences = events.filter(lambda e: e.is_recurrence())
-        synced_recurrences = self.env['calendar.recurrence']._sync_google2odoo(recurrences)
-        synced_events = self.env['calendar.event']._sync_google2odoo(events - recurrences, default_reminders=default_reminders)
+
+        # We apply Google updates only if their write date is later than the write date in Odoo.
+        # It's possible that multiple updates affect the same record, maybe not directly.
+        # To handle this, we preserve the write dates in Odoo before applying any updates,
+        # and use these dates instead of the current live dates.
+        odoo_events = self.env['calendar.event'].browse((events - recurrences).odoo_ids(self.env))
+        odoo_recurrences = self.env['calendar.recurrence'].browse(recurrences.odoo_ids(self.env))
+        recurrences_write_dates = {r.id: r.write_date for r in odoo_recurrences}
+        events_write_dates = {e.id: e.write_date for e in odoo_events}
+        synced_recurrences = self.env['calendar.recurrence']._sync_google2odoo(recurrences, recurrences_write_dates)
+        synced_events = self.env['calendar.event']._sync_google2odoo(events - recurrences, events_write_dates, default_reminders=default_reminders)
 
         # Odoo -> Google
         recurrences = self.env['calendar.recurrence']._get_records_to_sync(full_sync=full_sync)
@@ -148,4 +159,15 @@ class User(models.Model):
         client_id = get_param('google_calendar_client_id')
         client_secret = get_param('google_calendar_client_secret')
         res['google_calendar'] = bool(client_id and client_secret)
+        return res
+
+    def check_synchronization_status(self):
+        res = super().check_synchronization_status()
+        credentials_status = self.check_calendar_credentials()
+        sync_status = 'missing_credentials'
+        if credentials_status.get('google_calendar'):
+            sync_status = self._get_google_sync_status()
+            if sync_status == 'sync_active' and not self.sudo().google_calendar_rtoken:
+                sync_status = 'sync_stopped'
+        res['google_calendar'] = sync_status
         return res

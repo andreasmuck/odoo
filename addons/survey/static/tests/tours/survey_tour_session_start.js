@@ -13,6 +13,7 @@ registry.category("web_tour.tours").add('test_survey_session_start_tour', {
     test: true,
     steps: () => [].concat(accessSurveysteps, [{
     trigger: 'button[name="action_open_session_manager"]',
+    run: "click",
 }, {
     trigger: '.o_survey_session_attendees_count:contains("3")',
     run: function () {
@@ -32,13 +33,9 @@ registry.category("web_tour.tours").add('test_survey_session_start_tour', {
     }
 }, {
     trigger: '.o_survey_session_attendees_count.waitrpc:contains("3")',
-    isCheck: true
 }, {
     trigger: 'h1',
-    run: function () {
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
-    }
+    run: "press ArrowRight",
 }, {
     trigger: 'h1:contains("Nickname")',
-    run: function () {} // check first question is displayed
 }])});

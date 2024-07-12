@@ -87,7 +87,7 @@ test("color picker on tree view", async () => {
     });
 
     await contains(".o_field_color_picker button").click();
-    expect(["record selected to open"]).toVerifySteps();
+    expect.verifySteps(["record selected to open"]);
 });
 
 test("color picker in editable list view", async () => {
@@ -129,7 +129,7 @@ test("column widths: dont overflow color picker in list", async () => {
         </tree>`,
         domain: [["id", "<", 0]],
     });
-    await contains(".o_control_panel_main_buttons .d-none.d-xl-inline-flex .o_list_button_add", {
+    await contains(".o_control_panel_main_buttons .o_list_button_add", {
         visible: false,
     }).click();
     const date_column_width = queryAll(

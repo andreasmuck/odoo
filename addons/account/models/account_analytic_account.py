@@ -15,6 +15,9 @@ class AccountAnalyticAccount(models.Model):
         compute='_compute_vendor_bill_count',
     )
 
+    debit = fields.Monetary(groups='account.group_account_readonly')
+    credit = fields.Monetary(groups='account.group_account_readonly')
+
     @api.depends('line_ids')
     def _compute_invoice_count(self):
         sale_types = self.env['account.move'].get_sale_types(include_receipts=True)
@@ -25,7 +28,7 @@ class AccountAnalyticAccount(models.Model):
                 ('analytic_distribution', 'in', self.ids),
             ],
             ['analytic_distribution'],
-            ['move_id:count_distinct'],
+            ['__count'],
         )
         data = {int(account_id): move_count for account_id, move_count in data}
         for account in self:
@@ -41,7 +44,7 @@ class AccountAnalyticAccount(models.Model):
                 ('analytic_distribution', 'in', self.ids),
             ],
             ['analytic_distribution'],
-            ['move_id:count_distinct'],
+            ['__count'],
         )
         data = {int(account_id): move_count for account_id, move_count in data}
         for account in self:

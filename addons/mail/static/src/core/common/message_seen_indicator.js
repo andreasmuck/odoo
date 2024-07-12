@@ -1,5 +1,33 @@
-import { Component, useState } from "@odoo/owl";
+import { Component, useExternalListener, useRef } from "@odoo/owl";
+import { Dialog } from "@web/core/dialog/dialog";
+import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
+import { browser } from "@web/core/browser/browser";
+
+class MessageSeenIndicatorDialog extends Component {
+    static components = { Dialog };
+    static template = "mail.MessageSeenIndicatorDialog";
+    static props = ["message", "close?"];
+
+    setup() {
+        super.setup();
+        this.contentRef = useRef("content");
+        useExternalListener(
+            browser,
+            "click",
+            (ev) => {
+                if (!this.contentRef?.el.contains(ev.target)) {
+                    this.props.close();
+                }
+            },
+            true
+        );
+    }
+
+    get SEEN_BY() {
+        return _t("Seen by:");
+    }
+}
 
 /**
  * @typedef {Object} Props
@@ -12,50 +40,40 @@ export class MessageSeenIndicator extends Component {
     static props = ["message", "thread", "className?"];
 
     setup() {
-        this.store = useState(useService("mail.store"));
+        super.setup();
+        this.dialog = useService("dialog");
     }
 
-    get hasEveryoneSeen() {
-        const otherDidNotSee = this.props.thread.channelMembers.filter((member) => {
-            return (
-                member.persona.notEq(this.props.message.author) &&
-                (!member.seen_message_id || member.seen_message_id.id < this.props.message.id)
-            );
-        });
-        return otherDidNotSee.length === 0;
-    }
-
-    get hasEveryoneReceived() {
-        return !this.props.thread.channelMembers.some((member) => {
-            return (
-                member.persona.notEq(this.props.message.author) &&
-                (!member.fetched_message_id || member.fetched_message_id.id < this.props.message.id)
-            );
-        });
-    }
-
-    get isMessagePreviousToLastSelfMessageSeenByEveryone() {
-        if (!this.props.thread.lastSelfMessageSeenByEveryone) {
-            return false;
+    get summary() {
+        if (this.props.message.hasEveryoneSeen) {
+            return _t("Seen by everyone");
         }
-        return this.props.message.id < this.props.thread.lastSelfMessageSeenByEveryone.id;
+        const seenMembers = this.props.message.channelMemberHaveSeen;
+        const [user1, user2, user3] = seenMembers.map((member) => member.name);
+        switch (seenMembers.length) {
+            case 1:
+                return _t("Seen by %(user)s", { user: user1 });
+            case 2:
+                return _t("Seen by %(user1)s and %(user2)s", { user1, user2 });
+            case 3:
+                return _t("Seen by %(user1)s, %(user2)s and %(user3)s", { user1, user2, user3 });
+            case 4:
+                return _t("Seen by %(user1)s, %(user2)s, %(user3)s and 1 other", {
+                    user1,
+                    user2,
+                    user3,
+                });
+            default:
+                return _t("Seen by %(user1)s, %(user2)s, %(user3)s and %(count)s others", {
+                    user1,
+                    user2,
+                    user3,
+                    count: seenMembers.length - 3,
+                });
+        }
     }
 
-    get hasSomeoneSeen() {
-        const otherSeen = this.props.thread.channelMembers.filter(
-            (member) =>
-                member.persona.notEq(this.props.message.author) &&
-                member.seen_message_id?.id >= this.props.message.id
-        );
-        return otherSeen.length > 0;
-    }
-
-    get hasSomeoneFetched() {
-        const otherFetched = this.props.thread.channelMembers.filter(
-            (member) =>
-                member.persona.notEq(this.props.message.author) &&
-                member.fetched_message_id?.id >= this.props.message.id
-        );
-        return otherFetched.length > 0;
+    openDialog() {
+        this.dialog.add(MessageSeenIndicatorDialog, { message: this.props.message });
     }
 }

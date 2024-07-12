@@ -1,5 +1,3 @@
-/** @odoo-module **/
-
 import { _t } from "@web/core/l10n/translation";
 import { useErrorHandlers, useAsyncLockedMethod } from "@point_of_sale/app/utils/hooks";
 import { registry } from "@web/core/registry";
@@ -8,7 +6,7 @@ import { useService } from "@web/core/utils/hooks";
 import { AlertDialog, ConfirmationDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
 import { NumberPopup } from "@point_of_sale/app/utils/input_popups/number_popup";
 import { DatePickerPopup } from "@point_of_sale/app/utils/date_picker_popup/date_picker_popup";
-import { ConnectionLostError } from "@web/core/network/rpc";
+import { ConnectionLostError, RPCError } from "@web/core/network/rpc";
 
 import { PaymentScreenPaymentLines } from "@point_of_sale/app/screens/payment_screen/payment_lines/payment_lines";
 import { PaymentScreenStatus } from "@point_of_sale/app/screens/payment_screen/payment_status/payment_status";
@@ -18,6 +16,8 @@ import { Numpad, enhancedButtons } from "@point_of_sale/app/generic_components/n
 import { floatIsZero } from "@web/core/utils/numbers";
 import { OrderReceipt } from "@point_of_sale/app/screens/receipt_screen/receipt/order_receipt";
 import { ask } from "@point_of_sale/app/store/make_awaitable_dialog";
+import { handleRPCError } from "@point_of_sale/app/errors/error_handlers";
+import { getUTCString } from "@point_of_sale/utils";
 
 export class PaymentScreen extends Component {
     static template = "point_of_sale.PaymentScreen";
@@ -36,7 +36,9 @@ export class PaymentScreen extends Component {
         this.notification = useService("notification");
         this.hardwareProxy = useService("hardware_proxy");
         this.printer = useService("printer");
-        this.payment_methods_from_config = this.pos.config.payment_method_ids;
+        this.payment_methods_from_config = this.pos.config.payment_method_ids
+            .slice()
+            .sort((a, b) => a.sequence - b.sequence);
         this.numberBuffer = useService("number_buffer");
         this.numberBuffer.use(this._getNumberBufferConfig);
         useErrorHandlers();
@@ -53,7 +55,19 @@ export class PaymentScreen extends Component {
     }
 
     getNumpadButtons() {
-        return enhancedButtons(this.env);
+        const colorClassMap = {
+            [this.env.services.localization.decimalPoint]: "o_colorlist_item_color_transparent_6",
+            Backspace: "o_colorlist_item_color_transparent_1",
+            "+10": "o_colorlist_item_color_transparent_10",
+            "+20": "o_colorlist_item_color_transparent_10",
+            "+50": "o_colorlist_item_color_transparent_10",
+            "-": "o_colorlist_item_color_transparent_3",
+        };
+
+        return enhancedButtons().map((button) => ({
+            ...button,
+            class: `fs-4 ${colorClassMap[button.value] || ""}`,
+        }));
     }
 
     showMaxValueError() {
@@ -87,6 +101,10 @@ export class PaymentScreen extends Component {
         const result = this.currentOrder.add_paymentline(paymentMethod);
         if (result) {
             this.numberBuffer.reset();
+            if (paymentMethod.use_payment_terminal) {
+                const newPaymentLine = this.paymentLines.at(-1);
+                this.sendPaymentRequest(newPaymentLine);
+            }
             return true;
         } else {
             this.dialog.add(AlertDialog, {
@@ -227,7 +245,7 @@ export class PaymentScreen extends Component {
             this.hardwareProxy.openCashbox();
         }
 
-        this.currentOrder.date_order = luxon.DateTime.now().toFormat("yyyy-MM-dd HH:mm:ss");
+        this.currentOrder.date_order = getUTCString(luxon.DateTime.now());
         for (const line of this.paymentLines) {
             if (!line.amount === 0) {
                 this.currentOrder.remove_paymentline(line);
@@ -241,10 +259,11 @@ export class PaymentScreen extends Component {
         let syncOrderResult;
         try {
             // 1. Save order to server.
-            syncOrderResult = await this.pos.push_single_order(this.currentOrder);
+            syncOrderResult = await this.pos.syncAllOrders({ throw: true });
             if (!syncOrderResult) {
                 return;
             }
+
             // 2. Invoice.
             if (this.shouldDownloadInvoice() && this.currentOrder.is_to_invoice()) {
                 if (syncOrderResult[0]?.raw.account_move) {
@@ -263,10 +282,13 @@ export class PaymentScreen extends Component {
             if (error instanceof ConnectionLostError) {
                 this.pos.showScreen(this.nextScreen);
                 Promise.reject(error);
-                return error;
+            } else if (error instanceof RPCError) {
+                this.currentOrder.state = "draft";
+                handleRPCError(error, this.dialog);
             } else {
                 throw error;
             }
+            return error;
         } finally {
             this.env.services.ui.unblock();
         }

@@ -10,12 +10,12 @@ from odoo.addons.stock_landed_costs.tests.common import TestStockLandedCostsComm
 class TestStockValuationLCCommon(TestStockLandedCostsCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
         cls.product1 = cls.env['product.product'].create({
             'name': 'product1',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': cls.stock_account_product_categ.id,
         })
         cls.productlc1 = cls.env['product.product'].create({
@@ -315,7 +315,7 @@ class TestStockValuationLCAVCO(TestStockValuationLCCommon):
             po_line.product_id = self.product1
             po_line.product_qty = 1
             po_line.price_unit = 10
-            po_line.taxes_id.clear()
+            po_line.tax_ids.clear()
         po = po_form.save()
         po.button_confirm()
 
@@ -371,7 +371,7 @@ class TestStockValuationLCFIFOVB(TestStockValuationLCCommon):
             po_line.product_id = self.product1
             po_line.product_qty = 10
             po_line.price_unit = 10
-            po_line.taxes_id.clear()
+            po_line.tax_ids.clear()
 
         rfq = rfq.save()
         rfq.button_confirm()
@@ -459,7 +459,7 @@ class TestStockValuationLCFIFOVB(TestStockValuationLCCommon):
             po_line.product_id = self.product1
             po_line.product_qty = 10
             po_line.price_unit = 10
-            po_line.taxes_id.clear()
+            po_line.tax_ids.clear()
 
         rfq = rfq.save()
         rfq.button_confirm()
@@ -512,7 +512,7 @@ class TestStockValuationLCFIFOVB(TestStockValuationLCCommon):
             po_line.product_id = self.product1
             po_line.product_qty = 10
             po_line.price_unit = 10
-            po_line.taxes_id.clear()
+            po_line.tax_ids.clear()
 
         rfq = rfq.save()
         rfq.button_confirm()

@@ -25,8 +25,8 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.http import request
 from odoo.modules.module import get_manifest
 from odoo.osv.expression import AND, OR, FALSE_DOMAIN
+from odoo.tools import pycompat, SQL, Query, sql as sqltools
 from odoo.tools.translate import _, xml_translate
-from odoo.tools import escape_psql, pycompat, SQL, Query
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,52 @@ DEFAULT_CDN_FILTERS = [
 
 DEFAULT_WEBSITE_ENDPOINT = 'https://website.api.odoo.com'
 DEFAULT_OLG_ENDPOINT = 'https://olg.api.odoo.com'
+
+DEFAULT_BLOCKED_THIRD_PARTY_DOMAINS = '\n'.join([  # noqa: FLY002
+    'youtu.be', 'youtube.com', 'youtube-nocookie.com',
+    'instagram.com', 'instagr.am', 'ig.me',
+    'vimeo.com',  # 'player.vimeo.com', 'vimeo.com',
+    'dailymotion.com', 'dai.ly',
+    'youku.com',  # 'player.youku.com', 'youku.com',
+    'tudou.com',
+    'facebook.com', 'facebook.net', 'fb.com', 'fb.me', 'fb.watch',
+    'tiktok.com',
+    'x.com', 'twitter.com', 't.co',
+    'googletagmanager.com', 'google-analytics.com',
+    # List from https://www.google.com/supported_domains
+    'google.com', 'google.ad', 'google.ae', 'google.com.af', 'google.com.ag', 'google.al',
+    'google.am', 'google.co.ao', 'google.com.ar', 'google.as', 'google.at', 'google.com.au',
+    'google.az', 'google.ba', 'google.com.bd', 'google.be', 'google.bf', 'google.bg',
+    'google.com.bh', 'google.bi', 'google.bj', 'google.com.bn', 'google.com.bo', 'google.com.br',
+    'google.bs', 'google.bt', 'google.co.bw', 'google.by', 'google.com.bz', 'google.ca',
+    'google.cd', 'google.cf', 'google.cg', 'google.ch', 'google.ci', 'google.co.ck', 'google.cl',
+    'google.cm', 'google.cn', 'google.com.co', 'google.co.cr', 'google.com.cu', 'google.cv',
+    'google.com.cy', 'google.cz', 'google.de', 'google.dj', 'google.dk', 'google.dm',
+    'google.com.do', 'google.dz', 'google.com.ec', 'google.ee', 'google.com.eg', 'google.es',
+    'google.com.et', 'google.fi', 'google.com.fj', 'google.fm', 'google.fr', 'google.ga',
+    'google.ge', 'google.gg', 'google.com.gh', 'google.com.gi', 'google.gl', 'google.gm',
+    'google.gr', 'google.com.gt', 'google.gy', 'google.com.hk', 'google.hn', 'google.hr',
+    'google.ht', 'google.hu', 'google.co.id', 'google.ie', 'google.co.il', 'google.im',
+    'google.co.in', 'google.iq', 'google.is', 'google.it', 'google.je', 'google.com.jm',
+    'google.jo', 'google.co.jp', 'google.co.ke', 'google.com.kh', 'google.ki', 'google.kg',
+    'google.co.kr', 'google.com.kw', 'google.kz', 'google.la', 'google.com.lb', 'google.li',
+    'google.lk', 'google.co.ls', 'google.lt', 'google.lu', 'google.lv', 'google.com.ly',
+    'google.co.ma', 'google.md', 'google.me', 'google.mg', 'google.mk', 'google.ml',
+    'google.com.mm', 'google.mn', 'google.com.mt', 'google.mu', 'google.mv', 'google.mw',
+    'google.com.mx', 'google.com.my', 'google.co.mz', 'google.com.na', 'google.com.ng',
+    'google.com.ni', 'google.ne', 'google.nl', 'google.no', 'google.com.np', 'google.nr',
+    'google.nu', 'google.co.nz', 'google.com.om', 'google.com.pa', 'google.com.pe', 'google.com.pg',
+    'google.com.ph', 'google.com.pk', 'google.pl', 'google.pn', 'google.com.pr', 'google.ps',
+    'google.pt', 'google.com.py', 'google.com.qa', 'google.ro', 'google.ru', 'google.rw',
+    'google.com.sa', 'google.com.sb', 'google.sc', 'google.se', 'google.com.sg', 'google.sh',
+    'google.si', 'google.sk', 'google.com.sl', 'google.sn', 'google.so', 'google.sm', 'google.sr',
+    'google.st', 'google.com.sv', 'google.td', 'google.tg', 'google.co.th', 'google.com.tj',
+    'google.tl', 'google.tm', 'google.tn', 'google.to', 'google.com.tr', 'google.tt',
+    'google.com.tw', 'google.co.tz', 'google.com.ua', 'google.co.ug', 'google.co.uk',
+    'google.com.uy', 'google.co.uz', 'google.com.vc', 'google.co.ve', 'google.co.vi',
+    'google.com.vn', 'google.vu', 'google.ws', 'google.rs', 'google.co.za', 'google.co.zm',
+    'google.co.zw', 'google.cat',
+])
 
 
 class Website(models.Model):
@@ -75,6 +121,17 @@ class Website(models.Model):
     auto_redirect_lang = fields.Boolean('Autoredirect Language', default=True, help="Should users be redirected to their browser's language")
     cookies_bar = fields.Boolean('Cookies Bar', help="Display a customizable cookies bar on your website.")
     configurator_done = fields.Boolean(help='True if configurator has been completed or ignored')
+    block_third_party_domains = fields.Boolean(
+        'Block 3rd-party domains',
+        help="Block 3rd-party domains that may track users (YouTube, Google Maps, etc.).",
+        default=True)
+    custom_blocked_third_party_domains = fields.Text(
+        'User list of blocked 3rd-party domains',
+        groups='website.group_website_designer',
+        translate=False)
+    blocked_third_party_domains = fields.Text(
+        'List of blocked 3rd-party domains',
+        compute='_compute_blocked_third_party_domains')
 
     def _default_social_facebook(self):
         return self.env.ref('base.main_company').social_facebook
@@ -102,7 +159,7 @@ class Website(models.Model):
             return base64.b64encode(f.read())
 
     logo = fields.Binary('Website Logo', default=_default_logo, help="Display this logo on the website.")
-    social_twitter = fields.Char('Twitter Account', default=_default_social_twitter)
+    social_twitter = fields.Char('X Account', default=_default_social_twitter)
     social_facebook = fields.Char('Facebook Account', default=_default_social_facebook)
     social_github = fields.Char('GitHub Account', default=_default_social_github)
     social_linkedin = fields.Char('LinkedIn Account', default=_default_social_linkedin)
@@ -183,10 +240,33 @@ class Website(models.Model):
             top_menus = menus.filtered(lambda m: not m.parent_id)
             website.menu_id = top_menus and top_menus[0].id or False
 
+    @api.depends('custom_blocked_third_party_domains')
+    def _compute_blocked_third_party_domains(self):
+        for website in self:
+            custom_list = website.sudo().custom_blocked_third_party_domains
+            if custom_list:
+                full_list = f'{DEFAULT_BLOCKED_THIRD_PARTY_DOMAINS}\n{custom_list}'
+            else:
+                full_list = DEFAULT_BLOCKED_THIRD_PARTY_DOMAINS
+            website.blocked_third_party_domains = full_list
+
+    def _get_blocked_third_party_domains_list(self):
+        return self.blocked_third_party_domains.split('\n')
+
     # self.env.uid for ir.rule groups on menu
     @tools.ormcache('self.env.uid', 'self.id', cache='templates')
     def _get_menu_ids(self):
         return self.env['website.menu'].search([('website_id', '=', self.id)]).ids
+
+    @tools.ormcache('self.env.uid', 'self.id', cache='templates')
+    def is_menu_cache_disabled(self):
+        """
+        Checks if the website menu contains a record like url.
+        :return: True if the menu contains a record like url
+        """
+        return any(self.env['website.menu'].browse(self._get_menu_ids()).filtered(
+            lambda menu: (menu.url and re.search(r"[/](([^/=?&]+-)?[0-9]+)([/]|$)", menu.url)) or menu.group_ids
+        ))
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -644,10 +724,12 @@ class Website(models.Model):
 
         if translated_ratio > 0.8:
             try:
+                database_id = self.env['ir.config_parameter'].sudo().get_param('database.uuid')
                 response = self._OLG_api_rpc('/api/olg/1/generate_placeholder', {
                     'placeholders': list(generated_content.keys()),
                     'lang': website.default_lang_id.name,
                     'industry': industry,
+                    'database_id': database_id,
                 })
                 name_replace_parser = re.compile(r"XXXX", re.MULTILINE)
                 for key in generated_content:
@@ -1062,7 +1144,8 @@ class Website(models.Model):
         # there is one on request) or return a random one.
 
         # The format of `httprequest.host` is `domain:port`
-        domain_name = (request and request.httprequest.host
+        domain_name = (
+            request and request.httprequest.host
             or hasattr(threading.current_thread(), 'url') and threading.current_thread().url
             or '')
         website_id = self.sudo()._get_current_website_id(domain_name, fallback=fallback)
@@ -1343,15 +1426,16 @@ class Website(models.Model):
             domain = AND([domain, self.website_domain()])
         pages = self.env['website.page'].sudo().search(domain)
         if self:
-            pages = pages._get_most_specific_pages()
+            pages = pages.with_context(website_id=self.id)._get_most_specific_pages()
         return pages.ids
 
     def _get_website_pages(self, domain=None, order='name', limit=None):
+        website = self.get_current_website()
         if domain is None:
             domain = []
-        domain += self.get_current_website().website_domain()
+        domain += website.website_domain()
         pages = self.env['website.page'].sudo().search(domain, order=order, limit=limit)
-        pages = pages._get_most_specific_pages()
+        pages = pages.with_context(website_id=website.id)._get_most_specific_pages()
         return pages
 
     def search_pages(self, needle=None, limit=None):
@@ -1478,7 +1562,7 @@ class Website(models.Model):
         """, ([self._get_html_fields_attributes_blacklist()]))
         for model, name, translate in cr.fetchall():
             table = self.env[model]._table
-            if tools.table_exists(cr, table) and tools.column_exists(cr, table, name):
+            if sqltools.table_exists(cr, table) and sqltools.column_exists(cr, table, name):
                 html_fields.append((model, table, name, translate))
         return html_fields
 
@@ -1517,6 +1601,15 @@ class Website(models.Model):
                 if f'data-v{asset_type}="{asset_version}"' in snippet:
                     return True
         return False
+
+    def _check_user_can_modify(self, record):
+        """ Verify that the current user can modify the given record.
+
+        :param record: record on which to perform the check
+        :raise AccessError: if the operation is forbidden
+        """
+        record.check_access_rights('write')
+        record.check_access_rule('write')
 
     def _disable_unused_snippets_assets(self):
         snippet_assets = self.env['ir.asset'].with_context(active_test=False).search_fetch(
@@ -1559,7 +1652,7 @@ class Website(models.Model):
             for search_term in search.split(' '):
                 subdomains = []
                 for field in fields:
-                    subdomains.append([(field, 'ilike', escape_psql(search_term))])
+                    subdomains.append([(field, 'ilike', sqltools.escape_psql(search_term))])
                 if extra:
                     subdomains.append(extra(self.env, search_term))
                 domains.append(OR(subdomains))
@@ -1612,15 +1705,16 @@ class Website(models.Model):
         """
         fuzzy_term = False
         search_details = self._search_get_details(search_type, order, options)
-        count, results = self._search_exact(search_details, search, limit, order)
-        if count > 0:
-            return count, results, fuzzy_term
         if search and options.get('allowFuzzy', True):
             fuzzy_term = self._search_find_fuzzy_term(search_details, search)
             if fuzzy_term:
                 count, results = self._search_exact(search_details, fuzzy_term, limit, order)
                 if fuzzy_term.lower() == search.lower():
                     fuzzy_term = False
+            else:
+                count, results = self._search_exact(search_details, search, limit, order)
+        else:
+            count, results = self._search_exact(search_details, search, limit, order)
         return count, results, fuzzy_term
 
     def _search_exact(self, search_details, search, limit, order):
@@ -1700,6 +1794,44 @@ class Website(models.Model):
                 words.add(word)
         return best_word
 
+    def _search_get_indirect_fields(self, fields, model):
+        """
+        Returns the list of indirect fields amongst the requested fields.
+
+        :param fields: list of field names to be searched
+        :param model: model within which to search
+        :return: dict of indirect field details per indirect field name
+        """
+        # Are considered valid indirect fields, fields that belong to the
+        # comodel behind a relational direct field.
+        indirect_fields = {}
+        for field in fields:
+            field_parts = field.split('.')
+            if len(field_parts) != 2:
+                continue
+            direct, indirect = field_parts
+            if direct not in model._fields:
+                continue
+            direct_field = model._fields[direct]
+            comodel_name = direct_field.comodel_name
+            if comodel_name not in self.env:
+                continue
+            comodel_fields = self.env[comodel_name]._fields
+            cofield = None
+            if '_description_relation_field' in dir(direct_field):
+                # One2many field's comodel reference to the model's id.
+                cofield = direct_field._description_relation_field
+                if cofield not in comodel_fields:
+                    continue
+            if indirect in comodel_fields:
+                indirect_fields[field] = {
+                    'direct': direct,
+                    'indirect': indirect,
+                    'comodel': self.env[comodel_name],
+                    'cofield': cofield,
+                }
+        return indirect_fields
+
     def _trigram_enumerate_words(self, search_details, search, limit):
         """
         Browses through all words that need to be compared to the search term.
@@ -1719,7 +1851,8 @@ class Website(models.Model):
             if search_detail.get('requires_sudo'):
                 model = model.sudo()
             domain = search_detail['base_domain'].copy()
-            fields = set(fields).intersection(model._fields)
+            direct_fields = set(fields).intersection(model._fields)
+            indirect_fields = self._search_get_indirect_fields(fields, model)
 
             query = Query(self.env.cr, model._table, model._table_query)
 
@@ -1729,8 +1862,39 @@ class Website(models.Model):
                     search=unaccent(SQL('%s', search)),
                     field=unaccent(model._field_to_sql(model._table, field, query)),
                     )
-                for field in fields
+                for field in direct_fields
             ]
+            indirect_similarities = []
+            for field_info in indirect_fields.values():
+                direct = field_info['direct']
+                direct_field = model._fields[direct]
+                comodel = field_info['comodel']
+                coalias = query.make_alias(model._table, direct)
+                cofield = field_info['cofield']
+                if cofield:
+                    # One2many's comodel references the model's id.
+                    query.add_join('LEFT JOIN', coalias, comodel._table, SQL("%s = %s",
+                        SQL.identifier(model._table, 'id'),
+                        SQL.identifier(coalias, cofield),
+                    ))
+                elif 'relation' in dir(direct_field):
+                    # Many2many's relation holds the model's id in column1 and
+                    # the comodel's record id in column2.
+                    rel_alias = coalias
+                    query.add_join('LEFT JOIN', rel_alias, direct_field.relation, SQL("%s = %s",
+                        SQL.identifier(model._table, 'id'),
+                        SQL.identifier(rel_alias, direct_field.column1),
+                    ))
+                    coalias = query.make_alias(coalias, direct_field.column2)
+                    query.add_join('LEFT JOIN', coalias, comodel._table, SQL("%s = %s",
+                        SQL.identifier(rel_alias, direct_field.column2),
+                        SQL.identifier(coalias, 'id'),
+                    ))
+                indirect_similarities.append(SQL("word_similarity(%(search)s, %(field)s)",
+                    search=unaccent(SQL('%s', search)),
+                    field=unaccent(comodel._field_to_sql(coalias, field_info['indirect'], query)),
+                ))
+            similarities.extend(indirect_similarities)
             best_similarity = SQL('GREATEST(%(similarities)s)', similarities=SQL(', ').join(similarities))
 
             # Filter unpublished records for portal and public user for
@@ -1746,7 +1910,6 @@ class Website(models.Model):
 
             query.order = '_best_similarity desc'
             query.limit = 1000
-
             self.env.cr.execute(query.select(
                 SQL.identifier(model._table, 'id'),
                 SQL('%s AS _best_similarity', best_similarity),
@@ -1754,12 +1917,19 @@ class Website(models.Model):
             ids = {row[0] for row in self.env.cr.fetchall() if row[1] and row[1] >= similarity_threshold}
             domain.append([('id', 'in', list(ids))])
             domain = AND(domain)
-            records = model.search_read(domain, fields, limit=limit)
+            records = model.search_read(domain, direct_fields, limit=limit)
             for record in records:
                 for field, value in record.items():
                     if isinstance(value, str):
                         value = value.lower()
                         yield from re.findall(match_pattern, value)
+            if indirect_fields:
+                records = model.search(domain, limit=limit)
+                for indirect_field in indirect_fields:
+                    for value in records.mapped(indirect_field):
+                        if isinstance(value, str):
+                            value = value.lower()
+                            yield from re.findall(match_pattern, value)
 
     def _basic_enumerate_words(self, search_details, search, limit):
         """
@@ -1772,7 +1942,7 @@ class Website(models.Model):
         :return: yields words
         """
         match_pattern = r'[\w./-]{%s,}' % min(4, len(search) - 3)
-        first = escape_psql(search[0])
+        first = sqltools.escape_psql(search[0])
         for search_detail in search_details:
             model_name, fields = search_detail['model'], search_detail['search_fields']
             model = self.env[model_name]
@@ -1780,7 +1950,9 @@ class Website(models.Model):
                 model = model.sudo()
             domain = search_detail['base_domain'].copy()
             fields_domain = []
-            fields = set(fields).intersection(model._fields)
+            direct_fields = set(fields).intersection(model._fields)
+            indirect_fields = self._search_get_indirect_fields(fields, model)
+            fields = direct_fields.union(indirect_fields)
             for field in fields:
                 fields_domain.append([(field, '=ilike', '%s%%' % first)])
                 fields_domain.append([(field, '=ilike', '%% %s%%' % first)])
@@ -1788,7 +1960,7 @@ class Website(models.Model):
             domain.append(OR(fields_domain))
             domain = AND(domain)
             perf_limit = 1000
-            records = model.search_read(domain, fields, limit=perf_limit)
+            records = model.search_read(domain, direct_fields, limit=perf_limit)
             if len(records) == perf_limit:
                 # Exact match might have been missed because the fetched
                 # results are limited for performance reasons.
@@ -1804,3 +1976,10 @@ class Website(models.Model):
                         for word in re.findall(match_pattern, value):
                             if word[0] == search[0]:
                                 yield word.lower()
+            if indirect_fields:
+                records = model.search(domain, limit=limit)
+                for indirect_field in indirect_fields:
+                    for value in records.mapped(indirect_field):
+                        if isinstance(value, str):
+                            value = value.lower()
+                            yield from re.findall(match_pattern, value)

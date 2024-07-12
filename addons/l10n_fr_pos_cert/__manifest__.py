@@ -3,7 +3,6 @@
 
 {
     'name': 'France - VAT Anti-Fraud Certification for Point of Sale (CGI 286 I-3 bis)',
-    'countries': ['fr'],
     'version': '1.0',
     'category': 'Accounting/Localizations/Point of Sale',
     'description': """
@@ -29,6 +28,7 @@ The module adds following features:
         'views/pos_views.xml',
         'views/account_sale_closure.xml',
         'views/pos_inalterability_menuitem.xml',
+        'views/res_config_settings_views.xml',
         'report/pos_hash_integrity.xml',
         'data/account_sale_closure_cron.xml',
         'security/ir.model.access.csv',

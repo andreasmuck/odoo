@@ -31,17 +31,17 @@ registry.category("web_tour.tours").add("calendar_appointments_hour_tour", {
         {
             trigger: "#name_0",
             content: "Give a name to the new event",
-            run: "text TEST EVENT",
+            run: "edit TEST EVENT",
         },
         {
             trigger: "#start_0",
             content: "Give a date to the new event",
-            run: `text ${todayDate()}`,
+            run: `edit ${todayDate()}`,
         },
         {
             trigger: "#duration_0",
             content: "Give a duration to the new event",
-            run: "text 02:00",
+            run: "edit 02:00",
         },
         {
             trigger: ".fa-cloud-upload",
@@ -54,7 +54,7 @@ registry.category("web_tour.tours").add("calendar_appointments_hour_tour", {
             run: "click",
         },
         {
-            trigger: '.scale_button_selection',
+            trigger: ".scale_button_selection",
             content: "Click to change calendar view",
             run: "click",
         },
@@ -66,15 +66,16 @@ registry.category("web_tour.tours").add("calendar_appointments_hour_tour", {
         {
             trigger: ".fc-col-header-cell.fc-day.fc-day-mon",
             content: "Check the day is properly displayed",
+            run: "click",
         },
         {
             trigger: '.fc-time:contains("10:00")',
             content: "Check the time is properly displayed",
+            run: "click",
         },
         {
             trigger: '.o_event_title:contains("TEST EVENT")',
             content: "Check the event title",
-            isCheck: true,
         },
     ],
 });
@@ -96,11 +97,13 @@ registry.category("web_tour.tours").add("test_calendar_delete_tour", {
         {
             content: "Select filter (everybody)",
             trigger: 'div[data-value="all"] input',
+            run: "click",
         },
         clickOnTheEvent,
         {
             content: "Delete the event",
             trigger: ".o_cw_popover_delete",
+            run: "click",
         },
         {
             content: "Validate the deletion",
@@ -120,11 +123,11 @@ registry.category("web_tour.tours").add("test_calendar_decline_tour", {
         {
             content: "Delete the event",
             trigger: ".o_cw_popover_delete",
+            run: "click",
         },
         {
             content: "Wait declined status",
             trigger: ".o_attendee_status_declined",
-            isCheck: true,
         },
     ],
 });
@@ -135,20 +138,22 @@ registry.category("web_tour.tours").add("test_calendar_decline_with_everybody_fi
         {
             content: "Select filter (everybody)",
             trigger: 'div[data-value="all"] input',
+            run: "click",
         },
         clickOnTheEvent,
         {
             content: "Delete the event",
             trigger: ".o_cw_popover_delete",
+            run: "click",
         },
         {
             content: "Select filter (everybody)",
             trigger: 'div[data-value="all"] input',
+            run: "click",
         },
         {
             content: "Wait declined status",
             trigger: ".o_attendee_status_declined",
-            isCheck: true,
         },
     ],
 });

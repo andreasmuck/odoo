@@ -158,8 +158,8 @@ class TestEventBoothSale(TestEventBoothSaleWData):
 class TestEventBoothSaleInvoice(AccountTestInvoicingCommon, TestEventBoothSaleWData):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
         # Add group `group_account_invoice` to user_sales_salesman to allow to pay the invoice
         cls.user_sales_salesman.groups_id += cls.env.ref('account.group_account_invoice')
@@ -186,7 +186,7 @@ class TestEventBoothSaleInvoice(AccountTestInvoicingCommon, TestEventBoothSaleWD
 
         # Create and check that the invoice was created
         invoice = sale_order._create_invoices()
-        self.assertEqual(len(sale_order.invoice_ids), 1, "Invoice not created.")
+        self.assertEqual(len(sale_order.account_move_ids), 1, "Invoice not created.")
 
         # Confirm the invoice and check SO invoice status
         invoice.action_post()

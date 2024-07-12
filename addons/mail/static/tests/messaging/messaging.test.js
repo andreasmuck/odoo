@@ -1,7 +1,3 @@
-import { describe, test } from "@odoo/hoot";
-
-/** @type {ReturnType<import("@mail/utils/common/misc").rpcWithEnv>} */
-let rpc;
 import {
     assertSteps,
     click,
@@ -14,15 +10,16 @@ import {
     start,
     startServer,
     step,
-} from "../mail_test_helpers";
-import { Command, serverState } from "@web/../tests/web_test_helpers";
-import { withUser } from "@web/../tests/_framework/mock_server/mock_server";
-import { rpcWithEnv } from "@mail/utils/common/misc";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, test } from "@odoo/hoot";
+import { Command, serverState, withUser } from "@web/../tests/web_test_helpers";
+
+import { rpc } from "@web/core/network/rpc";
 
 describe.current.tags("desktop");
 defineMailModels();
 
-test("Receiving a new message out of discuss app should open a chat window", async () => {
+test("Receiving a new message out of discuss app should open a chat bubble", async () => {
     const pyEnv = await startServer();
     const partnerId = pyEnv["res.partner"].create({ name: "Dumbledore" });
     const userId = pyEnv["res.users"].create({ partner_id: partnerId });
@@ -38,8 +35,7 @@ test("Receiving a new message out of discuss app should open a chat window", asy
             step(`/mail/action - ${JSON.stringify(args)}`);
         }
     });
-    const env = await start();
-    rpc = rpcWithEnv(env);
+    await start();
     await assertSteps([
         `/mail/action - ${JSON.stringify({
             init_messaging: {},
@@ -52,15 +48,15 @@ test("Receiving a new message out of discuss app should open a chat window", asy
     // simulate receving new message
     withUser(userId, () =>
         rpc("/mail/message/post", {
-            post_data: { body: "new message", message_type: "comment" },
+            post_data: { body: "Magic!", message_type: "comment" },
             thread_id: channelId,
             thread_model: "discuss.channel",
         })
     );
-    await contains(".o-mail-ChatWindow", { text: "Dumbledore" });
+    await contains(".o-mail-ChatBubble[name='Dumbledore']");
 });
 
-test("Receiving a new message in discuss app should open a chat window after leaving discuss app", async () => {
+test("Receiving a new message in discuss app should open a chat bubble after leaving discuss app", async () => {
     const pyEnv = await startServer();
     const partnerId = pyEnv["res.partner"].create({ name: "Dumbledore" });
     const userId = pyEnv["res.users"].create({ partner_id: partnerId });
@@ -76,8 +72,7 @@ test("Receiving a new message in discuss app should open a chat window after lea
             step(`/mail/action - ${JSON.stringify(args)}`);
         }
     });
-    const env = await start();
-    rpc = rpcWithEnv(env);
+    await start();
     await assertSteps([
         `/mail/action - ${JSON.stringify({
             init_messaging: {},
@@ -91,14 +86,14 @@ test("Receiving a new message in discuss app should open a chat window after lea
     // simulate receiving new message
     await withUser(userId, () =>
         rpc("/mail/message/post", {
-            post_data: { body: "new message", message_type: "comment" },
+            post_data: { body: "Tricky", message_type: "comment" },
             thread_id: channelId,
             thread_model: "discuss.channel",
         })
     );
     // leaving discuss.
     await openFormView("res.partner", partnerId);
-    await contains(".o-mail-ChatWindow", { text: "Dumbledore" });
+    await contains(".o-mail-ChatBubble[name='Dumbledore']");
 });
 
 test("Posting a message in discuss app should not open a chat window after leaving discuss app", async () => {

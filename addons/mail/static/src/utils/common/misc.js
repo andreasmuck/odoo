@@ -1,5 +1,5 @@
 import { reactive } from "@odoo/owl";
-import { rpc as rpc2 } from "@web/core/network/rpc";
+import { rpc } from "@web/core/network/rpc";
 
 export function assignDefined(obj, data, keys = Object.keys(data)) {
     for (const key of keys) {
@@ -19,18 +19,43 @@ export function assignIn(obj, data, keys = Object.keys(data)) {
     return obj;
 }
 
+/**
+ * @template T
+ * @param {T[]} list
+ * @param {number} target
+ * @param {(item: T) => number} [itemToCompareVal]
+ * @returns {T}
+ */
+export function nearestGreaterThanOrEqual(list, target, itemToCompareVal) {
+    const findNext = (left, right, next) => {
+        if (left > right) {
+            return next;
+        }
+        const index = Math.floor((left + right) / 2);
+        const item = list[index];
+        const val = itemToCompareVal?.(item) ?? item;
+        if (val === target) {
+            return item;
+        } else if (val > target) {
+            return findNext(left, index - 1, item);
+        } else {
+            return findNext(index + 1, right, next);
+        }
+    };
+    return findNext(0, list.length - 1, null);
+}
+
 export const mailGlobal = {
     isInTest: false,
-    elligibleEnvs: new Set(),
 };
 
-export function rpcWithEnv(env) {
-    return function (url, params = {}, settings = {}) {
-        if (mailGlobal.isInTest && !mailGlobal.elligibleEnvs.has(env?.envId)) {
-            return new Promise(() => {});
-        }
-        return rpc2(...arguments);
-    };
+/**
+ * Use `rpc` instead.
+ *
+ * @deprecated
+ */
+export function rpcWithEnv() {
+    return rpc;
 }
 
 // todo: move this some other place in the future
@@ -103,4 +128,41 @@ export function compareDatetime(date1, date2) {
         return 1;
     }
     return date1.ts - date2.ts;
+}
+
+/**
+ * Compares two version strings.
+ *
+ * @param {string} v1 - The first version string to compare.
+ * @param {string} v2 - The second version string to compare.
+ * @return {number} -1 if v1 is less than v2, 1 if v1 is greater than v2, and 0 if they are equal.
+ */
+function compareVersion(v1, v2) {
+    const parts1 = v1.split(".");
+    const parts2 = v2.split(".");
+
+    for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+        const num1 = parseInt(parts1[i]) || 0;
+        const num2 = parseInt(parts2[i]) || 0;
+        if (num1 < num2) {
+            return -1;
+        }
+        if (num1 > num2) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Return a version object that can be compared to other version strings.
+ *
+ * @param {string} v The version string to evaluate.
+ */
+export function parseVersion(v) {
+    return {
+        isLowerThan(other) {
+            return compareVersion(v, other) < 0;
+        },
+    };
 }

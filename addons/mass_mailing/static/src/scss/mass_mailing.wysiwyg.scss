@@ -32,7 +32,9 @@
 .o_field_mass_mailing_html #oe_snippets {
     position: sticky;
     top: 0;
+    height: 100%;
     z-index: $zindex-dropdown - 1;
+    display: none;
 
     .o_we_external_history_buttons {
         display: flex;
@@ -55,6 +57,7 @@
         }
     }
     &.o_loaded {
+        display: flex;
         transform: translateX(0);
 
         > .o_we_customize_panel .oe-toolbar {
@@ -100,4 +103,9 @@
     // such that in some screen resolutions, you will see the mobile
     // view. We reduce the width of the chatter to avoid this.
     width: $o-mail-Chatter-minWidth - $o-we-sidebar-width;
+}
+
+.o_mail_body div.d-flex:has(> iframe) {
+    // Center the content within the parent container of the iframe and snippet
+    justify-content: center;
 }

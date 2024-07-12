@@ -6,7 +6,7 @@ from markupsafe import Markup
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
 from odoo.osv.expression import AND
-from odoo.tools.float_utils import float_compare, float_is_zero, float_round
+from odoo.tools import float_is_zero, format_list
 
 class StockPickingBatch(models.Model):
     _inherit = ['mail.thread', 'mail.activity.mixin']
@@ -58,11 +58,25 @@ class StockPickingBatch(models.Model):
                 but this scheduled date will not be set for all transfers in batch.""")
     is_wave = fields.Boolean('This batch is a wave')
     show_lots_text = fields.Boolean(compute='_compute_show_lots_text')
+    estimated_shipping_weight = fields.Float(
+        "shipping_weight", compute='_compute_estimated_shipping_capacity', digits='Product Unit of Measure')
+    estimated_shipping_volume = fields.Float(
+        "shipping_volume", compute='_compute_estimated_shipping_capacity', digits='Product Unit of Measure')
 
     @api.depends('picking_type_id')
     def _compute_show_lots_text(self):
         for batch in self:
             batch.show_lots_text = batch.picking_ids and batch.picking_ids[0].show_lots_text
+
+    def _compute_estimated_shipping_capacity(self):
+        for batch in self:
+            estimated_shipping_weight = 0
+            estimated_shipping_volume = 0
+            for move in self.picking_ids.move_ids:
+                estimated_shipping_weight += move.product_id.weight * move.product_qty
+                estimated_shipping_volume += move.product_id.volume * move.product_qty
+            batch.estimated_shipping_weight = estimated_shipping_weight
+            batch.estimated_shipping_volume = estimated_shipping_volume
 
     @api.depends('company_id', 'picking_type_id', 'state')
     def _compute_allowed_picking_ids(self):
@@ -86,7 +100,7 @@ class StockPickingBatch(models.Model):
         for batch in self:
             batch.move_ids = batch.picking_ids.move_ids
             batch.move_line_ids = batch.picking_ids.move_line_ids
-            batch.show_check_availability = any(m.state not in ['assigned', 'done'] for m in batch.move_ids)
+            batch.show_check_availability = any(m.state not in ['assigned', 'cancel', 'done'] for m in batch.move_ids)
 
     @api.depends('state', 'move_ids', 'picking_type_id')
     def _compute_show_allocation(self):
@@ -188,11 +202,14 @@ class StockPickingBatch(models.Model):
         def has_no_quantity(picking):
             return all(not m.picked or float_is_zero(m.quantity, precision_rounding=m.product_uom.rounding) for m in picking.move_ids if m.state not in ('done', 'cancel'))
 
+        def is_empty(picking):
+            return all(float_is_zero(m.quantity, precision_rounding=m.product_uom.rounding) for m in picking.move_ids if m.state not in ('done', 'cancel'))
+
         self.ensure_one()
         self._check_company()
-        # Empty 'waiting for another operation' pickings will be removed from the batch when it is validated.
+        # Empty 'assigned' or 'waiting for another operation' pickings will be removed from the batch when it is validated.
         pickings = self.mapped('picking_ids').filtered(lambda picking: picking.state not in ('cancel', 'done'))
-        empty_waiting_pickings = self.mapped('picking_ids').filtered(lambda p: p.state == 'waiting' and has_no_quantity(p))
+        empty_waiting_pickings = self.mapped('picking_ids').filtered(lambda p: (p.state == 'waiting' and has_no_quantity(p)) or (p.state == 'assigned' and is_empty(p)))
         pickings = pickings - empty_waiting_pickings
 
         empty_pickings = set()
@@ -276,9 +293,11 @@ class StockPickingBatch(models.Model):
             if not batch.picking_ids <= batch.allowed_picking_ids:
                 erroneous_pickings = batch.picking_ids - batch.allowed_picking_ids
                 raise UserError(_(
-                    "The following transfers cannot be added to batch transfer %s. "
+                    "The following transfers cannot be added to batch transfer %(batch)s. "
                     "Please check their states and operation types.\n\n"
-                    "Incompatibilities: %s", batch.name, ', '.join(erroneous_pickings.mapped('name'))))
+                    "Incompatibilities: %(incompatible_transfers)s",
+                    batch=batch.name,
+                    incompatible_transfers=format_list(self.env, erroneous_pickings.mapped('name'))))
 
     def _track_subtype(self, init_values):
         if 'state' in init_values:

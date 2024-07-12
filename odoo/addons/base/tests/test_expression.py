@@ -718,24 +718,31 @@ class TestExpression(SavepointCaseWithUserDemo):
         self.assertEqual(expression.distribute_not(source), expect,
             "distribute_not on long expression applied wrongly")
 
+    def test_40_negating_traversal(self):
+        domain = ['!', ('a.b', '=', 4)]
+        self.assertEqual(expression.distribute_not(domain), domain,
+            "distribute_not must not distribute the operator on domain traversal")
+
     def test_accent(self):
         if not self.registry.has_unaccent:
             raise unittest.SkipTest("unaccent not enabled")
 
         Model = self.env['res.partner.category']
         helen = Model.create({'name': 'Hélène'})
-        self.assertEqual(helen, Model.search([('name', 'ilike', 'Helene')]))
-        self.assertEqual(helen, Model.search([('name', 'ilike', 'hélène')]))
-        self.assertEqual(helen, Model.search([('name', '=ilike', 'Hel%')]))
-        self.assertEqual(helen, Model.search([('name', '=ilike', 'hél%')]))
-        self.assertNotIn(helen, Model.search([('name', 'not ilike', 'Helene')]))
-        self.assertNotIn(helen, Model.search([('name', 'not ilike', 'hélène')]))
+        self.assertEqual(helen, self._search(Model, [('name', 'ilike', 'Helene')]))
+        self.assertEqual(helen, self._search(Model, [('name', 'ilike', 'hélène')]))
+        self.assertEqual(helen, self._search(Model, [('name', '=ilike', 'Hel%')]))
+        self.assertEqual(helen, self._search(Model, [('name', '=ilike', 'hél%')]))
+        self.assertNotIn(helen, self._search(Model, [('name', 'not ilike', 'Helene')]))
+        self.assertNotIn(helen, self._search(Model, [('name', 'not ilike', 'hélène')]))
 
         # =like and like should be case and accent sensitive
-        self.assertEqual(helen, Model.search([('name', '=like', 'Hél%')]))
-        self.assertNotIn(helen, Model.search([('name', '=like', 'Hel%')]))
-        self.assertEqual(helen, Model.search([('name', 'like', 'élè')]))
-        self.assertNotIn(helen, Model.search([('name', 'like', 'ele')]))
+        self.assertEqual(helen, self._search(Model, [('name', '=like', 'Hél%')]))
+        self.assertNotIn(helen, self._search(Model, [('name', '=like', 'Hel%')]))
+        self.assertEqual(helen, self._search(Model, [('name', 'like', 'élè')]))
+        self.assertNotIn(helen, self._search(Model, [('name', 'like', 'ele')]))
+        self.assertNotIn(helen, self._search(Model, [('name', 'not ilike', 'ele')]))
+        self.assertNotIn(helen, self._search(Model, [('name', 'not ilike', 'élè')]))
 
         hermione, nicostratus = Model.create([
             {'name': 'Hermione', 'parent_id': helen.id},
@@ -801,32 +808,68 @@ class TestExpression(SavepointCaseWithUserDemo):
         Model = self.env['res.partner.category']
         record = Model.create({'name': 'XY', 'color': 42})
 
-        self.assertIn(record, Model.search([('name', 'like', 'X')]))
-        self.assertIn(record, Model.search([('name', 'ilike', 'X')]))
-        self.assertIn(record, Model.search([('name', 'not like', 'Z')]))
-        self.assertIn(record, Model.search([('name', 'not ilike', 'Z')]))
+        self.assertIn(record, self._search(Model, [('name', 'like', 'X')]))
+        self.assertIn(record, self._search(Model, [('name', 'ilike', 'X')]))
+        self.assertIn(record, self._search(Model, [('name', 'not like', 'Z')]))
+        self.assertIn(record, self._search(Model, [('name', 'not ilike', 'Z')]))
 
-        self.assertNotIn(record, Model.search([('name', 'like', 'Z')]))
-        self.assertNotIn(record, Model.search([('name', 'ilike', 'Z')]))
-        self.assertNotIn(record, Model.search([('name', 'not like', 'X')]))
-        self.assertNotIn(record, Model.search([('name', 'not ilike', 'X')]))
+        self.assertNotIn(record, self._search(Model, [('name', 'like', 'Z')]))
+        self.assertNotIn(record, self._search(Model, [('name', 'ilike', 'Z')]))
+        self.assertNotIn(record, self._search(Model, [('name', 'not like', 'X')]))
+        self.assertNotIn(record, self._search(Model, [('name', 'not ilike', 'X')]))
 
         # like, ilike, not like, not ilike convert their lhs to str
-        self.assertIn(record, Model.search([('color', 'like', '4')]))
-        self.assertIn(record, Model.search([('color', 'ilike', '4')]))
-        self.assertIn(record, Model.search([('color', 'not like', '3')]))
-        self.assertIn(record, Model.search([('color', 'not ilike', '3')]))
+        self.assertIn(record, self._search(Model, [('color', 'like', '4')]))
+        self.assertIn(record, self._search(Model, [('color', 'ilike', '4')]))
+        self.assertIn(record, self._search(Model, [('color', 'not like', '3')]))
+        self.assertIn(record, self._search(Model, [('color', 'not ilike', '3')]))
 
-        self.assertNotIn(record, Model.search([('color', 'like', '3')]))
-        self.assertNotIn(record, Model.search([('color', 'ilike', '3')]))
-        self.assertNotIn(record, Model.search([('color', 'not like', '4')]))
-        self.assertNotIn(record, Model.search([('color', 'not ilike', '4')]))
+        self.assertNotIn(record, self._search(Model, [('color', 'like', '3')]))
+        self.assertNotIn(record, self._search(Model, [('color', 'ilike', '3')]))
+        self.assertNotIn(record, self._search(Model, [('color', 'not like', '4')]))
+        self.assertNotIn(record, self._search(Model, [('color', 'not ilike', '4')]))
 
         # =like and =ilike don't work on non-character fields
         with mute_logger('odoo.sql_db'), self.assertRaises(psycopg2.Error):
             Model.search([('name', '=', 'X'), ('color', '=like', 4)])
         with self.assertRaises(ValueError):
             Model.search([('name', '=', 'X'), ('color', '=like', '4%')])
+
+    def test_like_complement_m2o_access(self):
+        Model = self.env['res.partner']
+        parent1, parent2 = Model.create([{'name': 'Parent 1'}, {'name': 'Parent 2'}])
+        child1, child2 = Model.create([
+            {'name': 'Child 1', 'parent_id': parent1.id},
+            {'name': 'Child 2', 'parent_id': parent2.id},
+        ])
+        other = Model.create({'name': 'other'})
+        partners = parent1 + parent2 + child1 + child2 + other
+
+        # replace all ir.rules by one global rule to prevent access to parent1
+        self.env['ir.rule'].search([]).unlink()
+        self.env['ir.rule'].create([{
+            'name': 'partners rule',
+            'model_id': self.env['ir.model']._get('res.partner').id,
+            'domain_force': str([('id', 'not in', parent1.ids)]),
+        }])
+
+        # search for children, bypassing access rights
+        found = self._search(
+            Model,
+            [('parent_id', 'like', 'Parent'), ('id', 'in', partners.ids)],
+            [('id', 'in', partners.ids)],
+        )
+        self.assertEqual(found, child1 + child2)
+
+        # search for children with opposite condition and access rights; we find
+        # all except parent1 (no access) and child2(parent matches 'Parent')
+        partners.invalidate_recordset()  # avoid cache poisoning
+        found = self._search(
+            Model.with_user(self.user_demo),
+            [('parent_id', 'not like', 'Parent'), ('id', 'in', partners.ids)],
+            [('id', 'in', partners.ids)],
+        )
+        self.assertEqual(found, partners - (parent1 + child2))
 
     def test_translate_search(self):
         Country = self.env['res.country']
@@ -928,6 +971,9 @@ class TestExpression(SavepointCaseWithUserDemo):
         false = expression.FALSE_DOMAIN
         true = expression.TRUE_DOMAIN
         normal = [('foo', '=', 'bar')]
+        # OR and AND with empty list should return their unit value
+        self.assertEqual(expression.OR([]), false)
+        self.assertEqual(expression.AND([]), true)
         # OR with single FALSE_LEAF
         expr = expression.OR([false])
         self.assertEqual(expr, false)
@@ -952,6 +998,11 @@ class TestExpression(SavepointCaseWithUserDemo):
         # AND with OR with single FALSE_LEAF and normal leaf
         expr = expression.AND([expression.OR([false]), normal])
         self.assertEqual(expr, false)
+        # empty domain inside the list should be treated as true
+        expr = expression.AND([[], normal])
+        self.assertEqual(expr, normal)
+        expr = expression.OR([[], normal])
+        self.assertEqual(expr, true)
 
     def test_filtered_domain_order(self):
         domain = [('name', 'ilike', 'a')]
@@ -1437,6 +1488,20 @@ class TestMany2one(TransactionCase):
                 ('country_id.code', 'like', 'BE'),
             ])
 
+    def test_complement_regular(self):
+        self.Partner.search(['!', ('company_id.name', 'like', self.company.name)])
+        with self.assertQueries(['''
+            SELECT "res_partner"."id"
+            FROM "res_partner"
+            WHERE (("res_partner"."company_id" NOT IN (
+                SELECT "res_company"."id"
+                FROM "res_company"
+                WHERE ("res_company"."name"::text LIKE %s)
+            )) OR "res_partner"."company_id" IS NULL)
+            ORDER BY "res_partner"."complete_name"asc,"res_partner"."id"desc
+        ''']):
+            self.Partner.search(['!', ('company_id.name', 'like', self.company.name)])
+
     def test_explicit_subquery(self):
         self.Partner.search([('company_id.name', 'like', self.company.name)])
 
@@ -1625,11 +1690,11 @@ class TestMany2one(TransactionCase):
         with self.assertQueries(['''
             SELECT "res_partner"."id"
             FROM "res_partner"
-            WHERE (("res_partner"."company_id" IN (
+            WHERE (("res_partner"."company_id" NOT IN (
                 SELECT "res_company"."id"
                 FROM "res_company"
-                WHERE (("res_company"."name"::text not like %s) OR "res_company"."name" IS NULL))
-            ) OR "res_partner"."company_id" IS NULL)
+                WHERE ("res_company"."name"::text LIKE %s)
+            )) OR "res_partner"."company_id" IS NULL)
             ORDER BY "res_partner"."complete_name"asc,"res_partner"."id"desc
         ''']):
             self.Partner.search([('company_id', 'not like', "blablabla")])
@@ -1683,11 +1748,14 @@ class TestOne2many(TransactionCase):
             WHERE ("res_partner"."id" IN (
                 SELECT "res_partner"."parent_id"
                 FROM "res_partner"
-                WHERE ("res_partner"."id" IN (
-                    SELECT "res_partner_bank"."partner_id"
-                    FROM "res_partner_bank"
-                    WHERE ("res_partner_bank"."sanitized_acc_number"::text LIKE %s)
-                )) AND "res_partner"."parent_id" IS NOT NULL
+                WHERE (
+                    ("res_partner"."active" = TRUE)
+                    AND ("res_partner"."id" IN (
+                        SELECT "res_partner_bank"."partner_id"
+                        FROM "res_partner_bank"
+                        WHERE ("res_partner_bank"."sanitized_acc_number"::text LIKE %s)
+                    ))
+                ) AND "res_partner"."parent_id" IS NOT NULL
             ))
             ORDER BY "res_partner"."complete_name"asc,"res_partner"."id"desc
         ''']):
@@ -1884,7 +1952,6 @@ class TestMany2many(TransactionCase):
         ''']):
             self.User.search([('groups_id', 'in', group.ids)], order='id')
 
-        group_color = group.color
         with self.assertQueries(['''
             SELECT "res_users"."id"
             FROM "res_users"
@@ -1911,7 +1978,7 @@ class TestMany2many(TransactionCase):
             )
             ORDER BY "res_users"."id"
         ''']):
-            self.User.search([('groups_id.color', '=', group_color)], order='id')
+            self.User.search([('groups_id.color', '=', 1)], order='id')
 
         with self.assertQueries(['''
             SELECT "res_users"."id"

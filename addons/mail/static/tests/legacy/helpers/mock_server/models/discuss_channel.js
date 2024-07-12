@@ -14,16 +14,21 @@ patch(MockServer.prototype, {
      */
     mockWrite(model, args) {
         const notifications = [];
+        const old_info = {};
         if (model == "discuss.channel") {
-            const vals = args[1];
+            Object.assign(old_info, this._mockDiscussChannel__channel_basic_info([args[0][0]]));
+        }
+        const mockWriteResult = super.mockWrite(...arguments);
+        if (model == "discuss.channel") {
             const [channel] = this.getRecords(model, [["id", "=", args[0][0]]]);
-            if (channel) {
-                const diff = {};
-                for (const key in vals) {
-                    if (channel[key] != vals[key] && key !== "image_128") {
-                        diff[key] = vals[key];
-                    }
+            const info = this._mockDiscussChannel__channel_basic_info([channel.id]);
+            const diff = {};
+            for (const key of Object.keys(info)) {
+                if (info[key] !== old_info[key]) {
+                    diff[key] = info[key];
                 }
+            }
+            if (Object.keys(diff).length) {
                 notifications.push([
                     channel,
                     "mail.record/insert",
@@ -37,7 +42,6 @@ patch(MockServer.prototype, {
                 ]);
             }
         }
-        const mockWriteResult = super.mockWrite(...arguments);
         if (notifications.length) {
             this.pyEnv["bus.bus"]._sendmany(notifications);
         }
@@ -85,7 +89,11 @@ patch(MockServer.prototype, {
         }
         if (route === "/discuss/channel/info") {
             const id = args.channel_id;
-            return this._mockDiscussChannelChannelInfo([id])[0];
+            const channelInfos = this._mockDiscussChannelChannelInfo([id]);
+            if (!channelInfos.length) {
+                return;
+            }
+            return { Thread: channelInfos };
         }
         if (args.model === "discuss.channel" && args.method === "add_members") {
             const ids = args.args[0];
@@ -107,10 +115,10 @@ patch(MockServer.prototype, {
             const description = args.args[1] || args.kwargs.description;
             return this._mockDiscussChannelChannelChangeDescription(ids, description);
         }
-        if (route === "/discuss/channel/set_last_seen_message") {
+        if (route === "/discuss/channel/mark_as_read") {
             const id = args.channel_id;
             const last_message_id = args.last_message_id;
-            return this._mockDiscussChannel_ChannelSeen([id], last_message_id);
+            return this._mockDiscussChannel_MarkAsRead([id], last_message_id);
         }
         if (args.model === "discuss.channel" && args.method === "channel_set_custom_name") {
             const ids = args.args[0];
@@ -135,7 +143,7 @@ patch(MockServer.prototype, {
             const ids = args.args[0];
             return this._mockDiscussChannelWriteImage128(ids[0]);
         }
-        if (args.model === "discuss.channel" && args.method === "load_more_members") {
+        if (args.model === "discuss.channel" && args.method === "_load_more_members") {
             const [channel_ids] = args.args;
             const { known_member_ids } = args.kwargs;
             return this._mockDiscussChannelloadOlderMembers(channel_ids, known_member_ids);
@@ -349,9 +357,9 @@ patch(MockServer.prototype, {
      * @param {boolean} pinned
      */
     _mockDiscussChannelSetMessagePin(id, message_id, pinned) {
-        const pinnedAt = pinned ? formatDate(luxon.DateTime.now()) : false;
+        const pinned_at = pinned ? formatDate(luxon.DateTime.now()) : false;
         this.pyEnv["mail.message"].write([message_id], {
-            pinned_at: pinnedAt,
+            pinned_at,
         });
         const notification = `<div data-oe-type="pin" class="o_mail_notification">
                 ${this.pyEnv.currentPartner.display_name} pinned a
@@ -367,7 +375,7 @@ patch(MockServer.prototype, {
         this.pyEnv["bus.bus"]._sendone(channel, "mail.record/insert", {
             Message: {
                 id: message_id,
-                pinned_at: pinnedAt,
+                pinned_at,
             },
         });
     },
@@ -511,7 +519,7 @@ patch(MockServer.prototype, {
                 channelMemberIds.length === partners.length &&
                 channel.channel_member_ids.length === partners.length
             ) {
-                return this._mockDiscussChannelChannelInfo([channel.id])[0];
+                return { Thread: this._mockDiscussChannelChannelInfo([channel.id]) };
             }
         }
         const id = this.pyEnv["discuss.channel"].create({
@@ -527,7 +535,7 @@ patch(MockServer.prototype, {
             id,
             partners.map(({ id }) => id)
         );
-        return this._mockDiscussChannelChannelInfo([id])[0];
+        return { Thread: this._mockDiscussChannelChannelInfo([id]) };
     },
     /**
      * Simulates `_channel_basic_info` on `discuss.channel`.
@@ -551,23 +559,10 @@ patch(MockServer.prototype, {
         const [group_public_id] = this.getRecords("res.groups", [
             ["id", "=", channel.group_public_id],
         ]);
-        const memberOfCurrentUser = this._mockDiscussChannelMember__getAsSudoFromContext(
-            channel.id
-        );
         Object.assign(res, {
             authorizedGroupFullName: group_public_id ? group_public_id.name : false,
             defaultDisplayMode: channel.default_display_mode,
             group_based_subscription: channel.group_ids.length > 0,
-            is_editable: (() => {
-                switch (channel.channel_type) {
-                    case "channel":
-                        return channel.create_uid === this.pyEnv.currentUserId;
-                    case "group":
-                        return memberOfCurrentUser;
-                    default:
-                        return false;
-                }
-            })(),
             memberCount: this.pyEnv["discuss.channel.member"].searchCount([
                 ["channel_id", "=", channel.id],
             ]),
@@ -583,6 +578,7 @@ patch(MockServer.prototype, {
      * @returns {Object[]}
      */
     _mockDiscussChannelChannelInfo(ids) {
+        const bus_last_id = this.lastBusNotificationId;
         const channels = this.getRecords("discuss.channel", [["id", "in", ids]]);
         return channels.map((channel) => {
             const members = this.getRecords("discuss.channel.member", [
@@ -601,6 +597,7 @@ patch(MockServer.prototype, {
             Object.assign(res, {
                 fetchChannelInfoState: "fetched",
                 message_needaction_counter: messageNeedactionCounter,
+                message_needaction_counter_bus_id: bus_last_id,
             });
             const memberOfCurrentUser = this._mockDiscussChannelMember__getAsSudoFromContext(
                 channel.id
@@ -618,6 +615,7 @@ patch(MockServer.prototype, {
                 Object.assign(res, {
                     custom_channel_name: memberOfCurrentUser.custom_channel_name,
                     message_unread_counter: memberOfCurrentUser.message_unread_counter,
+                    message_unread_counter_bus_id: bus_last_id,
                 });
                 if (memberOfCurrentUser.rtc_inviting_session_id) {
                     res["rtcInvitingSession"] = {
@@ -643,6 +641,19 @@ patch(MockServer.prototype, {
                     ],
                 ];
             }
+            let is_editable;
+            switch (channel.channel_type) {
+                case "channel":
+                    is_editable = channel.create_uid === this.pyEnv.currentUserId;
+                    break;
+                case "group":
+                    is_editable = memberOfCurrentUser;
+                    break;
+                default:
+                    is_editable = false;
+                    break;
+            }
+            res.is_editable = is_editable;
             res["rtcSessions"] = [
                 [
                     "ADD",
@@ -654,7 +665,6 @@ patch(MockServer.prototype, {
                     ),
                 ],
             ];
-            res.allow_public_upload = channel.allow_public_upload;
             return res;
         });
     },
@@ -680,19 +690,19 @@ patch(MockServer.prototype, {
                 id: channel.id,
             });
         } else {
-            this.pyEnv["bus.bus"]._sendone(this.pyEnv.currentPartner, "mail.record/insert", {
-                Thread: this._mockDiscussChannelChannelInfo([channel.id])[0],
-            });
+            const store = {};
+            Object.assign(store, { Thread: this._mockDiscussChannelChannelInfo([channel.id]) });
+            this.pyEnv["bus.bus"]._sendone(this.pyEnv.currentPartner, "mail.record/insert", store);
         }
     },
     /**
-     * Simulates the `_channel_seen` method of `discuss.channel`.
+     * Simulates the `_mark_as_read` method of `discuss.channel`.
      *
      * @private
      * @param integer[] ids
      * @param {integer} last_message_id
      */
-    async _mockDiscussChannel_ChannelSeen(ids, last_message_id) {
+    async _mockDiscussChannel_MarkAsRead(ids, last_message_id) {
         // Update record
         const channel_id = ids[0];
         if (!channel_id) {
@@ -898,7 +908,7 @@ patch(MockServer.prototype, {
         });
     },
     /**
-     * Simulates `load_more_members` on `discuss.channel`.
+     * Simulates `_load_more_members` on `discuss.channel`.
      *
      * @private
      * @param {integer[]} channel_ids

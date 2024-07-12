@@ -110,7 +110,7 @@
                                 <td t-if="display_discount" class="text-end">
                                     <span t-field="line.discount">-</span>
                                 </td>
-                                <t t-set="taxes" t-value="', '.join([(tax.invoice_label or tax.name) for tax in line.tax_id])"/>
+                                <t t-set="taxes" t-value="', '.join([(tax.invoice_label or tax.name) for tax in line.tax_ids])"/>
                                 <td name="td_taxes" t-attf-class="text-end {{ 'text-nowrap' if len(taxes) &lt; 10 else '' }}">
                                     <span t-out="taxes">Tax 15%</span>
                                 </td>
@@ -132,7 +132,7 @@
                             </t>
                         </tr>
 
-                        <t t-if="current_section and (line_last or doc.order_line[line_index+1].display_type == 'line_section') and not line.is_downpayment">
+                        <t t-if="current_section and (line_last or lines_to_report[line_index+1].display_type == 'line_section') and not line.is_downpayment">
                             <tr class="is-subtotal text-end">
                                 <td name="td_section_subtotal" colspan="99">
                                     <strong class="mr16">Subtotal</strong>
@@ -210,5 +210,11 @@
 
  <!-- Allow edits (e.g. studio) without changing the often inherited base template -->
 <template id="document_tax_totals" inherit_id="account.document_tax_totals_template" primary="True"></template>
+
+<template id="quote_document_layout_preview">
+    <t t-call="web.html_preview_container">
+        <t t-call="sale.report_saleorder_document"/>
+    </t>
+</template>
 
 </odoo>

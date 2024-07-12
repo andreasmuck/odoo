@@ -10,13 +10,12 @@ function openRoot() {
         content: "return to client root to avoid race condition",
         trigger: 'body',
         run() {
-            $('body').addClass('wait');
+            document.querySelector("body").classList.add("wait");
             window.location = '/web';
         }
     }, {
         content: "wait for client reload",
         trigger: 'body:not(.wait)',
-        run() {}
     }];
 }
 function openUserProfileAtSecurityTab() {
@@ -70,7 +69,6 @@ function closeProfileDialog({content, totp_state}) {
         },
     }, {
         trigger: 'body.dialog-closed',
-        run() {},
     }];
 }
 
@@ -80,21 +78,28 @@ registry.category("web_tour.tours").add('totp_tour_setup', {
     steps: () => [...openUserProfileAtSecurityTab(), {
     content: "Open totp wizard",
     trigger: 'button[name=action_totp_enable_wizard]',
-}, {
+    run: "click",
+},
+{
+    trigger: ".modal div:contains(enter your password)",
+    in_modal: false,
+},
+{
     content: "Check that we have to enter enhanced security mode and input password",
-    extra_trigger: 'div:contains("enter your password")',
     trigger: '[name=password] input',
-    run: 'text demo',
+    run: "edit demo",
 }, {
     content: "Confirm",
     trigger: "button:contains(Confirm Password)",
+    run: "click",
 }, {
     content: "Check the wizard has opened",
-    trigger: 'li:contains("When requested to do so")',
-    run() {}
+    trigger: '.modal li:contains("When requested to do so")',
+    in_modal: false,
 }, {
     content: "Get secret from collapsed div",
-    trigger: 'a:contains("Cannot scan it?")',
+    trigger: `.modal a:contains("Cannot scan it?")`,
+    in_modal: false,
     async run(helpers) {
         const secret = this.anchor
             .closest("div")
@@ -106,14 +111,21 @@ registry.category("web_tour.tours").add('totp_tour_setup', {
         const token = await rpc('/totphook', {
             secret: secret.textContent
         });
-        helpers.text(token, '[name=code] input');
-        helpers.click('button.btn-primary:contains(Activate)');
+        helpers.edit(token, '[name=code] input');
         document.querySelector("body").classList.add("got-token");
     }
-}, {
+}, 
+{
+    trigger: ".modal button.btn-primary:contains(Activate)",
+    in_modal: false,
+    run: "click",
+},
+{
+    trigger: "body:not(:has(.modal))",
+},
+{
     content: 'wait for rpc',
     trigger: 'body.got-token',
-    run() {}
 },
 ...openRoot(),
 ...openUserProfileAtSecurityTab(),
@@ -128,39 +140,39 @@ registry.category("web_tour.tours").add('totp_login_enabled', {
     url: '/',
     steps: () => [{
     content: "check that we're on the login page or go to it",
-    trigger: 'input#login, a:contains(Sign in)'
+    trigger: 'input#login, a:contains(Sign in)', 
+    run: "click",
 }, {
     content: "input login",
     trigger: 'input#login',
-    run: 'text demo',
+    run: "edit demo",
 }, {
     content: 'input password',
     trigger: 'input#password',
-    run: 'text demo',
+    run: "edit demo",
 }, {
     content: "click da button",
     trigger: 'button:contains("Log in")',
+    run: "click",
 }, {
     content: "expect totp screen",
     trigger: 'label:contains(Authentication Code)',
+    run: "click",
 }, {
     content: "input code",
     trigger: 'input[name=totp_token]',
     async run(helpers) {
-        // TODO: if tours are ever async-aware the click should get moved out,
-        //       but currently there's no great way to make the tour wait until
-        //       we've retrieved and set the token: `:empty()` is aboutthe text
-        //       content of the HTML element, not the JS value property. We
-        //       could set a class but that's really no better than
-        //       procedurally clicking the button after we've set the input.
         const token = await rpc('/totphook');
-        helpers.text(token);
-        helpers.click('button:contains("Log in")');
+        helpers.edit(token);
     }
-}, {
+}, 
+{
+    trigger: `button:contains("Log in")`,
+    run: "click",
+},
+{
     content: "check we're logged in",
     trigger: ".o_user_menu .dropdown-toggle",
-    run() {}
 }]});
 
 registry.category("web_tour.tours").add('totp_login_device', {
@@ -168,57 +180,67 @@ registry.category("web_tour.tours").add('totp_login_device', {
     url: '/',
     steps: () => [{
     content: "check that we're on the login page or go to it",
-    trigger: 'input#login, a:contains(Sign in)'
+    trigger: 'input#login, a:contains(Sign in)',
+    run: "click",
 }, {
     content: "input login",
     trigger: 'input#login',
-    run: 'text demo',
+    run: "edit demo",
 }, {
     content: 'input password',
     trigger: 'input#password',
-    run: 'text demo',
+    run: "edit demo",
 }, {
     content: "click da button",
     trigger: 'button:contains("Log in")',
+    run: "click",
 }, {
     content: "expect totp screen",
     trigger: 'label:contains(Authentication Code)',
+    run: "click",
 }, {
     content: "check remember device box",
     trigger: 'label[for=switch-remember]',
+    run: "click",
 }, {
     content: "input code",
     trigger: 'input[name=totp_token]',
     async run(helpers) {
         const token = await rpc('/totphook')
-        helpers.text(token);
-        helpers.click('button:contains("Log in")');
+        helpers.edit(token);
     }
-}, {
+},
+{
+    trigger: "button:contains(Log in)",
+    run: "click",
+},
+{
     content: "check we're logged in",
     trigger: ".o_user_menu .dropdown-toggle",
     run: 'click',
 }, {
     content: "click the Log out button",
     trigger: '.dropdown-item[data-menu=logout]',
+    run: "click",
 }, {
     content: "check that we're back on the login page or go to it",
-    trigger: 'input#login, a:contains(Log in)'
+    trigger: 'input#login, a:contains(Log in)', 
+    run: "edit Test",
 }, {
     content: "input login again",
     trigger: 'input#login',
-    run: 'text demo',
+    run: "edit demo",
 }, {
     content: 'input password again',
     trigger: 'input#password',
-    run: 'text demo',
+    run: "edit demo",
 }, {
     content: "click da button again",
     trigger: 'button:contains("Log in")',
+    run: "click",
 },  {
     content: "check we're logged in without 2FA",
     trigger: ".o_user_menu .dropdown-toggle",
-    run() {}
 },
 // now go and disable two-factor authentication would be annoying to do in a separate tour
 // because we'd need to login & totp again as HttpCase.authenticate can't
@@ -227,14 +249,20 @@ registry.category("web_tour.tours").add('totp_login_device', {
 {
     content: "Open totp wizard",
     trigger: 'button[name=action_totp_disable]',
-}, {
+    run: "click",
+},
+{
+    trigger: ".modal div:contains(enter your password)",
+    in_modal: false,
+},
+{
     content: "Check that we have to enter enhanced security mode and input password",
-    extra_trigger: 'div:contains("enter your password")',
     trigger: '[name=password] input',
-    run: 'text demo',
+    run: "edit demo",
 }, {
     content: "Confirm",
     trigger: "button:contains(Confirm Password)",
+    run: "click",
 },
 ...openRoot(),
 ...openUserProfileAtSecurityTab(),
@@ -249,18 +277,20 @@ registry.category("web_tour.tours").add('totp_login_disabled', {
     url: '/',
     steps: () => [{
     content: "check that we're on the login page or go to it",
-    trigger: 'input#login, a:contains(Sign in)'
+    trigger: 'input#login, a:contains(Sign in)',
+    run: "click",
 }, {
     content: "input login",
     trigger: 'input#login',
-    run: 'text demo',
+    run: "edit demo",
 }, {
     content: 'input password',
     trigger: 'input#password',
-    run: 'text demo',
+    run: "edit demo",
 }, {
     content: "click da button",
     trigger: 'button:contains("Log in")',
+    run: "click",
 },
 // normally we'd end the tour here as it's all we care about but there are a
 // bunch of ongoing queries from the loading of the web client which cause
@@ -277,33 +307,19 @@ registry.category("web_tour.tours").add('totp_admin_disables', {
     url: '/web',
     steps: () => [stepUtils.showAppsMenuItem(), {
     content: 'Go to settings',
-    trigger: '[data-menu-xmlid="base.menu_administration"]'
+    trigger: '[data-menu-xmlid="base.menu_administration"]',
+    run: "click",
 }, {
     content: 'Wait for page',
     trigger: '.o_menu_brand:contains("Settings")',
-    run() {}
 }, {
     content: "Open Users menu",
-    trigger: '[data-menu-xmlid="base.menu_users"]'
+    trigger: '[data-menu-xmlid="base.menu_users"]',
+    run: "click",
 }, {
     content: "Open Users view",
     trigger: '[data-menu-xmlid="base.menu_action_res_users"]',
-    run(helpers) {
-        // funny story: the users view we're trying to reach, sometimes we're
-        // already there, but if we re-click the next step executes before the
-        // action has the time to re-load, the one after that doesn't, and our
-        // selection get discarded by the action reloading, so here try to
-        // see if we're already on the users action through the breadcrumb and
-        // just close the menu if so
-        const $crumb = $('.breadcrumb');
-        if ($crumb.text().indexOf('Users') === -1) {
-            // on general settings page, click menu
-            helpers.click();
-        } else {
-            // else close menu
-            helpers.click($('[data-menu-xmlid="base.menu_users"]'));
-        }
-    }
+    run: "click",
 }, {
     content: "Find Demo User",
     trigger: 'td.o_data_cell:contains("demo")',
@@ -318,24 +334,40 @@ registry.category("web_tour.tours").add('totp_admin_disables', {
     }
 }, {
     content: "Open Actions menu",
-    trigger: 'button.dropdown-toggle:contains("Action")'
+    trigger: 'button.dropdown-toggle:contains("Action")',
+    run: "click",
 }, {
     content: "Select totp remover",
-    trigger: 'span.dropdown-item:contains(Disable two-factor authentication)'
-}, { // enhanced security yo
+    trigger: 'span.dropdown-item:contains(Disable two-factor authentication)',
+    run: "click",
+},
+{
+    trigger: ".modal div:contains(enter your password)",
+    in_modal: false,
+},
+{ // enhanced security yo
     content: "Check that we have to enter enhanced security mode & input password",
-    extra_trigger: 'div:contains("enter your password")',
-    trigger: '[name=password] input',
-    run: 'text admin',
+    trigger: '.modal [name=password] input',
+    in_modal: false,
+    run: "edit admin",
 }, {
     content: "Confirm",
-    trigger: "button:contains(Confirm Password)",
-}, {
+    trigger: ".modal button:contains(Confirm Password)",
+    in_modal: false,
+    run: "click",
+}, 
+{
+    content: "Wait the modal is closed",
+    trigger: "body:not(:has(.modal))",
+},
+{
     content: "open the user's form",
     trigger: "td.o_data_cell:contains(demo)",
+    run: "click",
 }, {
     content: "go to Account security Tab",
     trigger: "a.nav-link:contains(Account Security)",
+    run: "click",
 }, ...closeProfileDialog({
     content: "check that demo user has been de-totp'd",
     totp_state: false,

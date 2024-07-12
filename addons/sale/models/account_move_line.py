@@ -9,7 +9,6 @@ from odoo.tools import float_compare, float_is_zero
 class AccountMoveLine(models.Model):
     _inherit = 'account.move.line'
 
-    is_downpayment = fields.Boolean()
     sale_line_ids = fields.Many2many(
         'sale.order.line',
         'sale_order_line_invoice_rel',
@@ -176,7 +175,7 @@ class AccountMoveLine(models.Model):
         last_sequence = last_so_line.sequence + 1 if last_so_line else 100
 
         fpos = order.fiscal_position_id or order.fiscal_position_id._get_fiscal_position(order.partner_id)
-        product_taxes = self.product_id.taxes_id.filtered(lambda tax: tax.company_id == order.company_id)
+        product_taxes = self.product_id.taxes_id._filter_taxes_by_company(order.company_id)
         taxes = fpos.map_tax(product_taxes)
 
         return {
@@ -184,7 +183,7 @@ class AccountMoveLine(models.Model):
             'name': self.name,
             'sequence': last_sequence,
             'price_unit': price,
-            'tax_id': [x.id for x in taxes],
+            'tax_ids': [x.id for x in taxes],
             'discount': 0.0,
             'product_id': self.product_id.id,
             'product_uom': self.product_uom_id.id,
@@ -226,4 +225,7 @@ class AccountMoveLine(models.Model):
 
     def _get_downpayment_lines(self):
         # OVERRIDE
-        return self.sale_line_ids.filtered('is_downpayment').invoice_lines.filtered(lambda line: line.move_id._is_downpayment())
+        return self.sale_line_ids.filtered('is_downpayment').account_move_line_ids.filtered(lambda line: line.move_id._is_downpayment())
+
+    def _get_order_lines(self):
+        return self.sale_line_ids or super()._get_order_lines()

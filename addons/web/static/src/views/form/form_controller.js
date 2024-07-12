@@ -32,7 +32,17 @@ import { FormCompiler } from "./form_compiler";
 import { FormErrorDialog } from "./form_error_dialog/form_error_dialog";
 import { FormStatusIndicator } from "./form_status_indicator/form_status_indicator";
 
-import { Component, onMounted, onRendered, status, useEffect, useRef, useState } from "@odoo/owl";
+import {
+    Component,
+    onError,
+    onMounted,
+    onRendered,
+    status,
+    useEffect,
+    useExternalListener,
+    useRef,
+    useState,
+} from "@odoo/owl";
 import { FetchRecordError } from "@web/model/relational_model/errors";
 import { effect } from "@web/core/utils/reactive";
 
@@ -77,10 +87,6 @@ export async function loadSubViews(fieldNodes, fields, context, resModel, viewSe
                 refinedContext[key] = context[key];
             }
         }
-        // specify the main model to prevent access rights defined in the context
-        // (e.g. create: 0) to apply to sub views (same logic as the one applied by
-        // the server for inline views)
-        refinedContext.base_model_name = resModel;
 
         const comodel = field.relation;
         const {
@@ -135,12 +141,11 @@ export class FormController extends Component {
         preventEdit: { type: Boolean, optional: true },
         onDiscard: { type: Function, optional: true },
         onSave: { type: Function, optional: true },
-        updateResId: { type: Function, optional: true },
     };
     static defaultProps = {
         preventCreate: false,
         preventEdit: false,
-        updateResId: () => {},
+        updateActionState: () => {},
     };
 
     setup() {
@@ -149,6 +154,7 @@ export class FormController extends Component {
         this.orm = useService("orm");
         this.viewService = useService("view");
         this.ui = useService("ui");
+        this.companyService = useService("company");
         useBus(this.ui.bus, "resize", this.render);
 
         this.archInfo = this.props.archInfo;
@@ -191,11 +197,22 @@ export class FormController extends Component {
             effect(
                 (model) => {
                     if (status(this) === "mounted") {
-                        this.props.updateResId(model.root.resId);
+                        this.props.updateActionState({ resId: model.root.resId });
                     }
                 },
                 [this.model]
             );
+        });
+
+        onError((error) => {
+            const suggestedCompany = error.cause?.data?.context?.suggested_company;
+            if (error.cause?.data?.name === "odoo.exceptions.AccessError" && suggestedCompany) {
+                const activeCompanyIds = this.companyService.activeCompanyIds;
+                activeCompanyIds.push(suggestedCompany.id);
+                this.companyService.setCompanies(activeCompanyIds, true);
+            } else {
+                throw error;
+            }
         });
 
         // select footers that are not in subviews and move them to another arch
@@ -222,9 +239,10 @@ export class FormController extends Component {
         }
 
         this.rootRef = useRef("root");
-        useViewButtons(this.model, this.rootRef, {
+        useViewButtons(this.rootRef, {
             beforeExecuteAction: this.beforeExecuteActionButton.bind(this),
             afterExecuteAction: this.afterExecuteActionButton.bind(this),
+            reload: () => this.model.load(),
         });
 
         const state = this.props.state || {};
@@ -286,6 +304,12 @@ export class FormController extends Component {
                 () => [this.model.root.isInEdition]
             );
         }
+
+        useExternalListener(document, "visibilitychange", () => {
+            if (document.visibilityState === "hidden") {
+                this.model.root.save();
+            }
+        });
     }
 
     get modelParams() {

@@ -1,9 +1,10 @@
 import { Domain } from "@web/core/domain";
-import { evaluateExpr, evaluateBooleanExpr } from "@web/core/py_js/py";
+import { evaluateBooleanExpr, evaluateExpr } from "@web/core/py_js/py";
 import { registry } from "@web/core/registry";
 import { utils } from "@web/core/ui/ui_service";
+import { exprToBoolean } from "@web/core/utils/strings";
 import { getFieldContext } from "@web/model/relational_model/utils";
-import { archParseBoolean, getClassNameFromDecoration, X2M_TYPES } from "@web/views/utils";
+import { X2M_TYPES, getClassNameFromDecoration } from "@web/views/utils";
 import { getTooltipInfo } from "./field_tooltip";
 
 import { Component, xml } from "@odoo/owl";
@@ -12,6 +13,62 @@ const isSmall = utils.isSmall;
 
 const viewRegistry = registry.category("views");
 const fieldRegistry = registry.category("fields");
+
+const supportedInfoValidation = {
+    type: Array,
+    element: Object,
+    shape: {
+        label: String,
+        name: String,
+        type: String,
+        availableTypes: { type: Array, element: String, optional: true },
+        default: { type: String, optional: true },
+        help: { type: String, optional: true },
+        choices: /* choices if type == selection */ {
+            type: Array,
+            element: Object,
+            shape: { label: String, value: String },
+            optional: true,
+        },
+    },
+    optional: true,
+};
+
+fieldRegistry.addValidation({
+    component: { validate: (c) => c.prototype instanceof Component },
+    displayName: { type: String, optional: true },
+    supportedAttributes: supportedInfoValidation,
+    supportedOptions: supportedInfoValidation,
+    supportedTypes: { type: Array, element: String, optional: true },
+    extractProps: { type: Function, optional: true },
+    isEmpty: { type: Function, optional: true },
+    isValid: { type: Function, optional: true }, // Override the validation for the validation visual feedbacks
+    additionalClasses: { type: Array, element: String, optional: true },
+    fieldDependencies: {
+        type: [Function, { type: Array, element: Object, shape: { name: String, type: String } }],
+        optional: true,
+    },
+    relatedFields: {
+        type: [
+            Function,
+            {
+                type: Array,
+                element: Object,
+                shape: {
+                    name: String,
+                    type: String,
+                    readonly: { type: Boolean, optional: true },
+                    selection: { type: Array, element: { type: Array, element: String } },
+                    optional: true,
+                },
+            },
+        ],
+        optional: true,
+    },
+    useSubView: { type: Boolean, optional: true },
+    label: { type: [String, { value: false }], optional: true },
+    listViewWidth: { type: [Number, [Number, Number], Function], optional: true },
+});
 
 class DefaultField extends Component {
     static template = xml``;
@@ -159,11 +216,11 @@ export class Field extends Component {
             if (["context", "string", "help", "domain"].includes(name)) {
                 fieldInfo[name] = value;
             } else if (name === "on_change") {
-                fieldInfo.onChange = archParseBoolean(value);
+                fieldInfo.onChange = exprToBoolean(value);
             } else if (name === "options") {
                 fieldInfo.options = evaluateExpr(value);
             } else if (name === "force_save") {
-                fieldInfo.forceSave = archParseBoolean(value);
+                fieldInfo.forceSave = exprToBoolean(value);
             } else if (name.startsWith("decoration-")) {
                 // prepare field decorations
                 fieldInfo.decorations[name.replace("decoration-", "")] = value;

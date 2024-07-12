@@ -1,5 +1,6 @@
 import { _t } from "@web/core/l10n/translation";
 import { registry } from "@web/core/registry";
+import { exprToBoolean } from "@web/core/utils/strings";
 import { combineModifiers } from "@web/model/relational_model/utils";
 
 export const X2M_TYPES = ["one2many", "many2many"];
@@ -33,19 +34,6 @@ export const BUTTON_CLICK_PARAMS = [
     // This should be refactor someday
     "noSaveDialog",
 ];
-
-/**
- * Parse the arch to check if is true or false
- * If the string is empty, 0, False or false it's considered as false
- * The rest is considered as true
- *
- * @param {string} str
- * @param {boolean} [trueIfEmpty=false]
- * @returns {boolean}
- */
-export function archParseBoolean(str, trueIfEmpty = false) {
-    return str ? !/^false|0$/i.test(str) : trueIfEmpty;
-}
 
 /**
  * @param {string?} type
@@ -165,13 +153,15 @@ export function getFormattedValue(record, fieldName, attrs) {
  * @returns {ViewActiveActions}
  */
 export function getActiveActions(rootNode) {
-    return {
+    const activeActions = {
         type: "view",
-        edit: archParseBoolean(rootNode.getAttribute("edit"), true),
-        create: archParseBoolean(rootNode.getAttribute("create"), true),
-        delete: archParseBoolean(rootNode.getAttribute("delete"), true),
-        duplicate: archParseBoolean(rootNode.getAttribute("duplicate"), true),
+        edit: exprToBoolean(rootNode.getAttribute("edit"), true),
+        create: exprToBoolean(rootNode.getAttribute("create"), true),
+        delete: exprToBoolean(rootNode.getAttribute("delete"), true),
     };
+    activeActions.duplicate =
+        activeActions.create && exprToBoolean(rootNode.getAttribute("duplicate"), true);
+    return activeActions;
 }
 
 export function getClassNameFromDecoration(decoration) {
@@ -222,7 +212,7 @@ export function isNull(value) {
 
 export function processButton(node) {
     const withDefault = {
-        close: (val) => archParseBoolean(val, false),
+        close: (val) => exprToBoolean(val, false),
         context: (val) => val || "{}",
     };
     const clickParams = {};

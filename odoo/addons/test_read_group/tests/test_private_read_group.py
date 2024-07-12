@@ -316,19 +316,22 @@ class TestPrivateReadGroup(common.TransactionCase):
             )
 
     def test_malformed_params(self):
-        Model = self.env['test_read_group.fill_temporal']
+        Model = self.env['test_read_group.order.line']
         # Test malformed groupby clause
         with self.assertRaises(ValueError):
-            Model._read_group([], ['date:bad_granularity'])
+            Model._read_group([], ['create_date:bad_granularity'])
 
         with self.assertRaises(ValueError):
-            Model._read_group([], ['Other stuff date:week'])
+            Model._read_group([], ['Other stuff create_date:week'])
 
         with self.assertRaises(ValueError):
-            Model._read_group([], ['date'])  # No granularity
+            Model._read_group([], ['create_date'])  # No granularity
 
         with self.assertRaises(ValueError):
-            Model._read_group([], ['"date:week'])
+            Model._read_group([], ['"create_date:week'])
+
+        with self.assertRaises(ValueError):
+            Model._read_group([], ['order_id.id'])
 
         # Test malformed aggregate clause
         with self.assertRaises(ValueError):
@@ -351,6 +354,9 @@ class TestPrivateReadGroup(common.TransactionCase):
 
         with self.assertRaises(ValueError):
             Model._read_group([], aggregates=['label:sum(value)'])
+
+        with self.assertRaises(ValueError):
+            Model._read_group([], aggregates=['order_id.create_date:min'])
 
         # Test malformed having clause
         with self.assertRaises(ValueError):
@@ -457,6 +463,48 @@ class TestPrivateReadGroup(common.TransactionCase):
             (fields.Date.to_date('2023-01-01'),),
             (False,),
             (fields.Date.to_date('2022-01-01'),),
+        ])
+
+    def test_groupby_date_part_number(self):
+        """ Test grouping by date part number (ex. month_number gives 1 for January) """
+        Model = self.env['test_read_group.fill_temporal']
+        Model.create({})  # Falsy date
+        Model.create({'date': '2022-01-29'})  # W4, M1, Q1
+        Model.create({'date': '2022-01-29'})  # W4, M1, Q1
+        Model.create({'date': '2022-01-30'})  # W4, M1, Q1
+        Model.create({'date': '2022-01-31'})  # W5, M1, Q1
+        Model.create({'date': '2022-02-01'})  # W5, M2, Q1
+        Model.create({'date': '2022-05-29'})  # W21, M5, Q2
+        Model.create({'date': '2023-01-29'})  # W4, M1, Q1
+
+        result = Model._read_group([], ['date:iso_week_number'], ['__count'])
+        self.assertEqual(result, [
+            (4, 4),  # week 4 has 4 records
+            (5, 2),  # week 5 has 2 records
+            (21, 1),  # week 21 has 1 record
+            (False, 1),
+        ])
+
+        result = Model._read_group([], ['date:month_number'], ['__count'])
+        self.assertEqual(result, [
+            (1, 5),  # month 1 has 5 records
+            (2, 1),  # month 2 has 1 record
+            (5, 1),  # month 5 has 1 record
+            (False, 1),
+        ])
+
+        result = Model._read_group([], ['date:quarter_number'], ['__count'])
+        self.assertEqual(result, [
+            (1, 6),  # quarter 1 has 6 records
+            (2, 1),  # quarter 2 has 1 record
+            (False, 1),
+        ])
+
+        result = Model._read_group([], ['date:quarter_number'], ['__count'], order="date:quarter_number DESC")
+        self.assertEqual(result, [
+            (False, 1),
+            (2, 1),
+            (1, 6),
         ])
 
     def test_groupby_datetime(self):
@@ -959,3 +1007,8 @@ class TestPrivateReadGroup(common.TransactionCase):
 
         with self.assertRaises(ValueError):
             Model._read_group([], [], ['user_ids:array_agg'])
+
+    def test_many2many_compute_not_groupable(self):
+        Model = self.env['test_read_group.related_bar']
+        field_info = Model.fields_get(['computed_base_ids'], ['groupable'])
+        self.assertFalse(field_info['computed_base_ids']['groupable'])

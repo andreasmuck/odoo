@@ -10,8 +10,8 @@
                 <head>
                     <title><t t-esc="slide.name"/></title>
                     <t t-call-assets="website_slides.slide_embed_assets"/>
-                    <script type="module" src="/web/static/lib/pdfjs/build/pdf.mjs"/>
-                    <script type="module" src="/web/static/lib/pdfjs/build/pdf.worker.mjs"/>
+                    <script type="module" src="/web/static/lib/pdfjs/build/pdf.js"/>
+                    <script type="module" src="/web/static/lib/pdfjs/build/pdf.worker.js"/>
                 </head>
                 <body>
                     <div id="PDFViewer" class="o_wslides_fs_pdf_viewer d-flex flex-column h-100">
@@ -45,7 +45,7 @@
                                 <t t-call="website_slides.slide_share_modal">
                                     <t t-set="record" t-value="slide"/>
                                     <t t-set="email_sharing" t-value="slide.channel_id.share_slide_template_id"/>
-                                    <t t-set="website_share_url" t-value="slide.channel_id.website_url"/>
+                                    <t t-set="website_share_url" t-value="slide.website_share_url"/>
                                     <t t-set="include_embed" t-value="True"/>
                                     <t t-set="embed_hide_starting_page" t-value="True"/>
                                 </t>

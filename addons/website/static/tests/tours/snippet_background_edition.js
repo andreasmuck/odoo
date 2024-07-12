@@ -24,6 +24,7 @@ function switchTo(type, _name) {
     return {
         trigger: `.o_we_colorpicker_switch_pane_btn[data-target="${target}"]`,
         content: `Switch to ${name}`,
+        run: "click",
     };
 }
 
@@ -38,15 +39,16 @@ function addCheck(steps, checkX, checkNoX, xType, noSwitch = false) {
     const step = {
         trigger: selectorCheckX || selectorCheckNoX,
         content: `The correct ${name} is marked as selected`,
-        position: 'bottom',
-        run: () => null,
+        position: "bottom",
     };
-    if (!selectorCheckX && selectorCheckNoX) {
-        step.extra_trigger = selectorCheckNoX;
-    }
-
     if (!noSwitch) {
         steps.push(switchTo(xType, name));
+    }
+    if (!selectorCheckX && selectorCheckNoX) {
+        steps.push({
+            isActive: ["auto"],
+            trigger: selectorCheckNoX,
+        });
     }
     steps.push(step);
 }
@@ -63,6 +65,7 @@ function checkAndUpdateBackgroundColor({
         {
             content: "Switch back to theme tab from custom tab",
             trigger: ".colorpicker button[data-target='color-combinations']", // Switch back to theme tab
+            run: "click",
         },
     ];
 
@@ -100,30 +103,32 @@ wTourUtils.registerWebsitePreviewTour('snippet_background_edition', {
     test: true,
 },
 () => [
-wTourUtils.dragNDrop(snippets[0]),
-wTourUtils.clickOnSnippet(snippets[0]),
+...wTourUtils.dragNDrop(snippets[0]),
+...wTourUtils.clickOnSnippet(snippets[0]),
 
 // Set background image and save.
 {
     content: "Click on camera icon",
     trigger: ".snippet-option-ColoredLevelBackground we-button.fa-camera",
+    run: "click",
 },
 {
     content: "Click on image",
     trigger: ".o_select_media_dialog img[title='test.png']",
+    run: "click",
 },
 ...wTourUtils.clickOnSave(),
 {
     content: "Check that the image is set",
     trigger: `:iframe section.${snippets[0].id} img[data-original-id]`,
-    isCheck: true,
 },
 ...wTourUtils.clickOnEditAndWaitEditMode(),
-wTourUtils.clickOnSnippet(snippets[0]),
+...wTourUtils.clickOnSnippet(snippets[0]),
 // Remove background image.
 {
     content: "Click on camera icon",
     trigger: ".snippet-option-ColoredLevelBackground we-button.fa-camera",
+    run: "click",
 },
 
 // Add a color combination
@@ -213,11 +218,13 @@ wTourUtils.clickOnSnippet(snippets[0]),
     // Close the palette before selecting a media.
     trigger: '.snippet-option-ColoredLevelBackground we-title',
     content: 'Close palette',
+    run: "click",
 },
 wTourUtils.changeOption('ColoredLevelBackground', '[data-name="bg_image_toggle_opt"]'),
 {
     trigger: '.o_existing_attachment_cell img',
     content: "Select an image in the media dialog",
+    run: "click",
 },
 {
     trigger: `:iframe .${snippets[0].id}.o_cc.o_cc1`,
@@ -263,7 +270,10 @@ switchTo('gradient'),
     updateStep: {
         trigger: '.colorpicker .o_custom_gradient_scale',
         content: 'Add step',
-        run: 'click',
+        run() {
+            // TODO: use run: "click", instead
+            this.anchor.click();
+        }
     },
     checkGradient: 'linear-gradient(135deg, rgb(203, 94, 238) 0%, rgb(203, 94, 238) 0%, rgb(75, 225, 236) 100%)',
 }),
@@ -282,7 +292,8 @@ switchTo('gradient'),
     updateStep: {
         trigger: '.colorpicker .o_color_picker_inputs .o_hex_div input',
         content: 'Pick step color',
-        run: 'text #FF0000',
+        // TODO: remove && click
+        run: "edit #FF0000 && click .o_color_picker_inputs",
     },
     checkGradient: 'linear-gradient(135deg, rgb(203, 94, 238) 0%, rgb(255, 0, 0) 45%, rgb(75, 225, 236) 100%)',
 }),
@@ -299,7 +310,7 @@ switchTo('gradient'),
     updateStep: {
         trigger: '.colorpicker input[data-name="angle"]',
         content: 'Change angle',
-        run: 'text_blur 50',
+        run: "edit 50 && click .o_color_picker_inputs",
     },
     checkGradient: 'linear-gradient(50deg, rgb(203, 94, 238) 0%, rgb(75, 225, 236) 100%)',
 }),
@@ -316,7 +327,7 @@ switchTo('gradient'),
     updateStep: {
         trigger: '.colorpicker input[data-name="positionX"]',
         content: 'Change X position',
-        run: 'text_blur 33',
+        run: "edit 33 && click .o_color_picker_inputs",
     },
     checkGradient: 'radial-gradient(circle farthest-side at 33% 25%, rgb(203, 94, 238) 0%, rgb(75, 225, 236) 100%)',
 }),
@@ -324,7 +335,7 @@ switchTo('gradient'),
     updateStep: {
         trigger: '.colorpicker input[data-name="positionY"]',
         content: 'Change Y position',
-        run: 'text_blur 75',
+        run: "edit 75 && click .o_color_picker_inputs",
     },
     checkGradient: 'radial-gradient(circle farthest-side at 33% 75%, rgb(203, 94, 238) 0%, rgb(75, 225, 236) 100%)',
 }),
@@ -390,6 +401,7 @@ wTourUtils.changeOption('ColoredLevelBackground', '[data-name="bg_image_toggle_o
 {
     trigger: '.o_colorpicker_reset',
     content: "Click on the None button of the color palette",
+    run: "click",
 },
 {
     trigger: `:iframe .${snippets[0].id}:not(.o_cc):not(.o_cc1):not([style*="background-image"])`,

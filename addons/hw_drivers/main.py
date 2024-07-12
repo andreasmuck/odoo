@@ -50,7 +50,7 @@ class Manager(Thread):
                 'identifier': helpers.get_mac_address(),
                 'ip': domain,
                 'token': helpers.get_token(),
-                'version': helpers.get_version(),
+                'version': helpers.get_version(detailed_version=True),
             }
             devices_list = {}
             for device in iot_devices:
@@ -78,9 +78,10 @@ class Manager(Thread):
                 )
                 if iot_client:
                     iot_client.iot_channel = json.loads(resp.data).get('result', '')
-            except Exception as e:
-                _logger.error('Could not reach configured server')
-                _logger.error('A error encountered : %s ' % e)
+            except json.decoder.JSONDecodeError:
+                _logger.exception('Could not load JSON data: Received data is not in valid JSON format\ncontent:\n%s', resp.data)
+            except Exception:
+                _logger.exception('Could not reach configured server')
         else:
             _logger.warning('Odoo server not set')
 
@@ -90,7 +91,7 @@ class Manager(Thread):
         """
 
         helpers.start_nginx_server()
-        _logger.info("IoT Box Image version: %s", helpers.get_version())
+        _logger.info("IoT Box Image version: %s", helpers.get_version(detailed_version=True))
         if platform.system() == 'Linux' and helpers.get_odoo_server_url():
             helpers.check_git_branch()
             helpers.generate_password()
@@ -119,7 +120,7 @@ class Manager(Thread):
         schedule and schedule.every().day.at("00:00").do(helpers.get_certificate_status)
 
         #Setup the websocket connection
-        if helpers.get_odoo_server_url():
+        if helpers.get_odoo_server_url() and iot_client.iot_channel:
             iot_client.start()
         # Check every 3 secondes if the list of connected devices has changed and send the updated
         # list to the connected DB.

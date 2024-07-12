@@ -69,44 +69,48 @@ class ResPartner(models.Model):
 
         europe = self.env.ref('base.europe', raise_if_not_found=False)
         in_eu = not europe or not self.country_id or self.country_id in europe.country_ids
+        is_sm = self.country_id and self.country_id.code == "SM"
 
         # VAT number and country code
         normalized_vat = self.vat
-        normalized_country = False
-        if self.vat:
+        normalized_country = self.country_code
+        has_vat = self.vat and not self.vat in ['/', 'NA']
+        if has_vat:
             normalized_vat = self.vat.replace(' ', '')
             if in_eu:
                 # If there is no country-code prefix, it's domestic to Italy
                 if normalized_vat[:2].isdecimal():
-                    normalized_country = 'IT'
+                    if not normalized_country:
+                        normalized_country = 'IT'
                 # If the partner is from the EU, the country-code prefix of the VAT must be taken away
                 else:
-                    normalized_country = normalized_vat[:2].upper()
+                    if not normalized_country:
+                        normalized_country = normalized_vat[:2].upper()
                     normalized_vat = normalized_vat[2:]
-
+            # If customer is from San Marino
+            elif is_sm:
+                normalized_vat = normalized_vat if normalized_vat[:2].isdecimal() else normalized_vat[2:]
             # The Tax Agency arbitrarily decided that non-EU VAT are not interesting,
             # so this default code is used instead
             # Detect the country code from the partner country instead
             else:
                 normalized_vat = 'OO99999999999'
 
-        if not normalized_country:
-            if self.country_id:
-                normalized_country = self.country_id.code
-            # If it has a codice fiscale (and no country), it's an Italian partner
-            elif self.l10n_it_codice_fiscale:
-                normalized_country = 'IT'
-
-        elif not self.vat and self.country_id and self.country_id.code != 'IT':
+        # If it has a codice fiscale (and no country), it's an Italian partner
+        if not normalized_country and self.l10n_it_codice_fiscale:
+            normalized_country = 'IT'
+        elif not has_vat and self.country_id and self.country_id.code != 'IT':
             normalized_vat = '0000000'
-            normalized_country = self.country_id.code
 
         if normalized_country == 'IT':
             pa_index = (self.l10n_it_pa_index or '0000000').upper()
             zipcode = self.zip
             state_code = self.state_id and self.state_id.code
         else:
-            pa_index = 'XXXXXXX'
+            # San Marino is externally integrated with the SdI.
+            # The country as a whole has a single fixed Destination Code.
+            # https://www.agenziaentrate.gov.it/portale/documents/20143/3788702/Modifiche+ProvvedimentonSanMarino+0248717-2021.pdf/429b5571-17b9-0cce-7f62-f79cf53086d7
+            pa_index = '2R4GTO8' if is_sm else 'XXXXXXX'
             zipcode = '00000'
             state_code = False
 
@@ -177,7 +181,7 @@ class ResPartner(models.Model):
             for fields_tuple in check['fields']:
                 if invalid_records := self.filtered(lambda record: not any(record[field] for field in fields_tuple)):
                     views = single_views if len(invalid_records) == 1 else multi_views
-                    errors[key] = {
+                    errors[f"l10n_it_edi_{key}"] = {
                         'message': check['message'],
                         'action_text': _("View Partner(s)"),
                         'action': invalid_records._get_records_action(name=_("Check Partner(s)"), views=views),

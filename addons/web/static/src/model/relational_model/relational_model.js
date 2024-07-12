@@ -59,12 +59,14 @@ import { FetchRecordError } from "./errors";
  * @property {number} [countLimit]
  * @property {number} [groupsLimit]
  * @property {Object} [groups]
+ * @property {Object} [currentGroups] // FIXME: could be cleaned
  * @property {boolean} [openGroupsByDefault]
  */
 
 /**
  * @typedef Hooks
  * @property {(nextConfiguration: Config) => void} [onWillLoadRoot]
+ * @property {() => Promise} [onRootLoaded]
  * @property {Function} [onWillSaveRecord]
  * @property {Function} [onRecordSaved]
  * @property {Function} [onWillSaveMulti]
@@ -81,6 +83,7 @@ import { FetchRecordError } from "./errors";
 
 const DEFAULT_HOOKS = {
     onWillLoadRoot: () => {},
+    onRootLoaded: () => {},
     onWillSaveRecord: () => {},
     onRecordSaved: () => {},
     onWillSaveMulti: () => {},
@@ -168,9 +171,11 @@ export class RelationalModel extends Model {
      */
     async load(params = {}) {
         const config = this._getNextConfig(this.config, params);
+        this.hooks.onWillLoadRoot(config);
         const data = await this.keepLast.add(this._loadData(config));
         this.root = this._createRoot(config, data);
         this.config = config;
+        return this.hooks.onRootLoaded();
     }
 
     // -------------------------------------------------------------------------
@@ -271,6 +276,9 @@ export class RelationalModel extends Model {
             if (!shallowEqual(config.groupBy || [], currentGroupBy || [])) {
                 delete config.groups;
             }
+            if (!config.groupBy.length) {
+                config.orderBy = config.orderBy.filter((order) => order.name !== "__count");
+            }
         }
         if (!config.isMonoRecord && this.root) {
             // always reset the offset to 0 when reloading from above
@@ -295,9 +303,6 @@ export class RelationalModel extends Model {
      * @param {Config} config
      */
     async _loadData(config) {
-        if (config.isRoot) {
-            this.hooks.onWillLoadRoot(config);
-        }
         if (config.isMonoRecord) {
             const evalContext = getBasicEvalContext(config);
             if (!config.resId) {
@@ -364,8 +369,8 @@ export class RelationalModel extends Model {
         const orderBy = config.orderBy.filter(
             (o) =>
                 o.name === firstGroupByName ||
-                (o.name in config.activeFields &&
-                    config.fields[o.name].aggregator !== undefined)
+                o.name === "__count" ||
+                (o.name in config.activeFields && config.fields[o.name].aggregator !== undefined)
         );
         const response = await this._webReadGroup(config, orderBy);
         const { groups: groupsData, length } = response;
@@ -453,6 +458,7 @@ export class RelationalModel extends Model {
                 const prom = this._loadData(groupConfig.list).then((response) => {
                     if (groupBy.length) {
                         group.groups = response ? response.groups : [];
+                        group.length = response ? response.length : 0;
                     } else {
                         group.records = response ? response.records : [];
                     }
@@ -467,6 +473,10 @@ export class RelationalModel extends Model {
                 resIds: groupRecordResIds,
             }).then((records) => {
                 for (const group of groups) {
+                    if (!group.value) {
+                        group.values = { id: false };
+                        continue;
+                    }
                     group.values = records.find((r) => group.value && r.id === group.value);
                 }
             });
@@ -476,25 +486,33 @@ export class RelationalModel extends Model {
 
         // if a group becomes empty at some point (e.g. we dragged its last record out of it), and the view is reloaded
         // with the same domain and groupbys, we want to keep the empty group in the UI
-        if (
-            config.currentGroups &&
-            config.currentGroups.params ===
-                JSON.stringify([config.domain, config.groupBy, config.offset, config.limit])
-        ) {
+        const params = JSON.stringify([
+            config.domain,
+            config.groupBy,
+            config.offset,
+            config.limit,
+            config.orderBy,
+        ]);
+        if (config.currentGroups && config.currentGroups.params === params) {
             const currentGroups = config.currentGroups.groups;
-            for (const group of currentGroups) {
+            currentGroups.forEach((group, index) => {
                 if (
                     config.groups[group.value] &&
                     !groups.some((g) => JSON.stringify(g.value) === JSON.stringify(group.value))
                 ) {
-                    groups.push(Object.assign({}, group, { count: 0, length: 0, records: [] }));
+                    const aggregates = Object.assign({}, group.aggregates);
+                    for (const key in aggregates) {
+                        aggregates[key] = 0;
+                    }
+                    groups.splice(
+                        index,
+                        0,
+                        Object.assign({}, group, { count: 0, length: 0, records: [], aggregates })
+                    );
                 }
-            }
+            });
         }
-        config.currentGroups = {
-            params: JSON.stringify([config.domain, config.groupBy, config.offset, config.limit]),
-            groups,
-        };
+        config.currentGroups = { params, groups };
 
         return { groups, length };
     }
@@ -546,10 +564,11 @@ export class RelationalModel extends Model {
      * @returns
      */
     async _loadUngroupedList(config) {
+        const orderBy = config.orderBy.filter((o) => o.name !== "__count");
         const kwargs = {
             specification: getFieldsSpec(config.activeFields, config.fields, config.context),
             offset: config.offset,
-            order: orderByToString(config.orderBy),
+            order: orderByToString(orderBy),
             limit: config.limit,
             context: { bin_size: true, ...config.context },
             count_limit:
@@ -618,11 +637,17 @@ export class RelationalModel extends Model {
 
         let data;
         if (reload) {
+            if (tmpConfig.isRoot) {
+                this.hooks.onWillLoadRoot(tmpConfig);
+            }
             data = await this._loadData(tmpConfig);
         }
         Object.assign(config, tmpConfig);
         if (data && commit) {
             commit(data);
+        }
+        if (reload && config.isRoot) {
+            return this.hooks.onRootLoaded();
         }
     }
 
@@ -659,11 +684,9 @@ export class RelationalModel extends Model {
     }
 
     async _webReadGroup(config, orderBy) {
-        const aggregates = Object.values(config.fields).filter(
-            (field) => field.aggregator && field.name in config.activeFields
-        ).map(
-            (field) => `${field.name}:${field.aggregator}`
-        )
+        const aggregates = Object.values(config.fields)
+            .filter((field) => field.aggregator && field.name in config.activeFields)
+            .map((field) => `${field.name}:${field.aggregator}`);
         return this.orm.webReadGroup(
             config.resModel,
             config.domain,
@@ -673,7 +696,7 @@ export class RelationalModel extends Model {
                 orderby: orderByToString(orderBy),
                 lazy: true,
                 offset: config.offset,
-                limit: config.limit,  // TODO: remove limit when == MAX_integer
+                limit: config.limit, // TODO: remove limit when == MAX_integer
                 context: config.context,
             }
         );

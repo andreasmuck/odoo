@@ -12,6 +12,8 @@ export class CallActionList extends Component {
     static template = "discuss.CallActionList";
 
     setup() {
+        super.setup();
+        this.store = useState(useService("mail.store"));
         this.rtc = useState(useService("discuss.rtc"));
     }
 
@@ -23,7 +25,7 @@ export class CallActionList extends Component {
         const acts = [];
         acts.push({
             id: "raiseHand",
-            name: !this.rtc.state?.selfSession.raisingHand ? _t("Raise Hand") : _t("Lower Hand"),
+            name: !this.rtc.selfSession.raisingHand ? _t("Raise Hand") : _t("Lower Hand"),
             icon: "fa fa-fw fa-hand-paper-o",
             onSelect: (ev) => this.onClickRaiseHand(ev),
         });
@@ -69,7 +71,7 @@ export class CallActionList extends Component {
      * @param {MouseEvent} ev
      */
     async onClickDeafen(ev) {
-        if (this.rtc.state.selfSession.isDeaf) {
+        if (this.rtc.selfSession.isDeaf) {
             this.rtc.undeafen();
         } else {
             this.rtc.deafen();
@@ -77,18 +79,18 @@ export class CallActionList extends Component {
     }
 
     async onClickRaiseHand(ev) {
-        this.rtc.raiseHand(!this.rtc.state.selfSession.raisingHand);
+        this.rtc.raiseHand(!this.rtc.selfSession.raisingHand);
     }
 
     /**
      * @param {MouseEvent} ev
      */
     onClickMicrophone(ev) {
-        if (this.rtc.state.selfSession.isMute) {
-            if (this.rtc.state.selfSession.isSelfMuted) {
+        if (this.rtc.selfSession.isMute) {
+            if (this.rtc.selfSession.isSelfMuted) {
                 this.rtc.unmute();
             }
-            if (this.rtc.state.selfSession.isDeaf) {
+            if (this.rtc.selfSession.isDeaf) {
                 this.rtc.undeafen();
             }
         } else {

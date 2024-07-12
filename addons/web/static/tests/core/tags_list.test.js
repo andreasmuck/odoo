@@ -40,10 +40,10 @@ test("Can be rendered with different tags", async () => {
     expect(".o_tag").toHaveCount(3);
 
     click(".o_tag:nth-of-type(2) .o_delete");
-    expect(["tag2 delete button has been clicked"]).toVerifySteps();
+    expect.verifySteps(["tag2 delete button has been clicked"]);
 
     click(".o_tag:nth-of-type(3)");
-    expect(["tag3 has been clicked"]).toVerifySteps();
+    expect.verifySteps(["tag3 has been clicked"]);
 });
 
 test("Tags can be displayed with an image", async () => {
@@ -138,10 +138,10 @@ test("Limiting the visible tags displays a counter", async () => {
 
     await mountWithCleanup(Parent);
     expect(".o_tag").toHaveCount(2);
-    expect(".rounded-circle", {
+    expect(".rounded", {
         message: "the counter displays 4 more items",
     }).toHaveText("+4");
-    expect(JSON.parse(queryAttribute(".rounded-circle", "data-tooltip-info")), {
+    expect(JSON.parse(queryAttribute(".rounded", "data-tooltip-info")), {
         message: "the counter has a tooltip displaying other items",
     }).toEqual({
         tags: [

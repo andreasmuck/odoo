@@ -18,7 +18,7 @@ import { ViewScaleSelector } from "@web/views/view_components/view_scale_selecto
 import { CogMenu } from "@web/search/cog_menu/cog_menu";
 import { browser } from "@web/core/browser/browser";
 import { standardViewProps } from "@web/views/standard_view_props";
-import { getWeekNumber } from "@web/views/calendar/utils";
+import { getLocalWeekNumber } from "@web/core/l10n/dates";
 
 import { Component, useState } from "@odoo/owl";
 
@@ -77,6 +77,8 @@ export class CalendarController extends Component {
                 resModel: this.props.resModel,
                 domain: this.props.domain,
                 fields: this.props.fields,
+                allFilter: this.props.state?.allFilter ?? {},
+                date: this.props.state?.date,
             },
             {
                 onWillStart: this.onWillStartModel.bind(this),
@@ -159,7 +161,7 @@ export class CalendarController extends Component {
     }
 
     get currentWeek() {
-        return getWeekNumber(this.model.rangeStart);
+        return getLocalWeekNumber(this.model.rangeStart);
     }
 
     get rendererProps() {
@@ -342,8 +344,9 @@ export class CalendarController extends Component {
         const context = this.model.makeContextDefaults(rawRecord);
         return this.editRecord(record, context, false);
     }
-    deleteRecord(record) {
-        this.displayDialog(ConfirmationDialog, {
+
+    deleteConfirmationDialogProps(record) {
+        return {
             title: _t("Bye-bye, record!"),
             body: deleteConfirmationMessage,
             confirm: () => {
@@ -355,7 +358,11 @@ export class CalendarController extends Component {
                 // button but we do nothing on cancel.
             },
             cancelLabel: _t("No, keep it"),
-        });
+        };
+    }
+
+    deleteRecord(record) {
+        this.displayDialog(ConfirmationDialog, this.deleteConfirmationDialogProps(record));
     }
 
     onWillStartModel() {}
@@ -371,6 +378,9 @@ export class CalendarController extends Component {
                 break;
             case "today":
                 date = luxon.DateTime.local().startOf("day");
+                if (date.ts === this.date.startOf("day").ts) {
+                    this.model.bus.trigger("SCROLL_TO_CURRENT_HOUR", false);
+                }
                 break;
         }
         await this.model.load({ date });

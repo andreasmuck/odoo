@@ -60,7 +60,7 @@
                                                 <h3 t-field="job.name"/>
                                                 <span t-if="not job.website_published" class="badge bg-danger mb8">unpublished</span>
                                             </div>
-                                            <h5 t-if="job.no_of_recruitment >= 3" class="text-reset">
+                                            <h5 t-if="job.no_of_recruitment >= 1" class="text-reset">
                                                 <span t-field="job.no_of_recruitment"/> open positions
                                             </h5>
                                             <t t-set="job_desc_edition_placeholder">Insert a Job Description...</t>
@@ -146,7 +146,7 @@
                                 <div class="col-md-3">
                                     <div class="text-center">
                                         <br/>
-                                        <a role="button" t-attf-href="/jobs/apply/#{job.id}" class="btn btn-primary btn-lg">Apply Now!</a>
+                                        <a role="button" t-attf-href="/jobs/apply/#{slug(job)}" class="btn btn-primary btn-lg">Apply Now!</a>
                                     </div>
                                 </div>
                             </div>
@@ -158,7 +158,7 @@
                 <div class="oe_structure">
                     <section class="o_job_bottom_bar mt24 mb48">
                         <div class="text-center">
-                            <a role="button" t-attf-href="/jobs/apply/#{job.id}" class="btn btn-primary btn-lg">Apply Now!</a>
+                            <a role="button" t-attf-href="/jobs/apply/#{slug(job)}" class="btn btn-primary btn-lg">Apply Now!</a>
                         </div>
                     </section>
                 </div>
@@ -239,7 +239,7 @@
                                             <div class="col-sm">
                                                 <input id="recruitment3" type="tel"
                                                     class="form-control s_website_form_input"
-                                                    name="partner_mobile" required=""
+                                                    name="partner_phone" required=""
                                                     data-fill-with="phone"/>
                                                 <div class="alert alert-warning mt-2" id="phone-message" style="display:none;"></div>
                                             </div>
@@ -332,12 +332,15 @@
                             <span class="text-muted small">Job</span>
                             <h6 t-field="job.name"/>
                         </div>
-                        <div t-if="job.address_id" class="d-flex flex-column align-items-baseline">
+                        <div class="d-flex flex-column align-items-baseline">
                             <span class="text-muted small">Location</span>
-                            <h6 t-field="job.address_id" t-options='{
+                            <h6 t-if="job.address_id" t-field="job.address_id" t-options='{
+                                "widget": "contact",
                                 "fields": ["city"],
-                                "no_tag_br": True
+                                "no_tag_br": True,
+                                "no_marker": True
                             }'/>
+                            <h6 t-else="">Remote</h6>
                         </div>
                         <div t-if="job.department_id" class="d-flex flex-column align-items-baseline">
                             <span class="text-muted small">Department</span>
@@ -889,8 +892,8 @@
                                 We are a team of passionate people whose goal is to improve everyone's life through disruptive products.
                                 We build great products to solve your business problems.
                             </p>
-                            <div class="s_hr text-start pt16 pb16" data-snippet="s_hr" data-name="Separator">
-                                <hr class="w-100 mx-auto" style="border-top-width: 1px; border-top-style: solid; border-top-color: var(--400)  !important;"/>
+                            <div class="s_hr pt16 pb16" data-snippet="s_hr" data-name="Separator">
+                                <hr class="w-100 mx-auto" style="border-top-color: var(--400)  !important;"/>
                             </div>
                             <div id="connect">
                                 <ul class="list-unstyled text-nowrap">
@@ -904,7 +907,7 @@
                                     <a href="/website/social/facebook" class="s_social_media_facebook text-decoration-none" target="_blank" aria-label="Facebook">
                                         <i class="fa fa-facebook rounded-empty-circle btn btn-outline-primary shadow-sm"></i>
                                     </a>
-                                    <a href="/website/social/twitter" class="s_social_media_twitter text-decoration-none" target="_blank" aria-label="Twitter">
+                                    <a href="/website/social/twitter" class="s_social_media_twitter text-decoration-none" target="_blank" aria-label="X">
                                         <i class="fa fa-twitter rounded-empty-circle btn btn-outline-primary shadow-sm"></i>
                                     </a>
                                     <a href="/website/social/linkedin" class="s_social_media_linkedin text-decoration-none" target="_blank" aria-label="LinkedIn">

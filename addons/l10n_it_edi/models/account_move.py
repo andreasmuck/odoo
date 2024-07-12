@@ -4,7 +4,6 @@ from base64 import b64encode
 from datetime import datetime
 import logging
 from lxml import etree
-from markupsafe import escape
 import uuid
 
 from odoo import _, api, Command, fields, models
@@ -42,7 +41,7 @@ def get_datetime(tree, xpath):
     """ Datetimes in FatturaPA are ISO 8601 date format, pattern '[-]CCYY-MM-DDThh:mm:ss[Z|(+|-)hh:mm]'
         Python 3.7 -> 3.11 doesn't support 'Z'.
     """
-    if (datetime_str := get_text(tree, xpath)):
+    if datetime_str := get_text(tree, xpath):
         try:
             return datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
         except (ValueError, TypeError):
@@ -200,8 +199,32 @@ class AccountMove(models.Model):
         """
         self.ensure_one()
 
-        if self._l10n_it_edi_export_data_check():
-            raise UserError(_("The invoices you're trying to send have incomplete or incorrect data, please verify before sending."))
+        if errors := self._l10n_it_edi_export_data_check():
+            messages = []
+            for error_key, error_data in errors.items():
+                message = error_data['message']
+                split = error_key.split("_")
+                if len(split) > 3 and (model_id := {
+                    'partner': 'res.partner',
+                    'move': 'account.move',
+                    'company': 'res.company'
+                }.get(split[3], None)):
+                    if action := error_data.get('action'):
+                        if 'res_id' in action:
+                            record_ids = [action['res_id']]
+                        else:
+                            record_ids = action['domain'][0][2]
+                        records = self.env[model_id].browse(record_ids)
+                        message = f"{message} - {', '.join(records.mapped('display_name'))}"
+                messages.append(nl2br(message))
+
+            # Update the vendor bill's header with the warning messages,
+            # and force reload the view to make sure the header is loaded
+            self.l10n_it_edi_header = Markup('<br/>').join(messages)
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'reload',
+            }
 
         attachment_vals = self._l10n_it_edi_get_attachment_values(pdf_values=None)
         self.env['ir.attachment'].create(attachment_vals)
@@ -242,20 +265,27 @@ class AccountMove(models.Model):
         """
         invoice_lines = []
         lines = self.invoice_line_ids.filtered(lambda l: l.display_type not in ('line_note', 'line_section'))
-        for num, line in enumerate(lines):
-            sign = -1 if line.move_id.is_inbound() else 1
-            price_subtotal = (line.balance * sign) if convert_to_euros else line.price_subtotal
-            # The price_subtotal should be inverted when the line is a reverse charge refund.
-            if reverse_charge_refund:
-                price_subtotal = -price_subtotal
-
-            # Unit price
-            price_unit = 0
-            if line.quantity and line.discount != 100.0:
-                price_unit = price_subtotal / ((1 - (line.discount or 0.0) / 100.0) * abs(line.quantity))
+        base_lines = [invl._convert_to_tax_base_line_dict() for invl in lines]
+        inverse_factor = (-1 if reverse_charge_refund else 1)
+        for num, line in enumerate(base_lines):
+            line['sequence'] = num
+            line['price_subtotal'] = line['price_subtotal'] * inverse_factor
+            if line['discount'] != 100.0 and line['quantity']:
+                gross_price = line['price_subtotal'] / (1 - line['discount'] / 100.0)
+                line['discount_amount_before_dispatching'] = (gross_price - line['price_subtotal']) * inverse_factor
+                line['gross_price_subtotal'] = line['currency'].round(gross_price * inverse_factor)
+                line['price_unit'] = line['currency'].round(gross_price / abs(line['quantity']))
             else:
-                price_unit = line.price_unit
+                line['gross_price_subtotal'] = line['currency'].round(line['price_unit'] * line['quantity'])
+                line['discount_amount_before_dispatching'] = line['gross_price_subtotal']
 
+        dispatch_result = self.env['account.tax']._dispatch_negative_lines(base_lines)
+        if dispatch_result['orphan_negative_lines']:
+            raise UserError(_("You have negative lines that we can't dispatch on others. They need to have the same tax."))
+        base_lines = sorted(dispatch_result['result_lines'] + dispatch_result['nulled_candidate_lines'], key=lambda line: line['sequence'])
+
+        for num, line_dict in enumerate(base_lines):
+            line = line_dict['record']
             description = line.name
 
             # Down payment lines:
@@ -273,8 +303,9 @@ class AccountMove(models.Model):
                 'line': line,
                 'line_number': num + 1,
                 'description': description or 'NO NAME',
-                'unit_price': price_unit,
-                'subtotal_price': price_subtotal,
+                'subtotal_price': (line_dict['gross_price_subtotal'] - line_dict['discount_amount']) * inverse_factor,
+                'unit_price': line_dict['price_unit'],
+                'discount_amount': line_dict['discount_amount'] - line_dict['discount_amount_before_dispatching'],
                 'vat_tax': line.tax_ids.flatten_taxes_hierarchy().filtered(lambda t: t._l10n_it_filter_kind('vat') and t.amount >= 0),
                 'downpayment_moves': downpayment_moves,
                 'discount_type': (
@@ -478,7 +509,7 @@ class AccountMove(models.Model):
         return bool(
             template_reference
             and not self.l10n_it_edi_is_self_invoice
-            and list(buyer._l10n_it_edi_export_check(checks).keys()) == ['partner_address_missing']
+            and list(buyer._l10n_it_edi_export_check(checks).keys()) == ['l10n_it_edi_partner_address_missing']
             and (not buyer.country_id or buyer.country_id.code == 'IT')
             and (buyer.l10n_it_codice_fiscale or (buyer.vat and (buyer.vat[:2].upper() == 'IT' or buyer.vat[:2].isdecimal())))
             and self.amount_total <= 400
@@ -589,6 +620,25 @@ class AccountMove(models.Model):
         mapping = self._l10n_it_edi_document_type_mapping()
         return mapping.get(document_type, {}).get('simplified', False)
 
+    @api.model
+    def _l10n_it_buyer_seller_info(self):
+        return {
+            'buyer': {
+                'role': 'buyer',
+                'section_xpath': '//CessionarioCommittente',
+                'vat_xpath': '//CessionarioCommittente//IdCodice',
+                'codice_fiscale_xpath': '//CessionarioCommittente//CodiceFiscale',
+                'type_tax_use_domain': [('type_tax_use', '=', 'purchase')],
+            },
+            'seller': {
+                'role': 'seller',
+                'section_xpath': '//CedentePrestatore',
+                'vat_xpath': '//CedentePrestatore//IdCodice',
+                'codice_fiscale_xpath': '//CedentePrestatore//CodiceFiscale',
+                'type_tax_use_domain': [('type_tax_use', '=', 'sale')],
+            },
+        }
+
     # -------------------------------------------------------------------------
     # EDI: Import
     # -------------------------------------------------------------------------
@@ -669,7 +719,7 @@ class AccountMove(models.Model):
             ):
                 self.env.cr.commit()
                 moves |= move
-                proxy_acks.append(id_transaction)
+            proxy_acks.append(id_transaction)
 
         # Extend created moves with the related attachments and commit
         for move in moves:
@@ -687,12 +737,13 @@ class AccountMove(models.Model):
             :param proxy_user:     the AccountEdiProxyClientUser to use for decrypting the file
         """
 
-        # Name should be unique, the invoice already exists
-        Attachment = self.env['ir.attachment']
+        # Name should be unique per company, the invoice already exists
+        Attachment = self.env['ir.attachment'].sudo().with_company(proxy_user.company_id)
         if Attachment.search_count([
             ('name', '=', filename),
             ('res_model', '=', 'account.move'),
             ('res_field', '=', 'l10n_it_edi_attachment_file'),
+            ('company_id', '=', proxy_user.company_id.id),
         ], limit=1):
             _logger.warning('E-invoice already exists: %s', filename)
             return False
@@ -705,7 +756,7 @@ class AccountMove(models.Model):
             return False
 
         # Create the attachment, an empty move, then attach the two and commit
-        move = self.create({})
+        move = self.with_company(proxy_user.company_id).create({})
         attachment = Attachment.create({
             'name': filename,
             'raw': decrypted_content,
@@ -737,7 +788,6 @@ class AccountMove(models.Model):
         domain = [
             *self.env['account.tax']._check_company_domain(company),
             ('amount_type', '=', 'percent'),
-            ('type_tax_use', '=', 'purchase'),
         ] + (extra_domain or [])
 
         # We suppose we're importing a file that comes in as a customer invoice where the sale tax will be 0%.
@@ -757,10 +807,13 @@ class AccountMove(models.Model):
 
         return taxes[0] if taxes else taxes
 
-    def _l10n_it_edi_get_extra_info(self, company, document_type, body_tree):
+    def _l10n_it_edi_get_extra_info(self, company, document_type, body_tree, incoming=True):
         """ This function is meant to collect other information that has to be inserted on the invoice lines by submodules.
             :return extra_info, messages_to_log"""
-        return {'simplified': self.env['account.move']._l10n_it_edi_is_simplified_document_type(document_type)}, []
+        return {
+            'simplified': self.env['account.move']._l10n_it_edi_is_simplified_document_type(document_type),
+            'type_tax_use_domain': [('type_tax_use', '=', 'purchase' if incoming else 'sale')],
+        }, []
 
     def _l10n_it_edi_import_invoice(self, invoice, data, is_new):
         """ Decodes a l10n_it_edi move into an Odoo move.
@@ -770,8 +823,40 @@ class AccountMove(models.Model):
         :param is_new: whether the move is newly created or to be updated
         :returns:      the imported move
         """
+        buyer_seller_info = self._l10n_it_buyer_seller_info()
+
         tree = data['xml_tree']
         company = self.company_id
+
+        # There are 2 cases:
+        # - cron:
+        #     * Move direction (incoming / outgoing) flexible (no 'default_move_type')
+        #     * I.e. used for import from tax agency
+        # - "Upload" button (invoices / bills view)
+        #     * Fixed move direction; the button sets the 'default_move_type'
+        default_move_type = self.env.context.get('default_move_type')
+        if default_move_type is None:
+            incoming_possibilities = [True, False]
+        elif default_move_type in invoice.get_purchase_types(include_receipts=True):
+            incoming_possibilities = [True]
+        elif default_move_type in invoice.get_sale_types(include_receipts=True):
+            incoming_possibilities = [False]
+        else:
+            _logger.warning("Cannot handle default_move_type '%s'.", default_move_type)
+            return
+
+        for incoming in incoming_possibilities:
+            company_role, partner_role = ('buyer', 'seller') if incoming else ('seller', 'buyer')
+            company_info = buyer_seller_info[company_role]
+            vat = get_text(tree, company_info['vat_xpath'])
+            if vat and vat .casefold() in (company.vat or '').casefold():
+                break
+            codice_fiscale = get_text(tree, company_info['codice_fiscale_xpath'])
+            if codice_fiscale and codice_fiscale.casefold() in (company.l10n_it_codice_fiscale or '').casefold():
+                break
+        else:
+            invoice.message_post(body=_("Your company's VAT number and Fiscal Code haven't been found in the buyer and/or seller sections inside the document."))
+            return
 
         # For unsupported document types, just assume in_invoice, and log that the type is unsupported
         document_type = get_text(tree, '//DatiGeneraliDocumento/TipoDocumento')
@@ -779,6 +864,8 @@ class AccountMove(models.Model):
         if not move_type:
             move_type = "in_invoice"
             _logger.info('Document type not managed: %s. Invoice type is set by default.', document_type)
+        if not incoming and move_type.startswith('in_'):
+            move_type = 'out' + move_type[2:]
 
         self.move_type = move_type
 
@@ -788,18 +875,19 @@ class AccountMove(models.Model):
             self._compute_name()
 
         # Collect extra info from the XML that may be used by submodules to further put information on the invoice lines
-        extra_info, message_to_log = self._l10n_it_edi_get_extra_info(company, document_type, tree)
+        extra_info, message_to_log = self._l10n_it_edi_get_extra_info(company, document_type, tree, incoming=incoming)
 
         # Partner
-        vat = get_text(tree, '//CedentePrestatore//IdCodice')
-        codice_fiscale = get_text(tree, '//CedentePrestatore//CodiceFiscale')
-        email = get_text(tree, '//DatiTrasmissione//Email')
+        partner_info = buyer_seller_info[partner_role]
+        vat = get_text(tree, partner_info['vat_xpath'])
+        codice_fiscale = get_text(tree, partner_info['codice_fiscale_xpath'])
+        email = get_text(tree, '//DatiTrasmissione//Email') if partner_info['role'] == 'seller' else ''
         if partner := self._l10n_it_edi_search_partner(company, vat, codice_fiscale, email):
             self.partner_id = partner
         else:
             message = Markup("<br/>").join((
-                _("Vendor not found, useful informations from XML file:"),
-                self._compose_info_message(tree, '//CedentePrestatore')
+                _("Partner not found, useful informations from XML file:"),
+                self._compose_info_message(tree, partner_info['section_xpath'])
             ))
             message_to_log.append(message)
 
@@ -1022,7 +1110,8 @@ class AccountMove(models.Model):
         move_line.tax_ids = []
         if percentage is not None:
             l10n_it_exempt_reason = get_text(element, './/Natura').upper() or False
-            if tax := self._l10n_it_edi_search_tax_for_import(company, percentage, None, l10n_it_exempt_reason=l10n_it_exempt_reason):
+            extra_domain = extra_info.get('type_tax_use_domain', [('type_tax_use', '=', 'purchase')])
+            if tax := self._l10n_it_edi_search_tax_for_import(company, percentage, extra_domain, l10n_it_exempt_reason=l10n_it_exempt_reason):
                 move_line.tax_ids += tax
             else:
                 message = Markup("<br/>").join((
@@ -1039,9 +1128,9 @@ class AccountMove(models.Model):
 
         # Discounts
         if elements := element.xpath('.//ScontoMaggiorazione'):
-            element = elements[0]
             # Special case of only 1 percentage discount
             if len(elements) == 1:
+                element = elements[0]
                 if discount_percentage := get_float(element, './/Percentuale'):
                     discount_type = get_text(element, './/Tipo')
                     discount_sign = -1 if discount_type == 'MG' else 1
@@ -1107,16 +1196,17 @@ class AccountMove(models.Model):
 
         errors = {}
         if moves := self.filtered(lambda move: move.l10n_it_edi_is_self_invoice and move._l10n_it_edi_services_or_goods() == 'both'):
-            errors['move_reverse_charge_with_mixed_services_and_goods'] = build_error(
+            errors['l10n_it_edi_move_rc_mixed_product_types'] = build_error(
                 message=_("Cannot apply Reverse Charge to bills which contains both services and goods."),
                 records=moves)
-        if pa_moves := self.filtered(lambda move: move.company_id.partner_id._l10n_it_edi_is_public_administration()):
-            if moves := pa_moves.filtered(lambda move: move.l10n_it_origin_document_type):
-                message = _("Your company belongs to the Public Administration, please fill out Origin Document Type field in the Electronic Invoicing tab.")
+
+        if pa_moves := self.filtered(lambda move: move.commercial_partner_id._l10n_it_edi_is_public_administration()):
+            if moves := pa_moves.filtered(lambda move: not move.l10n_it_origin_document_type):
+                message = _("Partner(s) belongs to the Public Administration, please fill out Origin Document Type field in the Electronic Invoicing tab.")
                 errors['move_missing_origin_document'] = build_error(message=message, records=moves)
             if moves := pa_moves.filtered(lambda move: move.l10n_it_origin_document_date and move.l10n_it_origin_document_date > fields.Date.today()):
                 message = _("The Origin Document Date cannot be in the future.")
-                errors['move_future_origin_document_date'] = build_error(message=message, records=moves)
+                errors['l10n_it_edi_move_future_origin_document_date'] = build_error(message=message, records=moves)
         return errors
 
     def _l10n_it_edi_export_taxes_check(self):
@@ -1125,7 +1215,7 @@ class AccountMove(models.Model):
             and len(line.tax_ids.flatten_taxes_hierarchy()._l10n_it_filter_kind('vat')) != 1
         ):
             return {
-                'move_only_one_vat_tax_per_line': {
+                'l10n_it_edi_move_only_one_vat_tax_per_line': {
                     'message': _("Invoices must have exactly one VAT tax set per line."),
                     **({
                         'action_text': _("View invoice(s)"),
@@ -1265,11 +1355,11 @@ class AccountMove(models.Model):
             if move.commercial_partner_id._l10n_it_edi_is_public_administration():
                 move.l10n_it_edi_state = 'requires_user_signature'
                 move.l10n_it_edi_transaction = False
-                move.sudo().message_post(body=nl2br(escape(_(
+                move.sudo().message_post(body=nl2br(_(
                     "Sending invoices to Public Administration partners is not supported.\n"
                     "The IT EDI XML file is generated, please sign the document and upload it "
                     "through the 'Fatture e Corrispettivi' portal of the Tax Agency."
-                ))))
+                )))
             else:
                 move.l10n_it_edi_state = 'being_sent'
                 files_to_upload.append({'filename': filename, 'xml': content})
@@ -1283,8 +1373,8 @@ class AccountMove(models.Model):
             for filename in filename_move:
                 unsent_move = filename_move[filename]
                 unsent_move.l10n_it_edi_state = False
-                text_message = _("Error uploading the e-invoice file %s.\n%s", filename, e.message)
-                html_message = nl2br(escape(text_message))
+                text_message = _("Error uploading the e-invoice file %(file)s.\n%(error)s", file=filename, error=e.message)
+                html_message = nl2br(text_message)
                 unsent_move.l10n_it_edi_header = text_message
                 unsent_move.sudo().message_post(body=html_message)
                 messages_to_log.append(text_message)
@@ -1296,7 +1386,7 @@ class AccountMove(models.Model):
             if 'error' in vals:
                 sent_move.l10n_it_edi_state = False
                 sent_move.l10n_it_edi_transaction = False
-                message = nl2br(escape(_("Error uploading the e-invoice file %s.\n%s", filename, vals['error'])))
+                message = nl2br(_("Error uploading the e-invoice file %(file)s.\n%(error)s", file=filename, error=vals['error']))
             else:
                 is_demo = vals['id_transaction'] == 'demo'
                 sent_move.l10n_it_edi_state = 'processing'
@@ -1364,7 +1454,7 @@ class AccountMove(models.Model):
                 f'{server_url}/api/l10n_it_edi/1/in/TrasmissioneFatture',
                 params={'ids_transaction': self.mapped("l10n_it_edi_transaction")})
         except AccountEdiProxyError as pe:
-            raise UserError(_("An error occurred while downloading updates from the Proxy Server: (%s) %s", pe.code, pe.message)) from pe
+            raise UserError(_("An error occurred while downloading updates from the Proxy Server: (%(code)s) %(message)s", code=pe.code, message=pe.message)) from pe
 
         for _id_transaction, notification in notifications.items():
             encrypted_update_content = notification.get('file')
@@ -1395,7 +1485,7 @@ class AccountMove(models.Model):
                     f'{server_url}/api/l10n_it_edi/1/ack',
                     params={'transaction_ids': transaction_ids, 'states': states})
             except AccountEdiProxyError as pe:
-                raise UserError(_("An error occurred while downloading updates from the Proxy Server: (%s) %s", pe.code, pe.message)) from pe
+                raise UserError(_("An error occurred while downloading updates from the Proxy Server: (%(code)s) %(message)s", code=pe.code, message=pe.message)) from pe
 
     def _l10n_it_edi_parse_notification(self, notification):
         sdi_state = notification.get('state', '')
@@ -1498,43 +1588,43 @@ class AccountMove(models.Model):
                 error_description_copy = error_description
                 if error_code == DUPLICATE_MOVE:
                     error_description_copy = _(
-                        "The e-invoice file %s is duplicated.\n"
-                        "Original message from the SdI: %s",
-                        filename, error_description_copy)
+                        "The e-invoice file %(file)s is duplicated.\n"
+                        "Original message from the SdI: %(message)s",
+                        file=filename, message=error_description_copy)
                 elif error_code == DUPLICATE_FILENAME:
                     error_description_copy = _(
-                        "The e-invoice filename %s is duplicated. Please check the FatturaPA Filename sequence.\n"
-                        "Original message from the SdI: %s",
-                        filename, error_description_copy)
+                        "The e-invoice filename %(file)s is duplicated. Please check the FatturaPA Filename sequence.\n"
+                        "Original message from the SdI: %(message)s",
+                        file=filename, message=error_description_copy)
                 error_descriptions.append(error_description_copy)
 
             return self._l10n_it_edi_format_errors(_('The e-invoice has been refused by the SdI.'), error_descriptions)
 
         elif partner._l10n_it_edi_is_public_administration():
             pa_specific_map = {
-                'forwarded': nl2br(escape(_(
-                    "The e-invoice file %s was succesfully sent to the SdI.\n"
-                    "%s has 15 days to accept or reject it.",
-                    filename, partner_name))),
-                'forward_attempt': nl2br(escape(_(
-                    "The e-invoice file %s can't be forward to %s (Public Administration) by the SdI at the moment.\n"
+                'forwarded': nl2br(_(
+                    "The e-invoice file %(file)s was succesfully sent to the SdI.\n"
+                    "%(partner)s has 15 days to accept or reject it.",
+                    file=filename, partner=partner_name)),
+                'forward_attempt': nl2br(_(
+                    "The e-invoice file %(file)s can't be forward to %(partner)s (Public Administration) by the SdI at the moment.\n"
                     "It will try again for 10 days, after which it will be considered accepted, but "
                     "you will still have to send it by post or e-mail.",
-                    filename, partner_name))),
-                'accepted_by_pa_partner_after_expiry': nl2br(escape(_(
-                    "The e-invoice file %s is succesfully sent to the SdI. The invoice is now considered fiscally relevant.\n"
-                    "The %s (Public Administration) had 15 days to either accept or refused this document,"
+                    file=filename, partner=partner_name)),
+                'accepted_by_pa_partner_after_expiry': nl2br(_(
+                    "The e-invoice file %(file)s is succesfully sent to the SdI. The invoice is now considered fiscally relevant.\n"
+                    "The %(partner)s (Public Administration) had 15 days to either accept or refused this document,"
                     "but since they did not reply, it's now considered accepted.",
-                    filename, partner_name))),
-                'rejected_by_pa_partner': nl2br(escape(_(
-                    "The e-invoice file %s has been refused by %s (Public Administration).\n"
+                    file=filename, partner=partner_name)),
+                'rejected_by_pa_partner': nl2br(_(
+                    "The e-invoice file %(file)s has been refused by %(partner)s (Public Administration).\n"
                     "You have 5 days from now to issue a full refund for this invoice, "
                     "then contact the PA partner to create a new one according to their "
                     "requests and submit it.",
-                    filename, partner_name))),
+                    file=filename, partner=partner_name)),
                 'accepted_by_pa_partner': _(
-                    "The e-invoice file %s has been accepted by %s (Public Administration), a payment will be issued soon",
-                    filename, partner_name),
+                    "The e-invoice file %(file)s has been accepted by %(partner)s (Public Administration), a payment will be issued soon",
+                    file=filename, partner=partner_name),
             }
             if pa_specific_message := pa_specific_map.get(new_state):
                 return pa_specific_message
@@ -1542,22 +1632,22 @@ class AccountMove(models.Model):
         new_state_messages_map = {
             False: _(
                 "The e-invoice file %s has not been found on the EDI Proxy server.", filename),
-            'processing': nl2br(escape(_(
+            'processing': nl2br(_(
                 "The e-invoice file %s was sent to the SdI for validation.\n"
                 "It is not yet considered accepted, please wait further notifications.",
-                filename))),
+                filename)),
             'forwarded': _(
-                "The e-invoice file %s was accepted and succesfully forwarded it to %s by the SdI.",
-                filename, partner_name),
-            'forward_attempt': nl2br(escape(_(
-                "The e-invoice file %s has been accepted by the SdI.\n"
-                "The SdI is trying to forward it to %s.\n"
+                "The e-invoice file %(file)s was accepted and succesfully forwarded it to %(partner)s by the SdI.",
+                file=filename, partner=partner_name),
+            'forward_attempt': nl2br(_(
+                "The e-invoice file %(file)s has been accepted by the SdI.\n"
+                "The SdI is trying to forward it to %(partner)s.\n"
                 "It will try for up to 2 days, after which you'll eventually "
                 "need to send it the invoice to the partner by post or e-mail.",
-                filename, partner_name))),
-            'forward_failed': nl2br(escape(_(
-                "The e-invoice file %s couldn't be forwarded to %s.\n"
+                file=filename, partner=partner_name)),
+            'forward_failed': nl2br(_(
+                "The e-invoice file %(file)s couldn't be forwarded to %(partner)s.\n"
                 "Please remember to send it via post or e-mail.",
-                filename, partner_name)))
+                file=filename, partner=partner_name))
         }
         return new_state_messages_map.get(new_state)

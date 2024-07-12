@@ -7,7 +7,7 @@ import re
 from odoo import api, fields, models, Command, _
 from odoo.exceptions import ValidationError, UserError
 from odoo.osv import expression
-from odoo.tools import frozendict, format_date, float_compare, Query
+from odoo.tools import frozendict, format_date, float_compare, format_list, Query
 from odoo.tools.sql import create_index, SQL
 from odoo.addons.web.controllers.utils import clean_action
 
@@ -88,7 +88,7 @@ class AccountMoveLine(models.Model):
         string='Account',
         compute='_compute_account_id', store=True, readonly=False, precompute=True,
         inverse='_inverse_account_id',
-        index=True,
+        index=False,  # covered by account_move_line_account_id_date_idx defined in init()
         auto_join=True,
         ondelete="cascade",
         domain="[('deprecated', '=', False), ('account_type', '!=', 'off_balance')]",
@@ -114,6 +114,7 @@ class AccountMoveLine(models.Model):
         string='Balance',
         compute='_compute_balance', store=True, readonly=False, precompute=True,
         currency_field='company_currency_id',
+        tracking=True,
     )
     cumulated_balance = fields.Monetary(
         string='Cumulated Balance',
@@ -180,6 +181,7 @@ class AccountMoveLine(models.Model):
         compute='_compute_tax_ids', store=True, readonly=False, precompute=True,
         context={'active_test': False},
         check_company=True,
+        tracking=True,
     )
     group_tax_id = fields.Many2one(
         comodel_name='account.tax',
@@ -281,6 +283,7 @@ class AccountMoveLine(models.Model):
         string="Account Root",
         store=True,
     )
+    product_category_id = fields.Many2one(related='product_id.product_tmpl_id.categ_id')
 
     # ==============================================================================================
     #                                          INVOICE
@@ -402,7 +405,7 @@ class AccountMoveLine(models.Model):
     # === Payment Fields === #
     # payment_date is the closest date to the date the aml was created between discount_date and date_maturity.
     payment_date = fields.Date(
-        string='Payment Date',
+        string='Next Payment Date',
         compute='_compute_payment_date',
         search='_search_payment_date',
     )
@@ -415,6 +418,7 @@ class AccountMoveLine(models.Model):
              "associated partner",
     )
     is_refund = fields.Boolean(compute='_compute_is_refund')
+    is_downpayment = fields.Boolean()
 
     _sql_constraints = [
         (
@@ -503,7 +507,7 @@ class AccountMoveLine(models.Model):
                 name = line.move_id.payment_reference or ''
                 if n_terms > 1:
                     index = term_lines._ids.index(line.id) if line in term_lines else len(term_lines)
-                    name = _('%s installment #%s', name, index+1).lstrip()
+                    name = _('%(name)s installment #%(number)s', name=name, number=index + 1).lstrip()
                 line.name = name
             if not line.product_id or line.display_type in ('line_section', 'line_note'):
                 continue
@@ -513,12 +517,12 @@ class AccountMoveLine(models.Model):
                 product = line.product_id
 
             values = []
-            if product.partner_ref:
-                values.append(product.partner_ref)
             if line.journal_id.type == 'sale':
+                values.append(product.display_name)
                 if product.description_sale:
                     values.append(product.description_sale)
             elif line.journal_id.type == 'purchase':
+                values.append(product.display_name)
                 if product.description_purchase:
                     values.append(product.description_purchase)
             line.name = '\n'.join(values)
@@ -609,7 +613,7 @@ class AccountMoveLine(models.Model):
                     or accounts.get(('res.company', move.company_id.id, account_type))
                 )
                 if line.move_id.fiscal_position_id:
-                    account_id = self.move_id.fiscal_position_id.map_account(self.env['account.account'].browse(account_id))
+                    account_id = line.move_id.fiscal_position_id.map_account(self.env['account.account'].browse(account_id))
                 line.account_id = account_id
 
         product_lines = self.filtered(lambda line: line.display_type == 'product' and line.move_id.is_invoice(True))
@@ -667,10 +671,12 @@ class AccountMoveLine(models.Model):
                 line.debit = line.balance if line.balance < 0.0 else 0.0
                 line.credit = -line.balance if line.balance > 0.0 else 0.0
 
-    @api.depends('currency_id', 'company_id', 'move_id.date')
+    @api.depends('currency_id', 'company_id', 'move_id.invoice_currency_rate', 'move_id.date')
     def _compute_currency_rate(self):
         for line in self:
-            if line.currency_id:
+            if line.move_id.is_invoice(include_receipts=True):
+                line.currency_rate = line.move_id.invoice_currency_rate
+            elif line.currency_id:
                 line.currency_rate = self.env['res.currency']._get_conversion_rate(
                     from_currency=line.company_currency_id,
                     to_currency=line.currency_id,
@@ -703,18 +709,14 @@ class AccountMoveLine(models.Model):
         # get the where clause
         query = self._where_calc(list(self.env.context.get('domain_cumulated_balance') or []))
         sql_order = self._order_to_sql(self.env.context.get('order_cumulated_balance'), query, reverse=True)
-        order_string = self.env.cr.mogrify(sql_order).decode()
-        from_clause, where_clause, where_clause_params = query.get_sql()
-        sql = """
-            SELECT account_move_line.id, SUM(account_move_line.balance) OVER (
-                ORDER BY %(order_by)s
-                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            )
-            FROM %(from)s
-            WHERE %(where)s
-        """ % {'from': from_clause, 'where': where_clause or 'TRUE', 'order_by': order_string}
-        self.env.cr.execute(sql, where_clause_params)
-        result = {r[0]: r[1] for r in self.env.cr.fetchall()}
+        result = dict(self.env.execute_query(query.select(
+            SQL.identifier(query.table, "id"),
+            SQL(
+                "SUM(%s) OVER (ORDER BY %s ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+                SQL.identifier(query.table, "balance"),
+                sql_order,
+            ),
+        )))
         for record in self:
             record.cumulated_balance = result[record.id]
 
@@ -900,7 +902,7 @@ class AccountMoveLine(models.Model):
             tax_ids = False if self.env.context.get('skip_computed_taxes') else self.account_id.tax_ids
 
         if self.company_id and tax_ids:
-            tax_ids = tax_ids.filtered_domain(company_domain)
+            tax_ids = tax_ids._filter_taxes_by_company(self.company_id)
 
         if tax_ids and self.move_id.fiscal_position_id:
             tax_ids = self.move_id.fiscal_position_id.map_tax(tax_ids)
@@ -921,7 +923,7 @@ class AccountMoveLine(models.Model):
                     'tax_tag_ids': [(6, 0, line.tax_tag_ids.ids)],
                     'partner_id': line.partner_id.id,
                     'move_id': line.move_id.id,
-                    'display_type': 'epd' if line.name and _('(Discount)') in line.name else line.display_type,
+                    'display_type': line.display_type,
                 })
             else:
                 line.tax_key = frozendict({'id': line.id})
@@ -1162,22 +1164,31 @@ class AccountMoveLine(models.Model):
                 '&', ('discount_date', '=', False), ('date_maturity', operator, value),
             ]
 
-    def action_register_payment(self):
+    def action_payment_items_register_payment(self):
+        return self.action_register_payment({'force_group_payment': True})
+
+    def action_register_payment(self, ctx=None):
         ''' Open the account.payment.register wizard to pay the selected journal items.
         :return: An action opening the account.payment.register wizard.
         '''
+        context = {
+            'active_model': 'account.move.line',
+            'active_ids': self.ids,
+        }
+        if ctx:
+            context.update(ctx)
         return {
             'name': _('Register Payment'),
             'res_model': 'account.payment.register',
             'view_mode': 'form',
             'views': [[False, 'form']],
-            'context': {
-                'active_model': 'account.move.line',
-                'active_ids': self.ids,
-            },
+            'context': context,
             'target': 'new',
             'type': 'ir.actions.act_window',
         }
+
+    def _get_order_lines(self):
+        return self.env['account.order.line.mixin']
 
     # -------------------------------------------------------------------------
     # INVERSE METHODS
@@ -1228,7 +1239,10 @@ class AccountMoveLine(models.Model):
             line.id for line in self if line.parent_state == "posted"
         ])
         lines_to_modify.analytic_line_ids.unlink()
-        lines_to_modify._create_analytic_lines()
+
+        context = dict(self.env.context)
+        context.pop('default_account_id', None)
+        lines_to_modify.with_context(context)._create_analytic_lines()
 
     @api.onchange('account_id')
     def _inverse_account_id(self):
@@ -1252,7 +1266,7 @@ class AccountMoveLine(models.Model):
             journal = line.move_id.journal_id
 
             if account.deprecated and not self.env.context.get('skip_account_deprecation_check'):
-                raise UserError(_('The account %s (%s) is deprecated.', account.name, account.code))
+                raise UserError(_('The account %(name)s (%(code)s) is deprecated.', name=account.name, code=account.code))
 
             account_currency = account.currency_id
             if account_currency and account_currency != line.company_currency_id and account_currency != line.currency_id:
@@ -1297,11 +1311,11 @@ class AccountMoveLine(models.Model):
         for line in self:
             if line.product_uom_id and line.product_id and line.product_uom_id.category_id != line.product_id.product_tmpl_id.uom_id.category_id:
                 raise UserError(_(
-                    "The Unit of Measure (UoM) '%s' you have selected for product '%s', "
-                    "is incompatible with its category : %s.",
-                    line.product_uom_id.name,
-                    line.product_id.name,
-                    line.product_id.product_tmpl_id.uom_id.category_id.name
+                    "The Unit of Measure (UoM) '%(uom)s' you have selected for product '%(product)s', "
+                    "is incompatible with its category : %(category)s.",
+                    uom=line.product_uom_id.name,
+                    product=line.product_id.name,
+                    category=line.product_id.product_tmpl_id.uom_id.category_id.name
                 ))
 
     def _affect_tax_report(self):
@@ -1321,7 +1335,7 @@ class AccountMoveLine(models.Model):
             if line.matched_debit_ids or line.matched_credit_ids:
                 raise UserError(_("You cannot do this modification on a reconciled journal entry. "
                                   "You can just change some non legal fields or you must unreconcile first.\n"
-                                  "Journal Entry (id): %s (%s)", line.move_id.name, line.move_id.id))
+                                  "Journal Entry (id): %(entry)s (%(id)s)", entry=line.move_id.name, id=line.move_id.id))
 
     @api.constrains('tax_ids', 'tax_repartition_line_id')
     def _check_caba_non_caba_shared_tags(self):
@@ -1437,6 +1451,16 @@ class AccountMoveLine(models.Model):
         # Match exactly how the ORM converts domains to ensure the query planner uses it
         create_index(self._cr, 'account_move_line__unreconciled_index', 'account_move_line', ['account_id', 'partner_id'],
                      where="(reconciled IS NULL OR reconciled = false OR reconciled IS NOT true) AND parent_state = 'posted'")
+        create_index(self.env.cr,
+                     indexname='account_move_line_journal_id_neg_amnt_residual_idx',
+                     tablename='account_move_line',
+                     expressions=['journal_id'],
+                     where="amount_residual < 0 AND parent_state = 'posted'")
+        # covers the standard index on account_id
+        create_index(self.env.cr,
+                     indexname='account_move_line_account_id_date_idx',
+                     tablename='account_move_line',
+                     expressions=['account_id', 'date'])
         super().init()
 
     def default_get(self, fields_list):
@@ -1478,6 +1502,10 @@ class AccountMoveLine(models.Model):
                 res_vals.pop('balance', 0)
                 res_vals.pop('debit', 0)
                 res_vals.pop('credit', 0)
+
+            if res_vals['display_type'] in ('line_section', 'line_note'):
+                res_vals.pop('account_id')
+
         return result_vals_list
 
     @contextmanager
@@ -1545,6 +1573,21 @@ class AccountMoveLine(models.Model):
             if line.move_id.state == 'posted':
                 line._check_tax_lock_date()
 
+        if not self.env.context.get('tracking_disable'):
+            # Log changes to move lines on each move
+            tracked_fields = [fname for fname, f in self._fields.items() if hasattr(f, 'tracking') and f.tracking and not (hasattr(f, 'related') and f.related)]
+            ref_fields = self.env['account.move.line'].fields_get(tracked_fields)
+            empty_values = dict.fromkeys(tracked_fields)
+            for move_id, modified_lines in lines.grouped('move_id').items():
+                if not move_id.posted_before:
+                    continue
+                for line in modified_lines:
+                    if tracking_value_ids := line._mail_track(ref_fields, empty_values)[1]:
+                        line.move_id._message_log(
+                            body=_("Journal Item %s created", line._get_html_link(title=f"#{line.id}")),
+                            tracking_value_ids=tracking_value_ids
+                        )
+
         lines.move_id._synchronize_business_models(['line_ids'])
         lines._check_constrains_account_id_journal_id()
         return lines
@@ -1559,15 +1602,15 @@ class AccountMoveLine(models.Model):
         if account_to_write and account_to_write.deprecated:
             raise UserError(_('You cannot use a deprecated account.'))
 
-        inalterable_fields = set(self._get_integrity_hash_fields()).union({'inalterable_hash', 'secure_sequence_number'})
+        inalterable_fields = set(self._get_integrity_hash_fields()).union({'inalterable_hash'})
         hashed_moves = self.move_id.filtered('inalterable_hash')
         violated_fields = set(vals) & inalterable_fields
         if hashed_moves and violated_fields:
             raise UserError(_(
-                "You cannot edit the following fields: %s.\n"
-                "The following entries are already hashed:\n%s",
-                ', '.join(f['string'] for f in self.fields_get(violated_fields).values()),
-                '\n'.join(hashed_moves.mapped('name')),
+                "You cannot edit the following fields: %(fields)s.\n"
+                "The following entries are already hashed:\n%(entries)s",
+                fields=format_list(self.env, [f['string'] for f in self.fields_get(violated_fields).values()]),
+                entries='\n'.join(hashed_moves.mapped('name')),
             ))
 
         line_to_write = self
@@ -1577,9 +1620,8 @@ class AccountMoveLine(models.Model):
                 line_to_write -= line
                 continue
 
-            if line.parent_state == 'posted':
-                if any(key in vals for key in ('tax_ids', 'tax_line_id')):
-                    raise UserError(_('You cannot modify the taxes related to a posted journal item, you should reset the journal entry to draft to do so.'))
+            if line.parent_state == 'posted' and any(self.env['account.move']._field_will_change(line, vals, field_name) for field_name in ('tax_ids', 'tax_line_id')):
+                raise UserError(_('You cannot modify the taxes related to a posted journal item, you should reset the journal entry to draft to do so.'))
 
             # Check the lock date.
             if line.parent_state == 'posted' and any(self.env['account.move']._field_will_change(line, vals, field_name) for field_name in protected_fields['fiscal']):
@@ -1677,6 +1719,21 @@ class AccountMoveLine(models.Model):
 
         # Check the tax lock date.
         self._check_tax_lock_date()
+
+        if not self.env.context.get('tracking_disable'):
+            # Log changes to move lines on each move
+            tracked_fields = [fname for fname, f in self._fields.items() if hasattr(f, 'tracking') and f.tracking and not (hasattr(f, 'related') and f.related)]
+            ref_fields = self.env['account.move.line'].fields_get(tracked_fields)
+            empty_line = self.browse([False])  # all falsy fields but not failing `ensure_one` checks
+            for move_id, modified_lines in self.grouped('move_id').items():
+                if not move_id.posted_before:
+                    continue
+                for line in modified_lines:
+                    if tracking_value_ids := empty_line._mail_track(ref_fields, line)[1]:
+                        line.move_id._message_log(
+                            body=_("Journal Item %s deleted", line._get_html_link(title=f"#{line.id}")),
+                            tracking_value_ids=tracking_value_ids
+                        )
 
         move_container = {'records': self.move_id}
         with self.move_id._check_balanced(move_container),\
@@ -1778,6 +1835,8 @@ class AccountMoveLine(models.Model):
             return aml.move_id.payment_id or aml.move_id.statement_line_id
 
         def get_odoo_rate(aml, other_aml, currency):
+            if forced_rate := self._context.get('forced_rate_from_register_payment'):
+                return forced_rate
             if other_aml and not is_payment(aml) and is_payment(other_aml):
                 return get_accounting_rate(other_aml, currency)
             if aml.move_id.is_invoice(include_receipts=True):
@@ -1787,6 +1846,8 @@ class AccountMoveLine(models.Model):
             return currency._get_conversion_rate(aml.company_currency_id, currency, aml.company_id, exchange_rate_date)
 
         def get_accounting_rate(aml, currency):
+            if forced_rate := self._context.get('forced_rate_from_register_payment'):
+                return forced_rate
             balance = aml._get_reconciliation_aml_field_value('balance', shadowed_aml_values)
             amount_currency = aml._get_reconciliation_aml_field_value('amount_currency', shadowed_aml_values)
             if not aml.company_currency_id.is_zero(balance) and not currency.is_zero(amount_currency):
@@ -2609,7 +2670,7 @@ class AccountMoveLine(models.Model):
         journal = company.currency_exchange_journal_id
         expense_exchange_account = company.expense_currency_exchange_account_id
         income_exchange_account = company.income_currency_exchange_account_id
-        accounting_exchange_date = journal.with_context(move_date=exchange_date).accounting_date
+        accounting_exchange_date = journal.with_context(move_date=exchange_date).accounting_date if journal else date.min
 
         move_vals = {
             'move_type': 'entry',
@@ -3051,7 +3112,7 @@ class AccountMoveLine(models.Model):
         hash_version = self._context.get('hash_version', MAX_HASH_VERSION)
         if hash_version == 1:
             return ['debit', 'credit', 'account_id', 'partner_id']
-        elif hash_version in (2, 3):
+        elif hash_version in (2, 3, 4):
             return ['name', 'debit', 'credit', 'account_id', 'partner_id']
         raise NotImplementedError(f"hash_version={hash_version} doesn't exist")
 
@@ -3290,7 +3351,7 @@ class AccountMoveLine(models.Model):
                         )
                     )
                 ),
-                'readOnly': self.move_id._is_readonly(),
+                'readOnly': self.move_id._is_readonly() or len(self) > 1,
             }
         return {
             'quantity': 0,

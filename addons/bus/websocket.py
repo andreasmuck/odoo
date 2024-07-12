@@ -22,7 +22,7 @@ from werkzeug.local import LocalStack
 from werkzeug.exceptions import BadRequest, HTTPException, ServiceUnavailable
 
 import odoo
-from odoo import api
+from odoo import api, modules
 from .models.bus import dispatch
 from odoo.http import root, Request, Response, SessionExpiredException, get_default_session
 from odoo.modules.registry import Registry
@@ -637,7 +637,7 @@ class Websocket:
         if not session:
             raise SessionExpiredException()
         with acquire_cursor(session.db) as cr:
-            env = api.Environment(cr, session.uid, session.context)
+            env = api.Environment(cr, session.uid, dict(session.context, lang=None))
             if session.uid is not None and not check_session(session, env):
                 raise SessionExpiredException()
             # Mark the notification request as processed.
@@ -818,7 +818,7 @@ class WebsocketConnectionHandler:
 
     @classmethod
     def websocket_allowed(cls, request):
-        return not request.registry.in_test_mode()
+        return not modules.module.current_test
 
     @classmethod
     def open_connection(cls, request):
@@ -832,11 +832,11 @@ class WebsocketConnectionHandler:
         """
         if not cls.websocket_allowed(request):
             raise ServiceUnavailable("Websocket is disabled in test mode")
-        cls._handle_public_configuration(request)
+        public_session = cls._handle_public_configuration(request)
         try:
             response = cls._get_handshake_response(request.httprequest.headers)
             socket = request.httprequest._HTTPRequest__environ['socket']
-            session, db, httprequest = request.session, request.db, request.httprequest
+            session, db, httprequest = (public_session or request.session), request.db, request.httprequest
             response.call_on_close(lambda: cls._serve_forever(
                 Websocket(socket, session),
                 db,
@@ -885,9 +885,11 @@ class WebsocketConnectionHandler:
         headers = request.httprequest.headers
         origin_url = urlparse(headers.get('origin'))
         if origin_url.netloc != headers.get('host') or origin_url.scheme != request.httprequest.scheme:
-            request.session = root.session_store.new()
-            request.session.update(get_default_session(), db=request.session.db)
-            request.session.is_explicit = True
+            session = root.session_store.new()
+            session.update(get_default_session(), db=request.session.db)
+            root.session_store.save(session)
+            return session
+        return None
 
     @classmethod
     def _assert_handshake_validity(cls, headers):

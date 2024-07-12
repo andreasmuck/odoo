@@ -76,8 +76,7 @@
                                 <span class="s_website_form_mark"> *</span>
                             </label>
                             <div class="col-sm">
-                                <textarea class="form-control s_website_form_input" name="description" required="1" id="oyeqnysxh10b" rows="3">
-                                </textarea>
+                                <textarea class="form-control s_website_form_input" name="description" required="1" id="oyeqnysxh10b" rows="3"></textarea>
                             </div>
                         </div>
                     </div>
@@ -173,6 +172,10 @@
                 <we-button data-select-type="email">Email</we-button>
                 <we-button data-select-type="tel">Telephone</we-button>
                 <we-button data-select-type="url">Url</we-button>
+            </we-select>
+            <we-select string="Selection type" data-name="existing_field_select_type_opt" data-no-preview="true">
+                <we-button data-existing-field-select-type="many2one">Dropdown List</we-button>
+                <we-button data-existing-field-select-type="selection">Radio</we-button>
             </we-select>
             <we-select string="Display" class="o_we_sublevel_1" data-name="multi_check_display_opt" data-no-preview="true">
                 <we-button data-multi-checkbox-display="horizontal">Horizontal</we-button>

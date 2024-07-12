@@ -15,7 +15,7 @@ from odoo import _, api, fields, models, tools
 from odoo.addons.base.models.ir_qweb import QWebException
 from odoo.addons.http_routing.models.ir_http import slug
 from odoo.exceptions import UserError, AccessError
-from odoo.tools import is_html_empty
+from odoo.tools.mail import is_html_empty, prepend_html_content
 from odoo.tools.rendering_tools import convert_inline_template_to_qweb, parse_inline_template, render_inline_template, template_env_globals
 
 _logger = logging.getLogger(__name__)
@@ -106,8 +106,8 @@ class MailRenderMixin(models.AbstractModel):
             self._check_access_right_dynamic_template()
         return True
 
-    def _update_field_translations(self, fname, translations, digest=None):
-        res = super()._update_field_translations(fname, translations, digest)
+    def _update_field_translations(self, fname, translations, digest=None, source_lang=None):
+        res = super()._update_field_translations(fname, translations, digest=digest, source_lang=source_lang)
         if self._unrestricted_rendering:
             for lang in translations:
                 # If the rendering is unrestricted (e.g. mail.template),
@@ -201,7 +201,7 @@ class MailRenderMixin(models.AbstractModel):
                     {}
                 </div>
             """).format(preview_markup)
-            return tools.prepend_html_content(html, html_preview)
+            return prepend_html_content(html, html_preview)
         return html
 
     # ------------------------------------------------------------
@@ -509,7 +509,7 @@ class MailRenderMixin(models.AbstractModel):
 
         if not isinstance(res_ids, (list, tuple)):
             raise ValueError(
-                _('Template rendering should be called only using on a list of IDs; received %(res_ids)r instead.',
+                _('Template rendering should only be called with a list of IDs. Received “%(res_ids)s” instead.',
                   res_ids=res_ids)
             )
         if engine not in ('inline_template', 'qweb', 'qweb_view'):

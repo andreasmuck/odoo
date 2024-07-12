@@ -52,28 +52,24 @@ class TestMailSchedule(EventCase, MockEmail, CronMixinCase):
                     (0, 0, {  # right at subscription
                         'interval_unit': 'now',
                         'interval_type': 'after_sub',
-                        'notification_type': 'mail',
                         'template_ref': f'mail.template,{cls.template_subscription.id}',
                     }),
                     (0, 0, {  # one hour after subscription
                         'interval_nbr': 1,
                         'interval_unit': 'hours',
                         'interval_type': 'after_sub',
-                        'notification_type': 'mail',
                         'template_ref': f'mail.template,{cls.template_subscription.id}',
                     }),
                     (0, 0, {  # 1 days before event
                         'interval_nbr': 1,
                         'interval_unit': 'days',
                         'interval_type': 'before_event',
-                        'notification_type': 'mail',
                         'template_ref': f'mail.template,{cls.template_reminder.id}',
                     }),
                     (0, 0, {  # immediately after event
                         'interval_nbr': 1,
                         'interval_unit': 'hours',
                         'interval_type': 'after_event',
-                        'notification_type': 'mail',
                         'template_ref': f'mail.template,{cls.template_reminder.id}',
                     }),
                 ]
@@ -299,6 +295,7 @@ class TestMailSchedule(EventCase, MockEmail, CronMixinCase):
         # execute event reminder scheduler explicitly after its schedule date
         new_end = self.event_date_end + relativedelta(hours=2)
         with self.mock_datetime_and_now(new_end), self.mock_mail_gateway():
+            (reg1 + reg2 + reg3).invalidate_recordset(['event_date_range'])
             self.event_cron_id.method_direct_trigger()
 
         # check that scheduler is finished
@@ -333,7 +330,7 @@ class TestMailSchedule(EventCase, MockEmail, CronMixinCase):
         # a new scheduler after)
         self.env.invalidate_all()
         # com 61, event 39
-        with self.assertQueryCount(64), self.mock_datetime_and_now(reference_now), \
+        with self.assertQueryCount(74), self.mock_datetime_and_now(reference_now), \
              self.mock_mail_gateway():
             _existing = self.env['event.registration'].create([
                 {
@@ -351,7 +348,6 @@ class TestMailSchedule(EventCase, MockEmail, CronMixinCase):
             (0, 0, {  # right at subscription
                 'interval_unit': 'now',
                 'interval_type': 'after_sub',
-                'notification_type': 'mail',
                 'template_ref': f'mail.template,{self.template_subscription.id}',
             }),
         ]})
@@ -434,13 +430,11 @@ class TestMailSchedule(EventCase, MockEmail, CronMixinCase):
             'name': "Go Sports",
             'event_type_mail_ids': [
                 Command.create({
-                    'notification_type': 'mail',
                     'interval_nbr': 0,
                     'interval_unit': 'now',
                     'interval_type': 'after_sub',
                     'template_ref': 'mail.template,%i' % self.env['ir.model.data']._xmlid_to_res_id('event.event_subscription')}),
                 Command.create({
-                    'notification_type': 'mail',
                     'interval_nbr': 5,
                     'interval_unit': 'hours',
                     'interval_type': 'before_event',

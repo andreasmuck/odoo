@@ -8,9 +8,6 @@ from odoo.osv.expression import AND
 class ProductReplenish(models.TransientModel):
     _inherit = 'product.replenish'
 
-    supplier_id = fields.Many2one("product.supplierinfo", string="Vendor")
-    show_vendor = fields.Boolean(compute="_compute_show_vendor")
-
     @api.model
     def default_get(self, fields):
         res = super().default_get(fields)
@@ -37,15 +34,11 @@ class ProductReplenish(models.TransientModel):
             if rec.route_id.name == 'Buy':
                 rec.date_planned = rec._get_date_planned(rec.route_id, supplier=rec.supplier_id, show_vendor=rec.show_vendor)
 
-    @api.depends('route_id')
-    def _compute_show_vendor(self):
-        for rec in self:
-            rec.show_vendor = rec._get_show_vendor(rec.route_id)
-
     def _prepare_run_values(self):
         res = super()._prepare_run_values()
         if self.supplier_id:
             res['supplierinfo_id'] = self.supplier_id
+            res['group_id'].partner_id = self.supplier_id.partner_id
         return res
 
     def action_stock_replenishment_info(self):
@@ -73,7 +66,7 @@ class ProductReplenish(models.TransientModel):
             action = self.env.ref('purchase.action_rfq_form')
             return [{
                 'label': order_line.order_id.display_name,
-                'url': f'#action={action.id}&id={order_line.order_id.id}&model=purchase.order',
+                'url': f'/web#action={action.id}&id={order_line.order_id.id}&model=purchase.order',
             }]
         return super()._get_replenishment_order_notification_link(order_line)
 
@@ -92,9 +85,6 @@ class ProductReplenish(models.TransientModel):
         if bool(self.env['ir.config_parameter'].sudo().get_param('purchase.use_po_lead')):
             delay += self.env.company.po_lead
         return fields.Datetime.add(date, days=delay)
-
-    def _get_show_vendor(self, route):
-        return route == self.env.ref('purchase_stock.route_warehouse0_buy', raise_if_not_found=False)
 
     def _get_route_domain(self, product_tmpl_id):
         domain = super()._get_route_domain(product_tmpl_id)

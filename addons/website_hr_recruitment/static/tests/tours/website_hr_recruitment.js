@@ -8,36 +8,38 @@
         return [{
             content: "Select Job",
             trigger: `.oe_website_jobs h3:contains(${jobName})`,
+            run: "click",
         }, {
             content: "Apply",
             trigger: ".js_hr_recruitment a:contains('Apply')",
+            run: "click",
         }, {
             content: "Complete name",
             trigger: "input[name=partner_name]",
-            run: `text ${application.name}`,
+            run: `edit ${application.name}`,
         }, {
             content: "Complete Email",
             trigger: "input[name=email_from]",
-            run: `text ${application.email}`,
+            run: `edit ${application.email}`,
         }, {
             content: "Complete phone number",
-            trigger: "input[name=partner_mobile]",
-            run: `text ${application.phone}`,
+            trigger: "input[name=partner_phone]",
+            run: `edit ${application.phone}`,
         }, {
             content: "Complete LinkedIn profile",
             trigger: "input[name=linkedin_profile]",
-            run: `text linkedin.com/in/${application.name.toLowerCase().replace(' ', '-')}`,
+            run: `edit linkedin.com/in/${application.name.toLowerCase().replace(' ', '-')}`,
         }, {
             content: "Complete Subject",
             trigger: "textarea[name=description]",
-            run: `text ${application.subject}`,
+            run: `edit ${application.subject}`,
         }, { // TODO: Upload a file ?
             content: "Send the form",
             trigger: ".s_website_form_send",
+            run: "click",
         }, {
             content: "Check the form is submitted without errors",
             trigger: "#jobs_thankyou h1:contains('Congratulations')",
-            isCheck: true,
         }];
     }
 
@@ -74,12 +76,15 @@
     {
         content: 'Go to the Guru job page',
         trigger: ':iframe a[href*="guru"]',
+        run: "click",
     }, {
         content: 'Go to the Guru job form',
         trigger: ':iframe a[href*="apply"]',
+        run: "click",
     }, {
         content: 'Check if the Guru form is present',
-        trigger: ':iframe form'
+        trigger: ':iframe form',
+        run: "click",
     },
     ...wTourUtils.clickOnEditAndWaitEditMode(),
     {
@@ -93,9 +98,11 @@
     }, {
         content: 'Edit the form',
         trigger: ':iframe input[type="file"]',
+        run: "click",
     }, {
         content: 'Add a new field',
         trigger: 'we-button[data-add-field]',
+        run: "click",
     },
     ...wTourUtils.clickOnSave(),
     {
@@ -107,9 +114,11 @@
     }, {
         content: 'Go to the Internship job page',
         trigger: ':iframe a[href*="internship"]',
+        run: "click",
     }, {
         content: 'Go to the Internship job form',
         trigger: ':iframe a[href*="apply"]',
+        run: "click",
     }, {
         content: 'Check that a job_id has been loaded',
         trigger: ':iframe form',
@@ -131,6 +140,33 @@
             }
         }
     },
+]);
+
+    // This tour addresses an issue that occurred in a website form containing
+    // the 'hide-change-model' attribute. Specifically, when a model-required
+    // field is selected, the alert message should not display an undefined
+    // action name.
+    wTourUtils.registerWebsitePreviewTour('model_required_field_should_have_action_name', {
+        test: true,
+        url: '/jobs',
+    }, () => [{
+        content: "Select Job",
+        trigger: ":iframe h3:contains('Guru')",
+        run: "click",
+    }, {
+        content: "Apply",
+        trigger: ":iframe a:contains('Apply')",
+        run: "click",
+    },
+    ...wTourUtils.clickOnEditAndWaitEditMode(),
+    {
+        content: "click on the your name field",
+        trigger: ":iframe #hr_recruitment_form div.s_website_form_model_required",
+        run: "click",
+    }, {
+        content: "Select model-required field",
+        trigger: "we-customizeblock-options we-alert > span:not(:contains(undefined))",
+    }
 ]);
 
 export default {};

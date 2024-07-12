@@ -4,7 +4,7 @@
 # Author: Leonardo Pistone
 # Copyright 2015 Camptocamp SA
 
-from odoo.addons.stock.tests.common2 import TestStockCommon
+from odoo.addons.stock.tests.common import TestStockCommon
 from odoo.exceptions import UserError
 from odoo.tests import Form
 
@@ -16,7 +16,7 @@ class TestVirtualAvailable(TestStockCommon):
 
         # Make `product3` a storable product for this test. Indeed, creating quants
         # and playing with owners is not possible for consumables.
-        cls.product_3.type = 'product'
+        cls.product_3.is_storable = True
         cls.env['stock.picking.type'].browse(cls.env.ref('stock.picking_type_out').id).reservation_method = 'manual'
 
         cls.env['stock.quant'].create({
@@ -114,7 +114,7 @@ class TestVirtualAvailable(TestStockCommon):
         company2 = self.env['res.company'].create({'name': 'Second Company'})
         product = self.env['product.product'].create({
             'name': 'Product [TEST - Change Company]',
-            'type': 'product',
+            'is_storable': True,
         })
         # Creates a quant for productA in the first company.
         self.env['stock.quant'].create({
@@ -173,7 +173,7 @@ class TestVirtualAvailable(TestStockCommon):
         supplier_location = self.env.ref('stock.stock_location_suppliers')
         product = self.env['product.product'].create({
             'name': 'Product Single Company',
-            'type': 'product',
+            'is_storable': True,
         })
         # Creates a quant for company 1.
         self.env['stock.quant'].create({
@@ -209,7 +209,7 @@ class TestVirtualAvailable(TestStockCommon):
     def test_search_qty_available(self):
         product = self.env['product.product'].create({
             'name': 'Brand new product',
-            'type': 'product',
+            'is_storable': True,
         })
         result = self.env['product.product'].search([
             ('qty_available', '=', 0),
@@ -318,25 +318,50 @@ class TestVirtualAvailable(TestStockCommon):
             (warehouses.ids, False, 1111.0),
             (warehouses.ids, (other_loc | sub_loc02).ids, 1001),
         ]:
-            product_qty = self.product_3.with_context(warehouse=wh, location=loc).qty_available
+            product_qty = self.product_3.with_context(warehouse_id=wh, location=loc).qty_available
             self.assertEqual(product_qty, expected)
 
     def test_change_type_tracked_product(self):
         product = self.env['product.template'].create({
             'name': 'Brand new product',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'serial',
         })
         product_form = Form(product)
-        product_form.detailed_type = 'service'
+        product_form.type = 'service'
         product = product_form.save()
         self.assertEqual(product.tracking, 'none')
 
-        product.detailed_type = 'product'
+        product.is_storable = True
         product.tracking = 'serial'
         self.assertEqual(product.tracking, 'serial')
         # change the type from "product.product" form
         product_form = Form(product.product_variant_id)
-        product_form.detailed_type = 'service'
+        product_form.type = 'service'
         product = product_form.save()
         self.assertEqual(product.tracking, 'none')
+
+    def test_domain_locations_only_considers_selected_companies(self):
+        product = self.env['product.product'].create({'name': 'Product', 'is_storable': True})
+        company_a = self.env['res.company'].create({'name': 'Company A'})
+        company_b = self.env['res.company'].create({'name': 'Company B'})
+        warehouse_a = self.env['stock.warehouse'].create({
+            'code': 'WHA', 'company_id': company_a.id
+        })
+        warehouse_b = self.env['stock.warehouse'].create({
+            'code': 'WHB', 'company_id': company_b.id
+        })
+        self.env['stock.quant'].create([
+            {'product_id': product.id, 'location_id': warehouse_a.lot_stock_id.id, 'quantity': 1},
+            {'product_id': product.id, 'location_id': warehouse_b.lot_stock_id.id, 'quantity': 2},
+        ])
+
+        self.assertEqual(product.sudo().with_context(
+            allowed_company_ids=[company_a.id]
+        ).qty_available, 1)
+        self.assertEqual(product.sudo().with_context(
+            allowed_company_ids=[company_b.id]
+        ).qty_available, 2)
+        self.assertEqual(product.sudo().with_context(
+            allowed_company_ids=[company_a.id, company_b.id]
+        ).qty_available, 3)

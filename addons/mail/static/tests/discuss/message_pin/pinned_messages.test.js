@@ -1,12 +1,13 @@
-import { describe, test } from "@odoo/hoot";
 import {
     click,
     contains,
     defineMailModels,
     openDiscuss,
+    scroll,
     start,
     startServer,
-} from "../../mail_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, test } from "@odoo/hoot";
 import { patchWithCleanup } from "@web/../tests/web_test_helpers";
 
 describe.current.tags("desktop");
@@ -115,7 +116,7 @@ test("Jump to message", async () => {
     await start();
     await openDiscuss(channelId);
     await click(".o-mail-Discuss-header button[title='Pinned Messages']");
-    await click(".o-discuss-PinnedMessagesPanel button", { text: "Jump" });
+    await click(".o-discuss-PinnedMessagesPanel a[role='button']", { text: "Jump" });
     await contains(".o-mail-Thread .o-mail-Message-body", { text: "Hello world!", visible: true });
 });
 
@@ -142,6 +143,7 @@ test("Jump to message from notification", async () => {
     await click(".dropdown-item", { text: "Pin" });
     await click(".modal-footer button", { text: "Yeah, pin it!" });
     await contains(".o_mail_notification");
+    await scroll(".o-mail-Thread", "bottom");
     await contains(".o-mail-Thread", { scroll: "bottom" });
     await click(".o_mail_notification a", { text: "message" });
     await contains(".o-mail-Thread", { count: 0, scroll: "bottom" });

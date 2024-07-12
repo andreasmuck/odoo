@@ -34,6 +34,16 @@ class AccountJournal(models.Model):
         help="Sequence number of the next printed check.",
     )
 
+    bank_check_printing_layout = fields.Selection(
+        selection='_get_check_printing_layouts',
+        string="Check Layout",
+    )
+
+    def _get_check_printing_layouts(self):
+        """ Returns available check printing layouts for the company, excluding disabled options """
+        selection = self.company_id._fields['account_check_printing_layout'].selection
+        return [(value, label) for value, label in selection if value != 'disabled']
+
     @api.depends('check_manual_sequencing')
     def _compute_check_next_number(self):
         for journal in self:
@@ -99,10 +109,3 @@ class AccountJournal(models.Model):
                 default_payment_method_line_id=payment_method_line.id,
             ),
         }
-
-    @api.model
-    def _get_reusable_payment_methods(self):
-        """ We are able to have multiple times Checks payment method in a journal """
-        res = super()._get_reusable_payment_methods()
-        res.add("check_printing")
-        return res

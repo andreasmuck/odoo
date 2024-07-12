@@ -26,6 +26,13 @@ class StockLot(models.Model):
     _check_company_auto = True
     _order = 'name, id'
 
+    @api.model
+    def default_get(self, fields_list):
+        context = dict(self.env.context)
+        # We always want the company_id to be computed, regardless of where it's been created.
+        context.pop('default_company_id', False)
+        return super(StockLot, self.with_context(context)).default_get(fields_list)
+
     def _read_group_location_id(self, locations, domain):
         partner_locations = locations.search([('usage', 'in', ('customer', 'supplier'))])
         return partner_locations + locations.warehouse_id.search([]).lot_stock_id
@@ -36,7 +43,7 @@ class StockLot(models.Model):
     ref = fields.Char('Internal Reference', help="Internal reference number in case it differs from the manufacturer's lot/serial number")
     product_id = fields.Many2one(
         'product.product', 'Product', index=True,
-        domain=("[('tracking', '!=', 'none'), ('type', '=', 'product')] +"
+        domain=("[('tracking', '!=', 'none'), ('is_storable', '=', True)] +"
             " ([('product_tmpl_id', '=', context['default_product_tmpl_id'])] if context.get('default_product_tmpl_id') else [])"),
         required=True, check_company=True)
     product_uom_id = fields.Many2one(
@@ -95,17 +102,17 @@ class StockLot(models.Model):
         if any(not lot.company_id for lot in self):
             # We need to check across other companies to not have duplicates between 'no-company' and a company.
             self = self.sudo()
-        records = self._read_group(domain, groupby, order='company_id DESC')
-        error_message_lines = []
-        cross_lots = set()
-        for company, product, name in records:
+        records = self._read_group(domain, groupby, ['__count'], order='company_id DESC')
+        error_message_lines = set()
+        cross_lots = {}
+        for company, product, name, count in records:
             if not company:
-                cross_lots.add((product, name))
-                continue
-            if (product, name) in cross_lots:
-                error_message_lines.append(_(" - Product: %s, Serial Number: %s", product.display_name, name))
+                cross_lots[(product, name)] = count
+            # For company-specific lots, we check that there is no duplicate with 'no-company' lots, but NOT between specific-company ones.
+            if (company and (cross_lots.get((product, name), 0) + count) > 1) or count > 1:
+                error_message_lines.add(_(" - Product: %(product)s, Lot/Serial Number: %(lot)s", product=product.display_name, lot=name))
         if error_message_lines:
-            raise ValidationError(_('The combination of serial number and product must be unique across a company and no company defined.\nFollowing combination contains duplicates:\n') + '\n'.join(error_message_lines))
+            raise ValidationError(_("The combination of lot/serial number and product must be unique within a company including when no company is defined.\nThe following combinations contain duplicates:\n") + '\n'.join(error_message_lines))
 
     def _check_create(self):
         active_picking_id = self.env.context.get('active_picking_id', False)

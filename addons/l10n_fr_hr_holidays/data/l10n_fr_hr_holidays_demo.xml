@@ -31,7 +31,7 @@
         <field name="requires_allocation">yes</field>
         <field name="employee_requests">no</field>
         <field name="leave_validation_type">both</field>
-        <field name="allocation_validation_type">officer</field>
+        <field name="allocation_validation_type">hr</field>
         <field name="responsible_ids" eval="[(4, ref('base.user_admin'))]"/>
         <field name="icon_id" ref="hr_holidays.icon_14"/>
         <field name="color">2</field>
@@ -49,7 +49,6 @@
         <field name="date_from" eval="time.strftime('%Y-01-01')"/>
         <field name="date_to" eval="time.strftime('%Y-12-31')"/>
         <field name="employee_id" ref="l10n_fr_part_time_employee"/>
-        <field name="employee_ids" eval="[(4, ref('l10n_fr_part_time_employee'))]"/>
     </record>
     <function model="hr.leave.allocation" name="action_validate">
         <value eval="[ref('l10n_fr_hr_holidays_allocation')]"/>

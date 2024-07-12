@@ -5,31 +5,35 @@ import { Deferred, advanceTime, runAllTimers, tick } from "@odoo/hoot-mock";
 import { parseUrl } from "../local_helpers";
 
 describe(parseUrl(import.meta.url), () => {
-    test("advanceTime", async () => {
-        const timeoutId = window.setTimeout(() => expect.step("timeout"), 100);
-        const intervalId = window.setInterval(() => expect.step("interval"), 150);
-        const animationHandle = window.requestAnimationFrame((delta) =>
-            expect.step(`animation:${Math.floor(delta)}`)
-        );
+    // timeout of 1 second to ensure timeouts are actually mocked
+    test.timeout(1_000)("advanceTime", async () => {
+        expect.assertions(8);
+
+        const timeoutId = window.setTimeout(() => expect.step("timeout"), 2_000);
+        const intervalId = window.setInterval(() => expect.step("interval"), 3_000);
+        const animationHandle = window.requestAnimationFrame((delta) => {
+            expect(delta).toBeGreaterThan(0);
+            expect.step("animation");
+        });
 
         expect(timeoutId).toBeGreaterThan(0);
         expect(intervalId).toBeGreaterThan(0);
         expect(animationHandle).toBeGreaterThan(0);
-        expect([]).toVerifySteps();
+        expect.verifySteps([]);
 
-        await advanceTime(1000); // just to be sure
+        await advanceTime(10_000); // 10 seconds
 
-        expect(["animation:16", "timeout", "interval"]).toVerifySteps();
+        expect.verifySteps(["animation", "timeout", "interval", "interval", "interval"]);
 
-        await advanceTime(1000);
+        await advanceTime(10_000);
 
-        expect(["interval"]).toVerifySteps();
+        expect.verifySteps(["interval", "interval", "interval"]);
 
         window.clearInterval(intervalId);
 
-        await advanceTime(1000);
+        await advanceTime(10_000);
 
-        expect([]).toVerifySteps();
+        expect.verifySteps([]);
     });
 
     test("Deferred", async () => {
@@ -45,7 +49,7 @@ describe(parseUrl(import.meta.url), () => {
 
         await expect(def).resolves.toBe(14);
 
-        expect(["before", "after", "resolved"]).toVerifySteps();
+        expect.verifySteps(["before", "after", "resolved"]);
     });
 
     test("tick", async () => {
@@ -61,14 +65,19 @@ describe(parseUrl(import.meta.url), () => {
     });
 
     test("runAllTimers", async () => {
-        window.setTimeout(() => expect.step("timeout"), 1e6);
-        window.requestAnimationFrame((delta) => expect.step(`animation:${Math.floor(delta)}`));
+        expect.assertions(4);
 
-        expect([]).toVerifySteps();
+        window.setTimeout(() => expect.step("timeout"), 1e6);
+        window.requestAnimationFrame((delta) => {
+            expect(delta).toBeGreaterThan(1);
+            expect.step("animation");
+        });
+
+        expect.verifySteps([]);
 
         const ms = await runAllTimers();
 
-        expect(ms).toBeWithin(1e6 - 1, 1e6 + 1); // more or less
-        expect(["animation:16", "timeout"]).toVerifySteps();
+        expect(ms).toBeWithin(1e6 - 1, 1e6); // more or less
+        expect.verifySteps(["animation", "timeout"]);
     });
 });

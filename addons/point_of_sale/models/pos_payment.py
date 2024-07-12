@@ -14,6 +14,7 @@ class PosPayment(models.Model):
     _name = "pos.payment"
     _description = "Point of Sale Payments"
     _order = "id desc"
+    _inherit = ['pos.load.mixin']
 
     name = fields.Char(string='Label', readonly=True)
     pos_order_id = fields.Many2one('pos.order', string='Order', required=True, index=True)
@@ -24,6 +25,7 @@ class PosPayment(models.Model):
     currency_rate = fields.Float(string='Conversion Rate', related='pos_order_id.currency_rate', help='Conversion rate from company currency to order currency.')
     partner_id = fields.Many2one('res.partner', string='Customer', related='pos_order_id.partner_id')
     session_id = fields.Many2one('pos.session', string='Session', related='pos_order_id.session_id', store=True, index=True)
+    user_id = fields.Many2one('res.users', string='Employee', related='session_id.user_id')
     company_id = fields.Many2one('res.company', string='Company', related='pos_order_id.company_id', store=True)
     card_type = fields.Char('Type of card used')
     cardholder_name = fields.Char('Cardholder Name')
@@ -31,8 +33,12 @@ class PosPayment(models.Model):
     payment_status = fields.Char('Payment Status')
     ticket = fields.Char('Payment Receipt Info')
     is_change = fields.Boolean(string='Is this payment change?', default=False)
-    account_move_id = fields.Many2one('account.move')
+    account_move_id = fields.Many2one('account.move', index='btree_not_null')
     uuid = fields.Char(string='Uuid', readonly=True, copy=False)
+
+    @api.model
+    def _load_pos_data_domain(self, data):
+        return [('pos_order_id', 'in', [order['id'] for order in data['pos.order']['data']])]
 
     @api.depends('amount', 'currency_id')
     def _compute_display_name(self):
@@ -48,7 +54,7 @@ class PosPayment(models.Model):
             if payment.payment_method_id not in payment.session_id.config_id.payment_method_ids:
                 raise ValidationError(_('The payment method selected is not allowed in the config of the POS session.'))
 
-    def _create_payment_moves(self):
+    def _create_payment_moves(self, is_reverse=False):
         result = self.env['account.move']
         for payment in self:
             order = payment.pos_order_id
@@ -61,7 +67,7 @@ class PosPayment(models.Model):
             payment_move = self.env['account.move'].with_context(default_journal_id=journal.id).create({
                 'journal_id': journal.id,
                 'date': fields.Date.context_today(order, order.date_order),
-                'ref': _('Invoice payment for %s (%s) using %s', order.name, order.account_move.name, payment_method.name),
+                'ref': _('Invoice payment for %(order)s (%(account_move)s) using %(payment_method)s', order=order.name, account_move=order.account_move.name, payment_method=payment_method.name),
                 'pos_payment_ids': payment.ids,
             })
             result |= payment_move
@@ -72,9 +78,17 @@ class PosPayment(models.Model):
                 'partner_id': accounting_partner.id,
                 'move_id': payment_move.id,
             }, amounts['amount'], amounts['amount_converted'])
+            is_split_transaction = payment.payment_method_id.split_transactions
+            if is_split_transaction and is_reverse:
+                reversed_move_receivable_account_id = accounting_partner.with_company(order.company_id).property_account_receivable_id.id
+            elif is_reverse:
+                reversed_move_receivable_account_id = payment.payment_method_id.receivable_account_id.id or self.company_id.account_default_pos_receivable_account_id.id
+            else:
+                reversed_move_receivable_account_id = self.company_id.account_default_pos_receivable_account_id.id
             debit_line_vals = pos_session._debit_amounts({
-                'account_id': pos_session.company_id.account_default_pos_receivable_account_id.id,
+                'account_id': reversed_move_receivable_account_id,
                 'move_id': payment_move.id,
+                'partner_id': accounting_partner.id if is_split_transaction and is_reverse else False,
             }, amounts['amount'], amounts['amount_converted'])
             self.env['account.move.line'].create([credit_line_vals, debit_line_vals])
             payment_move._post()

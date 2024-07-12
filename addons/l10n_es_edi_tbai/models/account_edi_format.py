@@ -22,10 +22,10 @@ from odoo.addons.l10n_es_edi_tbai.models.l10n_es_edi_tbai_agencies import get_ke
 from odoo.addons.l10n_es_edi_tbai.models.xml_utils import (
     NS_MAP, bytes_as_block, calculate_references_digests,
     cleanup_xml_signature, fill_signature, int_as_bytes)
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import ValidationError
 from odoo.tools import get_lang
 from odoo.tools.float_utils import float_repr, float_round
-from odoo.tools.xml_utils import cleanup_xml_node, validate_xml_from_attachment
+from odoo.tools.xml_utils import cleanup_xml_node
 
 
 class AccountEdiFormat(models.Model):
@@ -109,13 +109,35 @@ class AccountEdiFormat(models.Model):
             # - If called from a cron, then the re-ordering of jobs should prevent this from triggering
             # - If called manually, then the user will see this error pop up when it triggers
             chain_head = invoice.company_id._get_l10n_es_tbai_last_posted_invoice()
+            error_msg = ''
             if chain_head and chain_head != invoice and not chain_head._l10n_es_tbai_is_in_chain():
-                raise UserError(f"TicketBAI: Cannot post invoice while chain head ({chain_head.name}) has not been posted")
+                error_msg = _("TicketBAI: Cannot post invoice while chain head (%s) has not been posted", chain_head.name)
+            if (
+                invoice.move_type == 'out_refund'
+                and not invoice.reversed_entry_id._l10n_es_tbai_is_in_chain()
+                and invoice.reversed_entry_id.edi_document_ids.filtered(lambda d: d.edi_format_id.code == 'es_tbai')  # avoid imported ones
+            ):
+                error_msg = _("TicketBAI: Cannot post a reversal move while the source document (%s) has not been posted", invoice.reversed_entry_id.name)
+
+            # Tax configuration check: In case of foreign customer we need the tax scope to be set
+            com_partner = invoice.commercial_partner_id
+            if (com_partner.country_id.code not in ('ES', False) or (com_partner.vat or '').startswith("ESN")) and\
+                    invoice.line_ids.tax_ids.filtered(lambda t: not t.tax_scope):
+                error_msg = _(
+                    "In case of a foreign customer, you need to configure the tax scope on taxes:\n%s",
+                    "\n".join(invoice.line_ids.tax_ids.mapped('name'))
+                )
+
+            if error_msg:
+                return {
+                    invoice: {
+                        'error': error_msg,
+                        'blocking_level': 'error',
+                    }
+                }
 
             # Generate the XML values.
             inv_dict = self._get_l10n_es_tbai_invoice_xml(invoice)
-            if 'error' in inv_dict[invoice]:
-                return inv_dict  # XSD validation failed, return result dict
 
             # Store the XML as attachment to ensure it is never lost (even in case of timeout error)
             inv_xml = inv_dict[invoice]['xml_file']
@@ -168,8 +190,6 @@ class AccountEdiFormat(models.Model):
         else:
             # Generate the XML values.
             cancel_dict = self._get_l10n_es_tbai_invoice_xml(invoice, cancel=True)
-            if 'error' in cancel_dict[invoice]:
-                return cancel_dict  # XSD validation failed, return result dict
 
             # Store the XML as attachment to ensure it is never lost (even in case of timeout error)
             cancel_xml = cancel_dict[invoice]['xml_file']
@@ -208,14 +228,6 @@ class AccountEdiFormat(models.Model):
     # -------------------------------------------------------------------------
     # XML DOCUMENT
     # -------------------------------------------------------------------------
-
-    def _l10n_es_tbai_validate_xml_with_xsd(self, xml_doc, cancel, tax_agency):
-        xsd_name = get_key(tax_agency, 'xsd_name')['cancel' if cancel else 'post']
-        try:
-            validate_xml_from_attachment(self.env, xml_doc, xsd_name, prefix='l10n_es_edi_tbai')
-        except UserError as e:
-            return {'error': escape(str(e)), 'blocking_level': 'error'}
-        return {}
 
     def _l10n_es_tbai_get_invoice_content_edi(self, invoice):
         cancel = invoice.edi_state in ('to_cancel', 'cancelled')
@@ -256,8 +268,6 @@ class AccountEdiFormat(models.Model):
         xml_doc = self._l10n_es_tbai_sign_invoice(invoice, xml_doc)
         res = {invoice: {'xml_file': xml_doc}}
 
-        # Optional check using the XSD
-        res[invoice].update(self._l10n_es_tbai_validate_xml_with_xsd(xml_doc, cancel, invoice.company_id.l10n_es_tbai_tax_agency))
         return res
 
     def _l10n_es_tbai_get_header_values(self, invoice):
@@ -348,9 +358,9 @@ class AccountEdiFormat(models.Model):
             invoice_lines.append({
                 'line': line,
                 'discount': discount * refund_sign,
-                'unit_price': (line.balance + discount) / line.quantity * refund_sign,
+                'unit_price': (line.balance + discount) / line.quantity * refund_sign if line.quantity > 0 else 0,
                 'total': total,
-                'description': regex_sub(r'[^0-9a-zA-Z ]', '', line.name)[:250]
+                'description': regex_sub(r'[^0-9a-zA-Z ]', '', line.product_id.display_name or line.name or '')[:250]
             })
         values['invoice_lines'] = invoice_lines
         # Tax details (desglose)
@@ -365,8 +375,8 @@ class AccountEdiFormat(models.Model):
         export_exempts = invoice.invoice_line_ids.tax_ids.filtered(lambda t: t.l10n_es_exempt_reason == 'E2')
         values['regime_key'] = ['02'] if export_exempts else ['01']
 
-        if invoice.l10n_es_is_simplified:
-            values['regime_key'].append(52)  # code for simplified invoices
+        if invoice.l10n_es_is_simplified and invoice.company_id.l10n_es_tbai_tax_agency != 'bizkaia':
+            values['regime_key'] += ['52']  # code for simplified invoices
 
         return values
 
@@ -602,7 +612,7 @@ class AccountEdiFormat(models.Model):
         values['is_refund'] = invoice.move_type == 'in_refund'
         if values['is_refund']:
             values['credit_note_code'] = invoice.l10n_es_tbai_refund_reason
-            values['credit_note_invoice'] = invoice.reversed_entry_id
+            values['credit_note_invoices'] = invoice.reversed_entry_id | invoice.l10n_es_tbai_reversed_ids
         values['tipofactura'] = 'F5' if invoice._l10n_es_is_dua() else 'F1'
         return values
 

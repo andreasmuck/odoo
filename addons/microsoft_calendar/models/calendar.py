@@ -70,6 +70,13 @@ class Meeting(models.Model):
         outlook_connected = self.env.user._get_microsoft_calendar_token()
         return outlook_connected and self.env.user.sudo().microsoft_synchronization_stopped is False
 
+    def _skip_send_mail_status_update(self):
+        """If microsoft calendar is not syncing, don't send a mail."""
+        user_id = self._get_event_user_m()
+        if self.with_user(user_id)._check_microsoft_sync_status() and user_id._get_microsoft_sync_status() == "sync_active":
+            return True
+        return super()._skip_send_mail_status_update()
+
     @api.model_create_multi
     def create(self, vals_list):
         notify_context = self.env.context.get('dont_notify', False)
@@ -312,7 +319,7 @@ class Meeting(models.Model):
             'description': microsoft_event.body and microsoft_event.body['content'],
             'location': microsoft_event.location and microsoft_event.location.get('displayName') or False,
             'user_id': microsoft_event.owner_id(self.env),
-            'privacy': sensitivity_o2m.get(microsoft_event.sensitivity, self.default_get(['privacy'])['privacy']),
+            'privacy': sensitivity_o2m.get(microsoft_event.sensitivity, False),
             'attendee_ids': commands_attendee,
             'allday': microsoft_event.isAllDay,
             'start': start,
@@ -538,6 +545,11 @@ class Meeting(models.Model):
                 'private': 'private',
                 'confidential': 'confidential',
             }
+            # Set default privacy in event according to the organizer's calendar default privacy if defined.
+            if self.user_id:
+                sensitivity_o2m[False] = sensitivity_o2m.get(self.user_id.calendar_default_privacy)
+            else:
+                sensitivity_o2m[False] = 'normal'
             values['sensitivity'] = sensitivity_o2m.get(self.privacy)
 
         if 'active' in fields_to_sync and not self.active:
@@ -620,8 +632,8 @@ class Meeting(models.Model):
                                     "all attendees must have an email address. However, some events do "
                                     "not respect this condition. As long as the events are incorrect, "
                                     "the calendars will not be synchronized."
-                                    "\nEither update the events/attendees or archive these events %s:"
-                                    "\n%s", details, invalid_events))
+                                    "\nEither update the events/attendees or archive these events %(details)s:"
+                                    "\n%(invalid_events)s", details=details, invalid_events=invalid_events))
 
     def _microsoft_values_occurence(self, initial_values={}):
         values = initial_values

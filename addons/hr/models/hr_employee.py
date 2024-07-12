@@ -13,7 +13,7 @@ from markupsafe import Markup
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError, AccessError
 from odoo.osv import expression
-from odoo.tools import format_date
+from odoo.tools import convert, format_date
 
 
 class HrEmployeePrivate(models.Model):
@@ -37,14 +37,21 @@ class HrEmployeePrivate(models.Model):
     # resource and user
     # required on the resource, make sure required="True" set in the view
     name = fields.Char(string="Employee Name", related='resource_id.name', store=True, readonly=False, tracking=True)
-    user_id = fields.Many2one('res.users', 'User', related='resource_id.user_id', store=True, readonly=False, check_company=True)
+    user_id = fields.Many2one(
+        'res.users', 'User',
+        related='resource_id.user_id',
+        store=True,
+        readonly=False,
+        check_company=True,
+        precompute=True,
+        ondelete='restrict')
     user_partner_id = fields.Many2one(related='user_id.partner_id', related_sudo=False, string="User's partner")
     active = fields.Boolean('Active', related='resource_id.active', default=True, store=True, readonly=False)
     resource_calendar_id = fields.Many2one(tracking=True)
     department_id = fields.Many2one(tracking=True)
     company_id = fields.Many2one('res.company', required=True)
-    company_country_id = fields.Many2one('res.country', 'Company Country', related='company_id.country_id', readonly=True)
-    company_country_code = fields.Char(related='company_country_id.code', depends=['company_country_id'], readonly=True)
+    company_country_id = fields.Many2one('res.country', 'Company Country', related='company_id.country_id', readonly=True, groups="base.group_system,hr.group_hr_user")
+    company_country_code = fields.Char(related='company_country_id.code', depends=['company_country_id'], readonly=True, groups="base.group_system,hr.group_hr_user")
     # private info
     private_street = fields.Char(string="Private Street", groups="hr.group_hr_user")
     private_street2 = fields.Char(string="Private Street2", groups="hr.group_hr_user")
@@ -95,7 +102,7 @@ class HrEmployeePrivate(models.Model):
     work_permit_expiration_date = fields.Date('Work Permit Expiration Date', groups="hr.group_hr_user", tracking=True)
     has_work_permit = fields.Binary(string="Work Permit", groups="hr.group_hr_user")
     work_permit_scheduled_activity = fields.Boolean(default=False, groups="hr.group_hr_user")
-    work_permit_name = fields.Char('work_permit_name', compute='_compute_work_permit_name')
+    work_permit_name = fields.Char('work_permit_name', compute='_compute_work_permit_name', groups="hr.group_hr_user")
     additional_note = fields.Text(string='Additional Note', groups="hr.group_hr_user", tracking=True)
     certificate = fields.Selection([
         ('graduate', 'Graduate'),
@@ -103,12 +110,17 @@ class HrEmployeePrivate(models.Model):
         ('master', 'Master'),
         ('doctor', 'Doctor'),
         ('other', 'Other'),
-    ], 'Certificate Level', default='other', groups="hr.group_hr_user", tracking=True)
+    ], 'Certificate Level', groups="hr.group_hr_user", tracking=True)
     study_field = fields.Char("Field of Study", groups="hr.group_hr_user", tracking=True)
     study_school = fields.Char("School", groups="hr.group_hr_user", tracking=True)
     emergency_contact = fields.Char("Contact Name", groups="hr.group_hr_user", tracking=True)
     emergency_phone = fields.Char("Contact Phone", groups="hr.group_hr_user", tracking=True)
-    km_home_work = fields.Integer(string="Home-Work Distance", groups="hr.group_hr_user", tracking=True)
+    distance_home_work = fields.Integer(string="Home-Work Distance", groups="hr.group_hr_user", tracking=True)
+    km_home_work = fields.Integer(string="Home-Work Distance in Km", groups="hr.group_hr_user", compute="_compute_km_home_work", store=True)
+    distance_home_work_unit = fields.Selection([
+        ('kilometers', 'km'),
+        ('miles', 'mi'),
+    ], 'Home-Work Distance unit', tracking=True, groups="hr.group_hr_user", default='kilometers', required=True)
     employee_type = fields.Selection([
             ('employee', 'Employee'),
             ('student', 'Student'),
@@ -139,15 +151,50 @@ class HrEmployeePrivate(models.Model):
     id_card = fields.Binary(string="ID Card Copy", groups="hr.group_hr_user")
     driving_license = fields.Binary(string="Driving License", groups="hr.group_hr_user")
     private_car_plate = fields.Char(groups="hr.group_hr_user", help="If you have more than one car, just separate the plates by a space.")
-    currency_id = fields.Many2one('res.currency', related='company_id.currency_id', readonly=True)
-    related_partners_count = fields.Integer(compute="_compute_related_partners_count")
+    currency_id = fields.Many2one('res.currency', related='company_id.currency_id', readonly=True, groups="hr.group_hr_user")
+    related_partners_count = fields.Integer(compute="_compute_related_partners_count", groups="hr.group_hr_user")
     # properties
-    employee_properties = fields.Properties('Properties', definition='company_id.employee_properties_definition', precompute=False)
+    employee_properties = fields.Properties('Properties', definition='company_id.employee_properties_definition', precompute=False, groups="hr.group_hr_user")
+
+    # mail.activity.mixin
+    activity_ids = fields.One2many(groups="hr.group_hr_user")
+    activity_state = fields.Selection(groups="hr.group_hr_user")
+    activity_user_id = fields.Many2one(groups="hr.group_hr_user")
+    activity_type_id = fields.Many2one(groups="hr.group_hr_user")
+    activity_type_icon = fields.Char(groups="hr.group_hr_user")
+    activity_date_deadline = fields.Date(groups="hr.group_hr_user")
+    my_activity_date_deadline = fields.Date(groups="hr.group_hr_user")
+    activity_summary = fields.Char(groups="hr.group_hr_user")
+    activity_exception_decoration = fields.Selection(groups="hr.group_hr_user")
+    activity_exception_icon = fields.Char(groups="hr.group_hr_user")
+
+    # mail.thread mixin
+    message_is_follower = fields.Boolean(groups="hr.group_hr_user")
+    message_follower_ids = fields.One2many(groups="hr.group_hr_user")
+    message_partner_ids = fields.Many2many(groups="hr.group_hr_user")
+    message_ids = fields.One2many(groups="hr.group_hr_user")
+    has_message = fields.Boolean(groups="hr.group_hr_user")
+    message_needaction = fields.Boolean(groups="hr.group_hr_user")
+    message_needaction_counter = fields.Integer(groups="hr.group_hr_user")
+    message_has_error = fields.Boolean(groups="hr.group_hr_user")
+    message_has_error_counter = fields.Integer(groups="hr.group_hr_user")
+    message_attachment_count = fields.Integer(groups="hr.group_hr_user")
 
     _sql_constraints = [
         ('barcode_uniq', 'unique (barcode)', "The Badge ID must be unique, this one is already assigned to another employee."),
         ('user_uniq', 'unique (user_id, company_id)', "A user cannot be linked to multiple employees in the same company.")
     ]
+
+    @api.model
+    def check_field_access_rights(self, operation, field_names):
+        # DISCLAIMER: Dirty hack to avoid having to create a bridge module to override only a
+        # groups on a field which is not prefetched (because not stored) but would crash anyway
+        # if we try to read them directly (very uncommon use case). Don't add your field on this
+        # list if you can specify the group on the field directly (as all the other fields).
+        result = super().check_field_access_rights(operation, field_names)
+        if not self.env.user.has_group("hr.group_hr_user"):
+            result = [field for field in result if field not in ['activity_calendar_event_id', 'rating_ids', 'website_message_ids', 'message_has_sms_error']]
+        return result
 
     @api.depends('name', 'user_id.avatar_1920', 'image_1920')
     def _compute_avatar_1920(self):
@@ -187,6 +234,11 @@ class HrEmployeePrivate(models.Model):
             name = employee.name.replace(' ', '_') + '_' if employee.name else ''
             permit_no = '_' + employee.permit_no if employee.permit_no else ''
             employee.work_permit_name = "%swork_permit%s" % (name, permit_no)
+
+    @api.depends('distance_home_work', 'distance_home_work_unit')
+    def _compute_km_home_work(self):
+        for employee in self:
+            employee.km_home_work = employee.distance_home_work * 1.609 if employee.distance_home_work_unit == "miles" else employee.distance_home_work
 
     def _get_partner_count_depends(self):
         return ['user_id']
@@ -273,7 +325,7 @@ class HrEmployeePrivate(models.Model):
         public_fields = self.env['hr.employee.public']._fields
         private_fields = [fname for fname in field_names if fname not in public_fields]
         if private_fields:
-            raise AccessError(_('The fields %r you try to read is not available on the public employee profile.', ','.join(private_fields)))
+            raise AccessError(_('The fields “%s”, which you are trying to read, are not available for employee public profiles.', ','.join(private_fields)))
 
     def _copy_cache_from(self, public, field_names):
         # HACK: retrieve publicly available values from hr.employee.public and
@@ -321,7 +373,7 @@ class HrEmployeePrivate(models.Model):
         return res
 
     @api.model
-    def _search(self, domain, offset=0, limit=None, order=None, access_rights_uid=None):
+    def _search(self, domain, offset=0, limit=None, order=None):
         """
             We override the _search because it is the method that checks the access rights
             This is correct to override the _search. That way we enforce the fact that calling
@@ -331,9 +383,9 @@ class HrEmployeePrivate(models.Model):
             employees exactly match the ids of the related hr.employee.
         """
         if self.check_access_rights('read', raise_exception=False):
-            return super()._search(domain, offset, limit, order, access_rights_uid)
+            return super()._search(domain, offset, limit, order)
         try:
-            ids = self.env['hr.employee.public']._search(domain, offset, limit, order, access_rights_uid)
+            ids = self.env['hr.employee.public']._search(domain, offset, limit, order)
         except ValueError:
             raise AccessError(_('You do not have access to this document.'))
         # the result is expected from this table, so we should link tables
@@ -369,6 +421,12 @@ class HrEmployeePrivate(models.Model):
         for employee in self:
             if employee.pin and not employee.pin.isdigit():
                 raise ValidationError(_("The PIN must be a sequence of digits."))
+
+    @api.constrains('barcode')
+    def _verify_barcode(self):
+        for employee in self:
+            if employee.barcode and not employee.barcode.isdigit():
+                raise ValidationError(_("The Badge ID must be a sequence of digits."))
 
     @api.constrains('ssnid')
     def _check_ssnid(self):
@@ -556,6 +614,14 @@ class HrEmployeePrivate(models.Model):
         # Returns a dict {employee_id: tz}
         return {emp.id: emp._get_tz() for emp in self}
 
+    def _employee_attendance_intervals(self, start, stop, lunch=False):
+        self.ensure_one()
+        calendar = self.resource_calendar_id or self.company_id.resource_calendar_id
+        if not lunch:
+            return self._get_expected_attendances(start, stop)
+        else:
+            return calendar._attendance_intervals_batch(start, stop, self.resource_id, lunch=True)[self.resource_id.id]
+
     def _get_expected_attendances(self, date_from, date_to):
         self.ensure_one()
         employee_timezone = timezone(self.tz) if self.tz else None
@@ -565,8 +631,9 @@ class HrEmployeePrivate(models.Model):
                                 date_to,
                                 tz=employee_timezone,
                                 resources=self.resource_id,
+                                compute_leaves=True,
                                 domain=[('company_id', 'in', [False, self.company_id.id])])[self.resource_id.id]
-        return calendar._get_attendance_intervals_days_data(calendar_intervals)
+        return calendar_intervals
 
     def _get_calendar_attendances(self, date_from, date_to):
         self.ensure_one()
@@ -587,6 +654,12 @@ class HrEmployeePrivate(models.Model):
             ('widower', 'Widower'),
             ('divorced', 'Divorced')
         ]
+
+    def _load_scenario(self):
+        demo_tag = self.env.ref('hr_appraisal.employee_category_demo', raise_if_not_found=False)
+        if demo_tag:
+            return
+        convert.convert_file(self.env, 'hr', 'data/scenarios/hr_scenario.xml', None, mode='init', kind='data')
 
     # ---------------------------------------------------------
     # Business Methods

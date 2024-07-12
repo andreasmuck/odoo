@@ -63,7 +63,7 @@ export function parseAndTransform(htmlString, transformFunction) {
     let children;
     try {
         const div = document.createElement("div");
-        div.innerHTML = string;
+        div.innerHTML = string; // /!\ quotes are unescaped
         children = Array.from(div.childNodes);
     } catch {
         const div = document.createElement("div");
@@ -163,7 +163,7 @@ export function escapeAndCompactTextContent(content) {
  * @param validRecords.partners {Array}
  * @return {string}
  */
-function generateMentionsLinks(body, { partners = [], threads = [] }) {
+function generateMentionsLinks(body, { partners = [], threads = [], specialMentions = [] }) {
     const mentions = [];
     for (const partner of partners) {
         const placeholder = `@-mention-partner-${partner.id}`;
@@ -188,6 +188,12 @@ function generateMentionsLinks(body, { partners = [], threads = [] }) {
             text,
         });
         body = body.replace(text, placeholder);
+    }
+    for (const special of specialMentions) {
+        body = body.replace(
+            `@${escape(special)}`,
+            `<a href="#" class="o-discuss-mention">@${escape(special)}</a>`
+        );
     }
     const baseHREF = url("/web");
     for (const mention of mentions) {

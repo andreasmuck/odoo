@@ -5,8 +5,6 @@
         <field name="res_model">product.product</field>
         <field name="context">{'location': active_id, 'search_default_real_stock_available': 1, 'search_default_virtual_stock_available': 1,
                     'search_default_virtual_stock_negative': 1, 'search_default_real_stock_negative': 1, 'create': False}</field>
-        <field name="binding_model_id" ref="model_stock_location"/>
-        <field name="binding_view_types">form</field>
         <field name="search_view_id" ref="stock.stock_product_search_form_view"/>
     </record>
 
@@ -22,6 +20,9 @@
                                 class="oe_stat_button"
                                 icon="fa-random" name="%(location_open_putaway)d" type="action"
                                 groups="stock.group_stock_multi_locations" context="{'default_company_id': company_id}"/>
+                        <button string="Products"
+                                class="oe_stat_button" icon="fa-th-list"
+                                type="action" name="stock.act_product_location_open"/>
                         <button string="Current Stock"
                                 class="oe_stat_button"
                                 icon="fa-cubes" name="%(location_open_quants)d" type="action"/>
@@ -36,7 +37,7 @@
                         <group string="Additional Information" name="additional_info">
                             <field name="active" invisible="1"/>
                             <field name="usage"/>
-                            <field name="storage_category_id" invisible="usage != 'internal'" groups="stock.group_stock_storage_categories"/>
+                            <field name="storage_category_id" invisible="usage != 'internal'" groups="stock.group_stock_multi_locations"/>
                             <field name="company_id" groups="base.group_multi_company" options="{'no_create': True}"/>
                             <field name="scrap_location" invisible="usage not in ('inventory', 'internal')"/>
                             <field name="return_location"/>
@@ -48,7 +49,7 @@
                             <field name="next_inventory_date" invisible="not active"/>
                         </group>
                         <group string="Logistics" groups="stock.group_adv_location">
-                            <field name="removal_strategy_id" options="{'no_create': True}"/>
+                            <field name="removal_strategy_id" options="{'no_create': True}" invisible="usage in ('supplier', 'customer', 'inventory', 'production') or scrap_location or usage == 'transit' and not company_id"/>
                         </group>
                     </group>
                     <field name="comment" placeholder="External note..."/>
@@ -101,10 +102,11 @@
             <tree string="Stock Location" decoration-info="usage=='view'" decoration-danger="usage=='internal'" multi_edit="1">
                 <field name="company_id" column_invisible="True"/>
                 <field name="active" column_invisible="True"/>
+                <field name="sequence" widget="handle"/>
                 <field name="complete_name" string="Location"/>
                 <field name="usage"/>
                 <field name="is_empty" invisible="usage not in ['internal', 'transit']"/>
-                <field name="storage_category_id" readonly="usage != 'internal'" groups="stock.group_stock_storage_categories"/>
+                <field name="storage_category_id" readonly="usage != 'internal'" groups="stock.group_stock_multi_locations"/>
                 <field name="company_id" groups="base.group_multi_company"/>
             </tree>
         </field>
@@ -164,7 +166,7 @@
     </record>
 
     <menuitem action="action_location_form" id="menu_action_location_form"
-        parent="menu_warehouse_config" sequence="2" groups="stock.group_stock_multi_locations"/>
+        parent="menu_warehouse_config" sequence="3" groups="stock.group_stock_multi_locations"/>
 
         <!--Routes-->
         <record id="stock_location_route_tree" model="ir.ui.view">
@@ -260,6 +262,6 @@
             </field>
         </record>
 
-        <menuitem id="menu_routes_config" action="action_routes_form" name="Routes" parent="menu_warehouse_config" sequence="3" groups="stock.group_adv_location"/>
+        <menuitem id="menu_routes_config" action="action_routes_form" name="Routes" parent="menu_warehouse_config" sequence="4" groups="stock.group_adv_location"/>
 
 </odoo>

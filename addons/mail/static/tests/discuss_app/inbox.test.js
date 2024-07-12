@@ -1,4 +1,3 @@
-import { describe, expect, test } from "@odoo/hoot";
 import {
     assertSteps,
     click,
@@ -11,11 +10,12 @@ import {
     startServer,
     step,
     triggerHotkey,
-} from "../mail_test_helpers";
-import { Command, mockService, serverState } from "@web/../tests/web_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, expect, test } from "@odoo/hoot";
 import { Deferred } from "@odoo/hoot-mock";
-import { getMockEnv } from "@web/../tests/_framework/env_test_helpers";
-import { actionService } from "@web/webclient/actions/action_service";
+import { mockService, serverState, withUser } from "@web/../tests/web_test_helpers";
+
+import { rpc } from "@web/core/network/rpc";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -27,7 +27,6 @@ test("reply: discard on reply button toggle", async () => {
         body: "not empty",
         model: "res.partner",
         needaction: true,
-        needaction_partner_ids: [serverState.partnerId],
         res_id: partnerId,
     });
     pyEnv["mail.notification"].create({
@@ -47,7 +46,7 @@ test("reply: discard on reply button toggle", async () => {
     await contains(".o-mail-Composer", { count: 0 });
 });
 
-test("reply: discard on pressing escape", async () => {
+test("reply: discard on pressing escape [REQUIRE FOCUS]", async () => {
     const pyEnv = await startServer();
     const partnerId = pyEnv["res.partner"].create({
         email: "testpartnert@odoo.com",
@@ -57,7 +56,6 @@ test("reply: discard on pressing escape", async () => {
         body: "not empty",
         model: "res.partner",
         needaction: true,
-        needaction_partner_ids: [serverState.partnerId],
         res_id: partnerId,
     });
     pyEnv["mail.notification"].create({
@@ -97,7 +95,6 @@ test('"reply to" composer should log note if message replied to is a note', asyn
         is_note: true,
         model: "res.partner",
         needaction: true,
-        needaction_partner_ids: [serverState.partnerId],
         res_id: partnerId,
     });
     pyEnv["mail.notification"].create({
@@ -131,7 +128,6 @@ test('"reply to" composer should send message if message replied to is not a not
         is_discussion: true,
         model: "res.partner",
         needaction: true,
-        needaction_partner_ids: [serverState.partnerId],
         res_id: partnerId,
     });
     pyEnv["mail.notification"].create({
@@ -152,7 +148,7 @@ test('"reply to" composer should send message if message replied to is not a not
     await click("[title='Reply']");
     await contains(".o-mail-Composer [placeholder='Send a message to followers…']");
     await insertText(".o-mail-Composer-input", "Test");
-    await click(".o-mail-Composer-send:enabled", { text: "Send" });
+    await click(".o-mail-Composer-send[aria-label='Send']:enabled");
     await contains(".o-mail-Composer-send", { count: 0 });
     await assertSteps(["/mail/message/post"]);
 });
@@ -163,7 +159,6 @@ test("show subject of message in Inbox", async () => {
         body: "not empty",
         model: "discuss.channel",
         needaction: true,
-        needaction_partner_ids: [serverState.partnerId], // not needed, for consistency
         subject: "Salutations, voyageur",
     });
     pyEnv["mail.notification"].create({
@@ -181,7 +176,6 @@ test("show subject of message in history", async () => {
     const pyEnv = await startServer();
     const messageId = pyEnv["mail.message"].create({
         body: "not empty",
-        history_partner_ids: [Command.link(serverState.partnerId)], // not needed, for consistency
         model: "discuss.channel",
         subject: "Salutations, voyageur",
     });
@@ -430,7 +424,6 @@ test("click on (non-channel/non-partner) origin thread link should redirect to f
         body: "not empty",
         model: "res.fake",
         needaction: true,
-        needaction_partner_ids: [serverState.partnerId],
         res_id: fakeId,
     });
     pyEnv["mail.notification"].create({
@@ -440,26 +433,21 @@ test("click on (non-channel/non-partner) origin thread link should redirect to f
         res_partner_id: serverState.partnerId,
     });
     const def = new Deferred();
-    mockService("action", () => {
-        const ogService = actionService.start(getMockEnv());
-        return {
-            ...ogService,
-            doAction(action) {
-                if (action?.res_model === "res.fake") {
-                    // Callback of doing an action (action manager).
-                    // Expected to be called on click on origin thread link,
-                    // which redirects to form view of record related to origin thread
-                    step("do-action");
-                    expect(action.type).toBe("ir.actions.act_window");
-                    expect(action.views).toEqual([[false, "form"]]);
-                    expect(action.res_model).toBe("res.fake");
-                    expect(action.res_id).toBe(fakeId);
-                    def.resolve();
-                    return Promise.resolve();
-                }
-                return ogService.doAction.call(this, ...arguments);
-            },
-        };
+    mockService("action", {
+        async doAction(action) {
+            if (action?.res_model !== "res.fake") {
+                return super.doAction(...arguments);
+            }
+            // Callback of doing an action (action manager).
+            // Expected to be called on click on origin thread link,
+            // which redirects to form view of record related to origin thread
+            step("do-action");
+            expect(action.type).toBe("ir.actions.act_window");
+            expect(action.views).toEqual([[false, "form"]]);
+            expect(action.res_model).toBe("res.fake");
+            expect(action.res_id).toBe(fakeId);
+            def.resolve();
+        },
     });
     await start();
     await openDiscuss();
@@ -481,7 +469,6 @@ test("inbox messages are never squashed", async () => {
             message_type: "comment",
             model: "discuss.channel",
             needaction: true,
-            needaction_partner_ids: [serverState.partnerId],
             res_id: channelId,
         },
         {
@@ -491,7 +478,6 @@ test("inbox messages are never squashed", async () => {
             message_type: "comment",
             model: "discuss.channel",
             needaction: true,
-            needaction_partner_ids: [serverState.partnerId],
             res_id: channelId,
         },
     ]);
@@ -525,7 +511,6 @@ test("reply: stop replying button click", async () => {
         body: "not empty",
         model: "res.partner",
         needaction: true,
-        needaction_partner_ids: [serverState.partnerId],
         res_id: partnerId,
     });
     pyEnv["mail.notification"].create({
@@ -552,7 +537,6 @@ test("error notifications should not be shown in Inbox", async () => {
         body: "not empty",
         model: "res.partner",
         needaction: true,
-        needaction_partner_ids: [serverState.partnerId],
         res_id: partnerId,
     });
     pyEnv["mail.notification"].create({
@@ -602,7 +586,6 @@ test("emptying inbox doesn't display rainbow man in another thread", async () =>
         body: "not empty",
         model: "res.partner",
         needaction: true,
-        needaction_partner_ids: [serverState.partnerId],
         res_id: partnerId,
     });
     pyEnv["mail.notification"].create([
@@ -623,4 +606,86 @@ test("emptying inbox doesn't display rainbow man in another thread", async () =>
     await contains("button", { text: "Inbox", contains: [".badge", { count: 0 }] });
     // weak test, no guarantee that we waited long enough for the potential rainbow man to show
     await contains(".o_reward_rainbow", { count: 0 });
+});
+
+test("Counter should be incremented by 1 when receiving a message with a mention in a channel", async () => {
+    const pyEnv = await startServer();
+    pyEnv["res.users"].write([serverState.userId], { notification_type: "inbox" });
+    const channelId = pyEnv["discuss.channel"].create({ name: "General" });
+    const partnerId = pyEnv["res.partner"].create({ name: "Thread" });
+    const partnerUserId = pyEnv["res.partner"].create({ name: "partner1" });
+    const userId = pyEnv["res.users"].create({ partner_id: partnerUserId });
+    const messageId = pyEnv["mail.message"].create({
+        body: "not empty",
+        model: "res.partner",
+        needaction: true,
+        res_id: partnerId,
+    });
+    pyEnv["mail.notification"].create([
+        {
+            mail_message_id: messageId,
+            notification_type: "inbox",
+            res_partner_id: serverState.partnerId,
+        },
+    ]);
+    await start();
+    await openDiscuss();
+    await contains("button", { text: "Inbox", contains: [".badge", { text: "1" }] });
+    const mention = [serverState.partnerId];
+    const mentionName = serverState.partnerName;
+    withUser(userId, () =>
+        rpc("/mail/message/post", {
+            post_data: {
+                body: `<a href="https://www.hoot.test/web#model=res.partner&amp;id=17" class="o_mail_redirect" data-oe-id="${mention[0]}" data-oe-model="res.partner" target="_blank" contenteditable="false">@${mentionName}</a> mention`,
+                message_type: "comment",
+                partner_ids: mention,
+                subtype_xmlid: "mail.mt_comment",
+            },
+            thread_id: channelId,
+            thread_model: "discuss.channel",
+        })
+    );
+    await contains("button", { text: "Inbox", contains: [".badge", { text: "2" }] });
+});
+
+test("Clear need action counter when opening a channel", async () => {
+    const pyEnv = await startServer();
+    const channelId = pyEnv["discuss.channel"].create({ name: "General" });
+    const [messageId1, messageId2] = pyEnv["mail.message"].create([
+        {
+            body: "not empty",
+            model: "discuss.channel",
+            needaction: true,
+            res_id: channelId,
+        },
+        {
+            body: "not empty",
+            model: "discuss.channel",
+            needaction: true,
+            res_id: channelId,
+        },
+    ]);
+    pyEnv["mail.notification"].create([
+        {
+            mail_message_id: messageId1,
+            notification_type: "inbox",
+            res_partner_id: serverState.partnerId,
+        },
+        {
+            mail_message_id: messageId2,
+            notification_type: "inbox",
+            res_partner_id: serverState.partnerId,
+        },
+    ]);
+    await start();
+    await openDiscuss();
+    await contains(".o-mail-DiscussSidebar-item", {
+        text: "General",
+        contains: [".badge", { text: "2" }],
+    });
+    await click(".o-mail-DiscussSidebarChannel", { text: "General" });
+    await contains(".o-mail-DiscussSidebar-item", {
+        text: "General",
+        contains: [".badge", { count: 0 }],
+    });
 });

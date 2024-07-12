@@ -7,7 +7,16 @@ import { urlParams } from "./url";
 // Global
 //-----------------------------------------------------------------------------
 
-const { console } = globalThis;
+const {
+    console: {
+        debug: $debug,
+        dir: $dir,
+        groupCollapsed: $groupCollapsed,
+        groupEnd: $groupEnd,
+        log: $log,
+        trace: $trace,
+    },
+} = globalThis;
 
 //-----------------------------------------------------------------------------
 // Internal
@@ -68,9 +77,9 @@ export function makeNetworkLogger(prefix, title) {
             }
             const color = `color: #66e`;
             const styles = [`${color}; font-weight: bold;`, color];
-            console.groupCollapsed(`-> %c${prefix}#${id}%c<${title}>`, ...styles, await getData());
-            console.trace("request trace");
-            console.groupEnd();
+            $groupCollapsed(`-> %c${prefix}#${id}%c<${title}>`, ...styles, await getData());
+            $trace("request trace");
+            $groupEnd();
         },
         /**
          * Response logger: orange.
@@ -82,7 +91,7 @@ export function makeNetworkLogger(prefix, title) {
             }
             const color = `color: #f80`;
             const styles = [`${color}; font-weight: bold;`, color];
-            console.log(`<- %c${prefix}#${id}%c<${title}>`, ...styles, await getData());
+            $log(`<- %c${prefix}#${id}%c<${title}>`, ...styles, await getData());
         },
     };
 }
@@ -102,6 +111,12 @@ export const logger = {
     /**
      * @param {...any} args
      */
+    debug(...args) {
+        $debug(...styledArguments(args));
+    },
+    /**
+     * @param {...any} args
+     */
     error(...args) {
         console.error(...styledArguments(args));
     },
@@ -109,16 +124,7 @@ export const logger = {
      * @param {...any} args
      */
     groupCollapsed(...args) {
-        console.groupCollapsed(...styledArguments(args));
-    },
-    groupEnd() {
-        console.groupEnd();
-    },
-    /**
-     * @param {...any} args
-     */
-    table(...args) {
-        console.table(...args);
+        $groupCollapsed(...styledArguments(args));
     },
     /**
      * @param {...any} args
@@ -136,27 +142,7 @@ export const logger = {
         if (logger.level < logLevels.DEBUG) {
             return;
         }
-        console.debug(...styledArguments(args));
-    },
-    async logRequest(getData) {
-        if (logger.level < logLevels.DEBUG) {
-            return;
-        }
-        const color = `color: #66e`;
-        const styles = [`${color}; font-weight: bold;`, color];
-        console.groupCollapsed(`-> %c${prefix}#${id}%c<${title}>`, ...styles, await getData());
-        console.trace(); // Using console to reduce stack trace noise
-        logger.groupEnd();
-    },
-    async logResponse(getData) {
-        if (logger.level < logLevels.DEBUG) {
-            return;
-        }
-        const color = `color: #f80`;
-        const styles = [`${color}; font-weight: bold;`, color];
-        console.groupCollapsed(`<- %c${prefix}#${id}%c<${title}>`, ...styles, await getData());
-        console.trace(); // Using console to reduce stack trace noise
-        logger.groupEnd();
+        $debug(...styledArguments(args));
     },
     /**
      * @param {import("./test").Test} test
@@ -166,7 +152,7 @@ export const logger = {
             return;
         }
         const { fullName, lastResults } = test;
-        console.log(
+        $log(
             ...styledArguments([
                 `Test "${fullName}" passed`,
                 lastResults.assertions.length,
@@ -195,7 +181,7 @@ export const logger = {
         if (withArgs.length) {
             args.push("(", ...withArgs, ")");
         }
-        console.log(...styledArguments(args));
+        $log(...styledArguments(args));
     },
     /**
      * @param {...any} args
@@ -204,12 +190,12 @@ export const logger = {
         if (logger.level < logLevels.RUNNER) {
             return;
         }
-        console.log(...styledArguments(args));
+        $log(...styledArguments(args));
     },
     /**
      * @param {...any} args
      */
     logGlobal(...args) {
-        console.dir(...unstyledArguments(args));
+        $dir(...unstyledArguments(args));
     },
 };

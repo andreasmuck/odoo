@@ -20,7 +20,7 @@ class TestAveragePrice(ValuationReconciliationTestCommon):
         product_cable_management_box = self.env['product.product'].create({
             'default_code': 'AVG',
             'name': 'Average Ice Cream',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': self.stock_account_product_categ.id,
             'list_price': 100.0,
             'standard_price': 60.0,
@@ -133,7 +133,7 @@ class TestAveragePrice(ValuationReconciliationTestCommon):
 
         avco_product = self.env['product.product'].create({
             'name': 'Average Ice Cream',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': self.stock_account_product_categ.id,
             'purchase_method': 'purchase',
         })
@@ -149,7 +149,7 @@ class TestAveragePrice(ValuationReconciliationTestCommon):
 
         purchase_order.button_confirm()
         purchase_order.action_create_invoice()
-        bill = purchase_order.invoice_ids[0]
+        bill = purchase_order.account_move_ids[0]
 
         bill.invoice_date = time.strftime('%Y-%m-%d')
         bill.invoice_line_ids[0].quantity = 1.0
@@ -170,7 +170,7 @@ class TestAveragePrice(ValuationReconciliationTestCommon):
 
         avco_product = self.env['product.product'].create({
             'name': 'Average Ice Cream',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': self.stock_account_product_categ.id,
             'purchase_method': 'purchase',
         })
@@ -186,14 +186,14 @@ class TestAveragePrice(ValuationReconciliationTestCommon):
 
         purchase_order.button_confirm()
         purchase_order.action_create_invoice()
-        bill = purchase_order.invoice_ids[0]
+        bill = purchase_order.account_move_ids[0]
 
         bill.invoice_date = time.strftime('%Y-%m-%d')
         bill.invoice_line_ids[0].price_unit = 100.0
         bill.button_cancel()
 
         purchase_order.action_create_invoice()
-        bill = purchase_order.invoice_ids[1]
+        bill = purchase_order.account_move_ids[1]
 
         bill.invoice_date = time.strftime('%Y-%m-%d')
         bill.invoice_line_ids[0].price_unit = 300.0
@@ -204,3 +204,41 @@ class TestAveragePrice(ValuationReconciliationTestCommon):
         picking.button_validate()
 
         self.assertEqual(avco_product.avg_cost, 300)
+
+    def test_svl_avco_with_discount(self):
+        """
+            Ensure the stock valuation is correct when
+            the purchase order has a discount and the
+            product was invoiced before being received
+        """
+
+        avco_product = self.env['product.product'].create({
+            'name': 'Average Ice Cream',
+            'type': 'consu',
+            'categ_id': self.stock_account_product_categ.id,
+            'purchase_method': 'purchase',
+        })
+        avco_product.categ_id.property_cost_method = 'average'
+
+        purchase_order = self.env['purchase.order'].create({
+            'partner_id': self.partner_a.id,
+            'order_line': [(0, 0, {
+                'product_id': avco_product.id,
+                'product_qty': 10.0,
+                'price_unit': 10.0,
+                'discount': 10.0,
+            })]
+        })
+
+        purchase_order.button_confirm()
+        purchase_order.action_create_invoice()
+        bill = purchase_order.account_move_ids[0]
+
+        bill.invoice_date = time.strftime('%Y-%m-%d')
+        bill.action_post()
+
+        picking = purchase_order.picking_ids[0]
+        picking.button_validate()
+
+        self.assertEqual(avco_product.avg_cost, 9)
+        self.assertEqual(avco_product.value_svl, 90)

@@ -1,14 +1,12 @@
-import { expect, test } from "@odoo/hoot";
-import { queryAllTexts, queryOne } from "@odoo/hoot-dom";
-import { Deferred, animationFrame } from "@odoo/hoot-mock";
+import { afterEach, expect, test } from "@odoo/hoot";
+import { queryAllTexts } from "@odoo/hoot-dom";
+import { Deferred, animationFrame, mockDate, runAllTimers } from "@odoo/hoot-mock";
 import { onRendered } from "@odoo/owl";
-
 import {
     contains,
     defineModels,
     editFavoriteName,
     fields,
-    findComponent,
     getService,
     makeMockServer,
     mockService,
@@ -16,7 +14,6 @@ import {
     mountView,
     mountWithCleanup,
     onRpc,
-    patchDate,
     patchWithCleanup,
     saveFavorite,
     switchView,
@@ -27,189 +24,33 @@ import {
     toggleSearchBarMenu,
     validateSearch,
 } from "@web/../tests/web_test_helpers";
-import { DEFAULT_BG, getBorderWhite, getColors, hexToRGBA } from "@web/core/colors/colors";
+import {
+    checkDatasets,
+    checkLabels,
+    checkLegend,
+    checkModeIs,
+    checkTooltip,
+    clickOnDataset,
+    clickOnLegend,
+    clickSort,
+    getChart,
+    getGraphModel,
+    getGraphModelMetaData,
+    getGraphRenderer,
+    getModeButton,
+    getScaleY,
+    getYAxisLabel,
+    selectMode,
+} from "./graph_test_helpers";
+
+import { DEFAULT_BG, getBorderWhite, getColors, lightenColor } from "@web/core/colors/colors";
 import { Domain } from "@web/core/domain";
 import { registry } from "@web/core/registry";
-import { ensureArray } from "@web/core/utils/arrays";
 import { SampleServer } from "@web/model/sample_server";
 import { GraphArchParser } from "@web/views/graph/graph_arch_parser";
-import { GraphController } from "@web/views/graph/graph_controller";
 import { GraphRenderer } from "@web/views/graph/graph_renderer";
 import { graphView } from "@web/views/graph/graph_view";
 import { WebClient } from "@web/webclient/webclient";
-
-/**
- * @typedef {"bar" | "line" | "pie"} GraphMode
- *
- * @typedef {import("@web/views/view").View} GraphView
- */
-
-/**
- * @param {GraphView} view
- * @param {string | Iterable<string>} keys
- * @param {Record<string, any> | Iterable<Record<string, any>>} expectedDatasets
- */
-const checkDatasets = (view, keys, expectedDatasets) => {
-    keys = ensureArray(keys);
-
-    const datasets = getChart(view).data.datasets;
-    const actualValues = [];
-    for (const dataset of datasets) {
-        const partialDataset = {};
-        for (const key of keys) {
-            partialDataset[key] = dataset[key];
-        }
-        actualValues.push(partialDataset);
-    }
-    expect(actualValues).toEqual(ensureArray(expectedDatasets));
-};
-
-/**
- * @param {GraphView} view
- * @param {GraphMode} mode
- */
-const checkModeIs = (view, mode) => {
-    expect(getGraphModelMetaData(view).mode).toBe(mode);
-    expect(getChart(view).config.type).toBe(mode);
-    expect(getModeButton(mode)).toHaveClass("active");
-};
-
-/**
- * @param {GraphView} view
- * @param {{ lines: { label: string, value: string }[], title?: string }} expectedTooltip
- * @param {number} index
- * @param {number} datasetIndex
- */
-const checkTooltip = (view, { title, lines }, index, datasetIndex = null) => {
-    // If the tooltip options are changed, this helper should change: we construct the dataPoints
-    // similarly to Chart.js according to the values set for the tooltips options 'mode' and 'intersect'.
-    const chart = getChart(view);
-    const { datasets } = chart.data;
-    const dataPoints = [];
-    for (let i = 0; i < datasets.length; i++) {
-        const dataset = datasets[i];
-        const raw = dataset.data[index];
-        if (raw !== undefined && (datasetIndex === null || datasetIndex === i)) {
-            dataPoints.push({
-                datasetIndex: i,
-                dataIndex: index,
-                raw,
-            });
-        }
-    }
-    chart.config.options.plugins.tooltip.external({
-        tooltip: { opacity: 1, x: 1, y: 1, dataPoints },
-    });
-    const lineLabels = [];
-    const lineValues = [];
-    for (const line of lines) {
-        lineLabels.push(line.label);
-        lineValues.push(String(line.value));
-    }
-
-    expect(`.o_graph_custom_tooltip`).toHaveCount(1);
-    expect(`table thead tr th.o_measure`).toHaveText(title || "Count");
-    expect(queryAllTexts(`table tbody tr td span.o_label`)).toEqual(lineLabels);
-    expect(queryAllTexts(`table tbody tr td.o_value`)).toEqual(lineValues);
-};
-
-/**
- * @param {"asc" | "desc"} direction
- */
-const clickSort = (direction) => contains(`.fa-sort-amount-${direction}`).click();
-
-/**
- * @param {GraphView} view
- */
-const getChart = (view) => getGraphRenderer(view).chart;
-
-/**
- * @param {GraphView} view
- */
-const getGraphModelMetaData = (view) => getGraphModel(view).metaData;
-
-/**
- * @param {GraphMode} mode
- */
-const getModeButton = (mode) => queryOne`.o_graph_button[data-mode=${mode}]`;
-
-/**
- * @param {GraphView} view
- */
-const getScaleY = (view) => getChart(view).config.options.scales.y;
-
-/**
- * @param {GraphView} view
- */
-const getXAxisLabel = (view) => getChart(view).config.options.scales.x.title.text;
-
-/**
- * @param {GraphView} view
- */
-const getYAxisLabel = (view) => getChart(view).config.options.scales.y.title.text;
-
-/**
- * @param {GraphView} view
- * @param {string | Iterable<string>} expectedLabels
- */
-export function checkLabels(view, expectedLabels) {
-    expect(getChart(view).data.labels.map(String)).toEqual(ensureArray(expectedLabels));
-}
-
-/**
- * @param {GraphView} view
- * @param {string | Iterable<string>} expectedLabels
- */
-export function checkLegend(view, expectedLabels) {
-    const chart = getChart(view);
-    const labels = chart.config.options.plugins.legend.labels
-        .generateLabels(chart)
-        .map((o) => o.text);
-    const expectedLabelsList = ensureArray(expectedLabels);
-    expect(labels).toEqual(expectedLabelsList, {
-        message: `Legend should be matching: ${expectedLabelsList
-            .map((label) => `"${label}"`)
-            .join(", ")}`,
-    });
-}
-
-/**
- * @param {GraphView} view
- */
-export async function clickOnDataset(view) {
-    const chart = getChart(view);
-    const point = chart.getDatasetMeta(0).data[0].getCenterPoint();
-    return contains(chart.canvas).click({ position: point, relative: true });
-}
-
-/**
- * @param {GraphView} view
- */
-export function getGraphController(view) {
-    return findComponent(view, (c) => c instanceof GraphController);
-}
-
-/**
- * @param {GraphView} view
- */
-export function getGraphModel(view) {
-    return getGraphController(view).model;
-}
-
-/**
- * @param {GraphView} view
- * @returns {GraphRenderer}
- */
-export function getGraphRenderer(view) {
-    return findComponent(view, (c) => c instanceof GraphRenderer);
-}
-
-/**
- * @param {GraphMode} mode
- */
-export function selectMode(mode) {
-    return contains(getModeButton(mode)).click();
-}
 
 class Color extends models.Model {
     name = fields.Char();
@@ -332,6 +173,8 @@ class Foo extends models.Model {
 
 defineModels([Foo, Color, Product]);
 
+afterEach(runAllTimers);
+
 test("simple bar chart rendering", async () => {
     const view = await mountView({ type: "graph", resModel: "foo" });
 
@@ -348,7 +191,7 @@ test("simple bar chart rendering", async () => {
 
     checkLabels(view, ["Total"]);
     checkDatasets(view, ["backgroundColor", "borderColor", "data", "label", "stack"], {
-        backgroundColor: "#1f77b4",
+        backgroundColor: "#4EA7F2",
         borderColor: undefined,
         data: [8],
         label: "Count",
@@ -383,7 +226,7 @@ test("simple bar chart rendering (one groupBy)", async () => {
     expect(".o_graph_canvas_container canvas").toHaveCount(1);
     checkLabels(view, ["false", "true"]);
     checkDatasets(view, ["backgroundColor", "borderColor", "data", "label"], {
-        backgroundColor: "#1f77b4",
+        backgroundColor: "#4EA7F2",
         borderColor: undefined,
         data: [5, 3],
         label: "Count",
@@ -412,20 +255,20 @@ test("simple bar chart rendering (two groupBy)", async () => {
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: "#1f77b4",
+                backgroundColor: "#4EA7F2",
                 borderColor: undefined,
                 data: [1, 3],
                 label: "xphone",
             },
             {
-                backgroundColor: "#ff7f0e",
+                backgroundColor: "#EA6175",
                 borderColor: undefined,
                 data: [4, 0],
                 label: "xpad",
             },
             {
-                backgroundColor: "rgba(0,0,0,0.4)",
-                borderColor: "rgba(0,0,0,0.4)",
+                backgroundColor: "#343a40",
+                borderColor: "rgba(0,0,0,.3)",
                 data: [5, 3],
                 label: "Sum",
             },
@@ -462,13 +305,13 @@ test("bar chart rendering (no groupBy, several domains)", async () => {
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: "#1f77b4",
+                backgroundColor: "#4EA7F2",
                 borderColor: undefined,
                 data: [6],
                 label: "True group",
             },
             {
-                backgroundColor: "#ff7f0e",
+                backgroundColor: "#EA6175",
                 borderColor: undefined,
                 data: [17],
                 label: "False group",
@@ -529,13 +372,13 @@ test("bar chart rendering (one groupBy, several domains)", async () => {
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: "#1f77b4",
+                backgroundColor: "#4EA7F2",
                 borderColor: undefined,
                 data: [14, 0, 0, 0],
                 label: "True group",
             },
             {
-                backgroundColor: "#ff7f0e",
+                backgroundColor: "#EA6175",
                 borderColor: undefined,
                 data: [12, -4, 2, 0],
                 label: "False group",
@@ -596,7 +439,7 @@ test("bar chart many2many groupBy", async () => {
     expect(".o_graph_canvas_container canvas").toHaveCount(1);
     checkLabels(view, ["black", "red", "None"]);
     checkDatasets(view, ["backgroundColor", "borderColor", "data", "label"], {
-        backgroundColor: "#1f77b4",
+        backgroundColor: "#4EA7F2",
         borderColor: undefined,
         data: [10, 13, 8],
         label: "Revenue",
@@ -625,7 +468,7 @@ test("differentiate many2many values with same label", async () => {
     expect(".o_graph_canvas_container canvas").toHaveCount(1);
     checkLabels(view, ["black", "red", "red (2)", "None"]);
     checkDatasets(view, ["backgroundColor", "borderColor", "data", "label"], {
-        backgroundColor: "#1f77b4",
+        backgroundColor: "#4EA7F2",
         borderColor: undefined,
         data: [10, 13, 14, 8],
         label: "Revenue",
@@ -683,13 +526,13 @@ test("bar chart rendering (one groupBy, several domains with date identification
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: "#1f77b4",
+                backgroundColor: "#4EA7F2",
                 borderColor: undefined,
                 data: [14, 0],
                 label: "February 2021",
             },
             {
-                backgroundColor: "#ff7f0e",
+                backgroundColor: "#EA6175",
                 borderColor: undefined,
                 data: [12, 5, 15, 2],
                 label: "January 2021",
@@ -790,25 +633,25 @@ test("bar chart rendering (two groupBy, several domains with no date identificat
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: "#1f77b4",
+                backgroundColor: "#4EA7F2",
                 borderColor: undefined,
                 data: [14, 0],
                 label: "February 2021 / W05 2021",
             },
             {
-                backgroundColor: "#ff7f0e",
+                backgroundColor: "#EA6175",
                 borderColor: undefined,
                 data: [0, 0],
                 label: "February 2021 / W07 2021",
             },
             {
-                backgroundColor: "#aec7e8",
+                backgroundColor: "#43C5B1",
                 borderColor: undefined,
                 data: [12, 0],
                 label: "January 2021 / W01 2021",
             },
             {
-                backgroundColor: "#ffbb78",
+                backgroundColor: "#F4A261",
                 borderColor: undefined,
                 data: [0, 5],
                 label: "January 2021 / W02 2021",
@@ -861,8 +704,8 @@ test("line chart rendering (no groupBy)", async () => {
     expect(getGraphModelMetaData(view).mode).toBe("line");
     checkLabels(view, ["", "Total", ""]);
     checkDatasets(view, ["backgroundColor", "borderColor", "data", "label", "stack"], {
-        backgroundColor: "rgba(31,119,180,0.4)",
-        borderColor: "#1f77b4",
+        backgroundColor: "#a7d3f9",
+        borderColor: "#4EA7F2",
         data: [undefined, 8],
         label: "Count",
         stack: undefined,
@@ -885,8 +728,8 @@ test("line chart rendering (one groupBy)", async () => {
     expect(".o_graph_canvas_container canvas").toHaveCount(1);
     checkLabels(view, ["false", "true"]);
     checkDatasets(view, ["backgroundColor", "borderColor", "data", "label"], {
-        backgroundColor: "rgba(31,119,180,0.4)",
-        borderColor: "#1f77b4",
+        backgroundColor: "#a7d3f9",
+        borderColor: "#4EA7F2",
         data: [5, 3],
         label: "Count",
     });
@@ -914,14 +757,14 @@ test("line chart rendering (two groupBy)", async () => {
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: undefined,
-                borderColor: "#1f77b4",
+                backgroundColor: "#a7d3f9",
+                borderColor: "#4EA7F2",
                 data: [1, 3],
                 label: "xphone",
             },
             {
-                backgroundColor: undefined,
-                borderColor: "#ff7f0e",
+                backgroundColor: "#f5b0ba",
+                borderColor: "#EA6175",
                 data: [4, 0],
                 label: "xpad",
             },
@@ -965,8 +808,8 @@ test("line chart many2many groupBy", async () => {
     expect(".o_graph_canvas_container canvas").toHaveCount(1);
     checkLabels(view, ["black", "red"]);
     checkDatasets(view, ["backgroundColor", "borderColor", "data", "label"], {
-        backgroundColor: "rgba(31,119,180,0.4)",
-        borderColor: "#1f77b4",
+        backgroundColor: "#a7d3f9",
+        borderColor: "#4EA7F2",
         data: [10, 13],
         label: "Revenue",
     });
@@ -1093,16 +936,16 @@ test("Stacked line prop click false", async () => {
 
     const expectedDatasets = [
         {
-            backgroundColor: undefined,
-            borderColor: "#1f77b4",
+            backgroundColor: "#a7d3f9",
+            borderColor: "#4EA7F2",
             originIndex: 0,
-            pointBackgroundColor: "#1f77b4",
+            pointBackgroundColor: "#4EA7F2",
         },
         {
-            backgroundColor: undefined,
-            borderColor: "#ff7f0e",
+            backgroundColor: "#f5b0ba",
+            borderColor: "#EA6175",
             originIndex: 0,
-            pointBackgroundColor: "#ff7f0e",
+            pointBackgroundColor: "#EA6175",
         },
     ];
     const keysToEvaluate = [
@@ -1149,11 +992,11 @@ test("Stacked prop and default line chart", async () => {
         "pointBackgroundColor",
     ];
     const datasets = getChart(view).data.datasets;
-    const colors = getColors();
+    const colors = getColors(undefined, "sm");
     for (let i = 0; i < datasets.length; i++) {
         const expectedColor = colors[i];
         expectedDatasets.push({
-            backgroundColor: hexToRGBA(expectedColor, 0.4),
+            backgroundColor: lightenColor(expectedColor, 0.5),
             borderColor: expectedColor,
             originIndex: 0,
             pointBackgroundColor: expectedColor,
@@ -1287,14 +1130,14 @@ test("line chart rendering (no groupBy, several domains)", async () => {
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: "rgba(31,119,180,0.4)",
-                borderColor: "#1f77b4",
+                backgroundColor: "#a7d3f9",
+                borderColor: "#4EA7F2",
                 data: [undefined, 6],
                 label: "True group",
             },
             {
-                backgroundColor: undefined,
-                borderColor: "#ff7f0e",
+                backgroundColor: "#f5b0ba",
+                borderColor: "#EA6175",
                 data: [undefined, 17],
                 label: "False group",
             },
@@ -1347,14 +1190,14 @@ test("line chart rendering (one groupBy, several domains)", async () => {
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: "rgba(31,119,180,0.4)",
-                borderColor: "#1f77b4",
+                backgroundColor: "#a7d3f9",
+                borderColor: "#4EA7F2",
                 data: [14, 0, 0, 0],
                 label: "True group",
             },
             {
-                backgroundColor: undefined,
-                borderColor: "#ff7f0e",
+                backgroundColor: "#f5b0ba",
+                borderColor: "#EA6175",
                 data: [12, -4, 2, 0],
                 label: "False group",
             },
@@ -1454,14 +1297,14 @@ test("line chart rendering (one groupBy, several domains with date identificatio
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: "rgba(31,119,180,0.4)",
-                borderColor: "#1f77b4",
+                backgroundColor: "#a7d3f9",
+                borderColor: "#4EA7F2",
                 data: [14, 0],
                 label: "February 2021",
             },
             {
-                backgroundColor: undefined,
-                borderColor: "#ff7f0e",
+                backgroundColor: "#f5b0ba",
+                borderColor: "#EA6175",
                 data: [12, 5, 15, 2],
                 label: "January 2021",
             },
@@ -1554,26 +1397,26 @@ test("line chart rendering (two groupBy, several domains with no date identifica
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: undefined,
-                borderColor: "#1f77b4",
+                backgroundColor: "#a7d3f9",
+                borderColor: "#4EA7F2",
                 data: [14, 0],
                 label: "February 2021 / W05 2021",
             },
             {
-                backgroundColor: undefined,
-                borderColor: "#ff7f0e",
+                backgroundColor: "#f5b0ba",
+                borderColor: "#EA6175",
                 data: [0, 0],
                 label: "February 2021 / W07 2021",
             },
             {
-                backgroundColor: undefined,
-                borderColor: "#aec7e8",
+                backgroundColor: "#a1e2d8",
+                borderColor: "#43C5B1",
                 data: [12, 0],
                 label: "January 2021 / W01 2021",
             },
             {
-                backgroundColor: undefined,
-                borderColor: "#ffbb78",
+                backgroundColor: "#fad1b0",
+                borderColor: "#F4A261",
                 data: [0, 5],
                 label: "January 2021 / W02 2021",
             },
@@ -1638,7 +1481,7 @@ test("pie chart rendering (no groupBy)", async () => {
     expect(getGraphModelMetaData(view).mode).toBe("pie");
     checkLabels(view, ["Total"]);
     checkDatasets(view, ["backgroundColor", "borderColor", "data", "label", "stack"], {
-        backgroundColor: ["#1f77b4"],
+        backgroundColor: ["#4EA7F2"],
         borderColor: getBorderWhite(),
         data: [8],
         label: "",
@@ -1662,7 +1505,7 @@ test("pie chart rendering (one groupBy)", async () => {
     expect(".o_graph_canvas_container canvas").toHaveCount(1);
     checkLabels(view, ["false", "true"]);
     checkDatasets(view, ["backgroundColor", "borderColor", "data"], {
-        backgroundColor: ["#1f77b4", "#ff7f0e"],
+        backgroundColor: ["#4EA7F2", "#EA6175"],
         borderColor: getBorderWhite(),
         data: [5, 3],
     });
@@ -1686,7 +1529,7 @@ test("pie chart many2many groupby", async () => {
     expect(".o_graph_canvas_container canvas").toHaveCount(1);
     checkLabels(view, ["black", "red", "None"]);
     checkDatasets(view, ["backgroundColor", "borderColor", "data"], {
-        backgroundColor: ["#1f77b4", "#ff7f0e", "#aec7e8"],
+        backgroundColor: ["#4EA7F2", "#EA6175", "#43C5B1"],
         borderColor: getBorderWhite(),
         data: [10, 13, 8],
     });
@@ -1711,7 +1554,7 @@ test("pie chart rendering (two groupBy)", async () => {
     expect(".o_graph_canvas_container canvas").toHaveCount(1);
     checkLabels(view, ["false / xphone", "false / xpad", "true / xphone"]);
     checkDatasets(view, ["backgroundColor", "borderColor", "data", "label"], {
-        backgroundColor: ["#1f77b4", "#ff7f0e", "#aec7e8"],
+        backgroundColor: ["#4EA7F2", "#EA6175", "#43C5B1"],
         borderColor: getBorderWhite(),
         data: [1, 4, 3],
         label: "",
@@ -1745,13 +1588,13 @@ test("pie chart rendering (no groupBy, several domains)", async () => {
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: ["#1f77b4"],
+                backgroundColor: ["#4EA7F2"],
                 borderColor: getBorderWhite(),
                 data: [6],
                 label: "True group",
             },
             {
-                backgroundColor: ["#1f77b4"],
+                backgroundColor: ["#4EA7F2"],
                 borderColor: getBorderWhite(),
                 data: [17],
                 label: "False group",
@@ -1812,13 +1655,13 @@ test("pie chart rendering (one groupBy, several domains)", async () => {
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: ["#1f77b4", "#ff7f0e", "#aec7e8"],
+                backgroundColor: ["#4EA7F2", "#EA6175", "#43C5B1"],
                 borderColor: getBorderWhite(),
                 data: [14, 0, 0],
                 label: "True group",
             },
             {
-                backgroundColor: ["#1f77b4", "#ff7f0e", "#aec7e8"],
+                backgroundColor: ["#4EA7F2", "#EA6175", "#43C5B1"],
                 borderColor: getBorderWhite(),
                 data: [12, 5, 2],
                 label: "False group",
@@ -1910,13 +1753,13 @@ test("pie chart rendering (one groupBy, several domains with date identification
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: ["#1f77b4", "#ff7f0e", "#aec7e8", "#ffbb78"],
+                backgroundColor: ["#4EA7F2", "#EA6175", "#43C5B1", "#F4A261"],
                 borderColor: getBorderWhite(),
                 data: [1, 1, 0, 0],
                 label: "February 2021",
             },
             {
-                backgroundColor: ["#1f77b4", "#ff7f0e", "#aec7e8", "#ffbb78"],
+                backgroundColor: ["#4EA7F2", "#EA6175", "#43C5B1", "#F4A261"],
                 borderColor: getBorderWhite(),
                 data: [1, 1, 1, 1],
                 label: "January 2021",
@@ -2020,13 +1863,13 @@ test("pie chart rendering (two groupBy, several domains with no date identificat
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: ["#1f77b4", "#ff7f0e", "#aec7e8"],
+                backgroundColor: ["#4EA7F2", "#EA6175", "#43C5B1"],
                 borderColor: getBorderWhite(),
                 data: [14, 0, 0],
                 label: "February 2021",
             },
             {
-                backgroundColor: ["#1f77b4", "#ff7f0e", "#aec7e8"],
+                backgroundColor: ["#4EA7F2", "#EA6175", "#43C5B1"],
                 borderColor: getBorderWhite(),
                 data: [0, 12, 5],
                 label: "January 2021",
@@ -2114,13 +1957,13 @@ test("pie chart rendering (no data, several domains)", async () => {
         ["backgroundColor", "borderColor", "data", "label"],
         [
             {
-                backgroundColor: ["#1f77b4"],
+                backgroundColor: ["#4EA7F2"],
                 borderColor: getBorderWhite(),
                 data: [1],
                 label: "True group",
             },
             {
-                backgroundColor: ["#1f77b4", DEFAULT_BG],
+                backgroundColor: ["#4EA7F2", DEFAULT_BG],
                 borderColor: getBorderWhite(),
                 data: [undefined, 1],
                 label: "False group",
@@ -2152,12 +1995,23 @@ test("pie chart rendering (mix of positive and negative values)", async () => {
     expect(".o_view_nocontent").toHaveCount(0);
     expect(".o_graph_canvas_container").toHaveCount(1);
     checkDatasets(view, ["backgroundColor", "borderColor", "data", "label", "stack"], {
-        backgroundColor: ["#1f77b4"],
+        backgroundColor: ["#4EA7F2"],
         borderColor: getBorderWhite(),
         data: [2],
         label: "",
         stack: undefined,
     });
+});
+
+test("pie chart toggling dataset hides label", async () => {
+    const view = await mountView({
+        type: "graph",
+        resModel: "foo",
+        arch: `<graph type="pie"/>`,
+    });
+    checkLabels(view, ["Total"]);
+    await clickOnLegend(view, "Total");
+    expect(getChart(view).legend.legendItems[0].hidden).toBe(true);
 });
 
 test("mode props", async () => {
@@ -2186,7 +2040,7 @@ test("field id not in groupBy", async () => {
 
     checkLabels(view, ["Total"]);
     checkDatasets(view, ["backgroundColor", "data", "label", "originIndex", "stack"], {
-        backgroundColor: "#1f77b4",
+        backgroundColor: "#4EA7F2",
         data: [8],
         label: "Count",
         originIndex: 0,
@@ -2212,13 +2066,11 @@ test("props modifications", async () => {
     });
 
     checkModeIs(view, "bar");
-    expect(getXAxisLabel(view)).toBe("Bar");
     expect(getYAxisLabel(view)).toBe("Count");
 
     await selectMode("line");
 
     checkModeIs(view, "line");
-    expect(getXAxisLabel(view)).toBe("Bar");
 
     await toggleMenu("Measures");
     await toggleMenuItem("Revenue");
@@ -2229,7 +2081,6 @@ test("props modifications", async () => {
     await toggleMenuItem("Color");
 
     checkModeIs(view, "line");
-    expect(getXAxisLabel(view)).toBe("Color");
     expect(getYAxisLabel(view)).toBe("Revenue");
 });
 
@@ -2508,7 +2359,7 @@ test("save params succeeds", async () => {
     ];
 
     let serverId = 1;
-    onRpc("create_or_replace", (_route, { args }) => {
+    onRpc("create_or_replace", ({ args }) => {
         expect(args[0].context).toEqual(expectedContexts.shift());
         return serverId++;
     });
@@ -2581,7 +2432,6 @@ test("correctly uses graph_ keys from the context", async () => {
     checkLabels(view, ["black", "red"]);
     checkLegend(view, "Foo");
     checkModeIs(view, "line");
-    expect(getXAxisLabel(view)).toBe("Color");
     expect(getYAxisLabel(view)).toBe("Foo");
     expect(getGraphModelMetaData(view).mode).toBe("line");
 });
@@ -2642,7 +2492,6 @@ test("correctly use group_by key from the context", async () => {
     checkLabels(view, ["black", "red"]);
     checkLegend(view, "Foo");
     checkModeIs(view, "line");
-    expect(getXAxisLabel(view)).toBe("Color");
     expect(getYAxisLabel(view)).toBe("Foo");
     expect(getGraphModelMetaData(view).mode).toBe("line");
 });
@@ -2707,7 +2556,7 @@ test("the active measure description is the arch string attribute in priority", 
 test("reload graph with correct fields", async () => {
     expect.assertions(2);
 
-    onRpc("web_read_group", (_route, { kwargs }) => {
+    onRpc("web_read_group", ({ kwargs }) => {
         expect(kwargs.fields).toEqual(["__count", "foo:sum"]);
     });
 
@@ -2731,9 +2580,9 @@ test("reload graph with correct fields", async () => {
 });
 
 test("initial groupby is kept when reloading", async () => {
-    expect.assertions(8);
+    expect.assertions(7);
 
-    onRpc("web_read_group", (_route, { kwargs }) => {
+    onRpc("web_read_group", ({ kwargs }) => {
         expect(kwargs.groupby).toEqual(["product_id"]);
     });
     const view = await mountView({
@@ -2755,7 +2604,6 @@ test("initial groupby is kept when reloading", async () => {
     checkLabels(view, ["xphone", "xpad"]);
     checkLegend(view, "Foo");
     checkDatasets(view, "data", { data: [82, 157] });
-    expect(getXAxisLabel(view)).toBe("Product");
     expect(getYAxisLabel(view)).toBe("Foo");
 
     await toggleSearchBarMenu();
@@ -2777,7 +2625,6 @@ test("use a many2one as a measure should work (without groupBy)", async () => {
     checkLabels(view, ["Total"]);
     checkLegend(view, "Product");
     checkDatasets(view, "data", { data: [2] });
-    expect(getXAxisLabel(view)).toBe("");
     expect(getYAxisLabel(view)).toBe("Product");
 });
 
@@ -2813,7 +2660,6 @@ test("use a many2one as a measure and as a groupby should work", async () => {
     checkLabels(view, ["xphone", "xpad"]);
     checkLegend(view, "Product");
     checkDatasets(view, "data", { data: [1, 1] });
-    expect(getXAxisLabel(view)).toBe("Product");
     expect(getYAxisLabel(view)).toBe("Product");
 });
 
@@ -3034,7 +2880,7 @@ test("action name is displayed in breadcrumbs", async () => {
 test("clicking on bar charts triggers a do_action", async () => {
     expect.assertions(6);
 
-    mockService("action", () => ({
+    mockService("action", {
         doAction(actionRequest, options) {
             expect(actionRequest).toEqual({
                 context: { allowed_company_ids: [1], lang: "en", tz: "taht", uid: 7 },
@@ -3050,7 +2896,7 @@ test("clicking on bar charts triggers a do_action", async () => {
             });
             expect(options).toEqual({ viewType: "list" });
         },
-    }));
+    });
 
     const view = await mountView({
         type: "graph",
@@ -3073,7 +2919,7 @@ test("clicking on bar charts triggers a do_action", async () => {
 test("Clicking on bar charts removes group_by and search_default_* context keys", async () => {
     expect.assertions(2);
 
-    mockService("action", () => ({
+    mockService("action", {
         doAction(actionRequest, options) {
             expect(actionRequest).toEqual({
                 context: { allowed_company_ids: [1], lang: "en", tz: "taht", uid: 7 },
@@ -3089,7 +2935,7 @@ test("Clicking on bar charts removes group_by and search_default_* context keys"
             });
             expect(options).toEqual({ viewType: "list" });
         },
-    }));
+    });
 
     const view = await mountView({
         type: "graph",
@@ -3114,7 +2960,7 @@ test("clicking on a pie chart trigger a do_action with correct views", async () 
     Foo._views[["list", 364]] = /* xml */ `<list />`;
     Foo._views[["form", 29]] = /* xml */ `<form />`;
 
-    mockService("action", () => ({
+    mockService("action", {
         doAction(actionRequest, options) {
             expect(actionRequest).toEqual({
                 context: { allowed_company_ids: [1], lang: "en", tz: "taht", uid: 7 },
@@ -3130,7 +2976,7 @@ test("clicking on a pie chart trigger a do_action with correct views", async () 
             });
             expect(options).toEqual({ viewType: "list" });
         },
-    }));
+    });
 
     const view = await mountView({
         type: "graph",
@@ -3157,11 +3003,11 @@ test("clicking on a pie chart trigger a do_action with correct views", async () 
 });
 
 test('graph view with attribute disable_linking="1"', async () => {
-    mockService("action", () => ({
+    mockService("action", {
         doAction() {
             throw new Error("should not perform a `doAction`");
         },
-    }));
+    });
 
     const view = await mountView({
         type: "graph",
@@ -3506,8 +3352,8 @@ test("fallback on initial groupby when the groupby from control panel has 0 leng
 });
 
 test("change mode, stacked, or order via the graph buttons does not reload datapoints, change measure does", async () => {
-    onRpc("web_read_group", (_route, { kwargs }) => {
-        expect.step(JSON.stringify(kwargs.fields));
+    onRpc("web_read_group", ({ kwargs }) => {
+        expect.step(kwargs.fields);
     });
     const view = await mountView({
         type: "graph",
@@ -3538,10 +3384,10 @@ test("change mode, stacked, or order via the graph buttons does not reload datap
     await toggleMenu("Measures");
     await toggleMenuItem("Foo");
 
-    expect([
-        `["__count"]`, // first load
-        `["__count","foo:sum"]`, // reload due to change in measure
-    ]).toVerifySteps();
+    expect.verifySteps([
+        ["__count"], // first load
+        ["__count", "foo:sum"], // reload due to change in measure
+    ]);
 });
 
 test("concurrent reloads: add a filter, and directly toggle a measure", async () => {
@@ -3692,7 +3538,7 @@ test("only process most recent data for concurrent groupby", async () => {
 test("fill_temporal is true by default", async () => {
     expect.assertions(1);
 
-    onRpc("web_read_group", (_route, { kwargs }) => {
+    onRpc("web_read_group", ({ kwargs }) => {
         expect(kwargs.context.fill_temporal).toBe(true, {
             message: "The observable state of fill_temporal should be true",
         });
@@ -3704,7 +3550,7 @@ test("fill_temporal is true by default", async () => {
 test("fill_temporal can be changed throught the context", async () => {
     expect.assertions(1);
 
-    onRpc("web_read_group", (_route, { kwargs }) => {
+    onRpc("web_read_group", ({ kwargs }) => {
         expect(kwargs.context.fill_temporal).toBe(false, {
             message: "The observable state of fill_temporal should be false",
         });
@@ -3720,7 +3566,7 @@ test("fill_temporal can be changed throught the context", async () => {
 });
 
 test("fake data in line chart", async () => {
-    patchDate("2020-05-19 01:00:00");
+    mockDate("2020-05-19 01:00:00");
 
     Foo._records = [];
 
@@ -3749,7 +3595,7 @@ test("fake data in line chart", async () => {
 });
 
 test("no filling color for period of comparison", async () => {
-    patchDate("2020-05-19 01:00:00");
+    mockDate("2020-05-19 01:00:00");
 
     for (const record of Foo._records) {
         record.date = record.date?.replace(/^\d{4}/, "2019");
@@ -3768,7 +3614,7 @@ test("no filling color for period of comparison", async () => {
         `,
         searchViewArch: /* xml */ `
             <search>
-                <filter name="date_filter" domain="[]" date="date" default_period="this_year" />
+                <filter name="date_filter" domain="[]" date="date" default_period="year" />
             </search>
         `,
     });
@@ -3776,7 +3622,7 @@ test("no filling color for period of comparison", async () => {
     await toggleSearchBarMenu();
     await toggleMenuItem("Date: Previous period");
 
-    checkDatasets(view, "backgroundColor", { backgroundColor: undefined });
+    checkDatasets(view, "backgroundColor", { backgroundColor: "#a7d3f9" });
 });
 
 test("group by a non stored, sortable field", async () => {
@@ -3882,12 +3728,12 @@ test("renders banner_route", async () => {
         `,
     });
 
-    expect(["/mybody/isacage"]).toVerifySteps();
+    expect.verifySteps(["/mybody/isacage"]);
     expect(".setmybodyfree").toHaveCount(1);
 });
 
 test("In the middle of a year, a graph view grouped by a date field with granularity 'year' should have a single group of SampleServer.MAIN_RECORDSET_SIZE records", async () => {
-    patchDate("2023-06-15 08:00:00");
+    mockDate("2023-06-15 08:00:00");
 
     const view = await mountView({
         type: "graph",
@@ -3945,11 +3791,11 @@ test("single chart rendering on search", async () => {
         resModel: "foo",
     });
 
-    expect(["rendering"]).toVerifySteps();
+    expect.verifySteps(["rendering"]);
 
     await validateSearch();
 
-    expect(["rendering"]).toVerifySteps();
+    expect.verifySteps(["rendering"]);
 });
 
 test("apply default filter label", async () => {

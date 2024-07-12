@@ -24,6 +24,7 @@ RUN apt-get update -qq &&  \
         postgresql-client \
         python3 \
         python3-babel \
+        python3-cbor2 \
         python3-dateutil \
         python3-decorator \
         python3-docutils \
@@ -58,3 +59,5 @@ RUN apt-get update -qq &&  \
     rm -rf /var/lib/apt/lists/*
 
 RUN echo "PS1=\"[\u@nightly-tests] # \"" > ~/.bashrc
+
+USER odoo

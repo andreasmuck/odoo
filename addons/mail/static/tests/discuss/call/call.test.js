@@ -1,6 +1,3 @@
-import { describe, test } from "@odoo/hoot";
-
-import { browser } from "@web/core/browser/browser";
 import {
     SIZES,
     assertSteps,
@@ -15,13 +12,18 @@ import {
     startServer,
     step,
     triggerEvents,
-} from "../../mail_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, test } from "@odoo/hoot";
+import { hover, queryFirst } from "@odoo/hoot-dom";
+import { animationFrame } from "@odoo/hoot-mock";
 import {
     Command,
     mockService,
     patchWithCleanup,
     serverState,
 } from "@web/../tests/web_test_helpers";
+
+import { browser } from "@web/core/browser/browser";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -47,6 +49,23 @@ test("basic rendering", async () => {
     await contains("[title='Raise Hand']");
     await contains("[title='Share Screen']");
     await contains("[title='Enter Full Screen']");
+});
+
+test("keep the `more` popover active when hovering it", async () => {
+    mockGetMedia();
+    const pyEnv = await startServer();
+    const channelId = pyEnv["discuss.channel"].create({ name: "General" });
+    await start();
+    await openDiscuss(channelId);
+    await click("[title='Start a Call']");
+    await contains(".o-discuss-Call");
+    await contains(".o-discuss-CallActionList");
+    await click("[title='More']");
+    const enterFullScreenSelector = ".o-dropdown-item[title='Enter Full Screen']";
+    await contains(enterFullScreenSelector);
+    hover(queryFirst(enterFullScreenSelector));
+    await animationFrame();
+    await contains(enterFullScreenSelector);
 });
 
 test("no call with odoobot", async () => {
@@ -133,14 +152,14 @@ test("should display invitations", async () => {
             step(`/mail/action - ${JSON.stringify(args)}`);
         }
     });
-    mockService("mail.sound_effects", () => ({
+    mockService("mail.sound_effects", {
         play(name) {
             step(`play - ${name}`);
         },
         stop(name) {
             step(`stop - ${name}`);
         },
-    }));
+    });
     await start();
     await assertSteps([
         `/mail/action - ${JSON.stringify({
@@ -153,10 +172,8 @@ test("should display invitations", async () => {
     const [partner] = pyEnv["res.partner"].read(serverState.partnerId);
     // send after init_messaging because bus subscription is done after init_messaging
     pyEnv["bus.bus"]._sendone(partner, "mail.record/insert", {
-        Thread: {
-            id: channelId,
-            model: "discuss.channel",
-            rtcInvitingSession: {
+        RtcSession: [
+            {
                 id: sessionId,
                 channelMember: {
                     id: memberId,
@@ -167,6 +184,11 @@ test("should display invitations", async () => {
                     },
                 },
             },
+        ],
+        Thread: {
+            id: channelId,
+            model: "discuss.channel",
+            rtcInvitingSession: { id: sessionId },
         },
     });
     await contains(".o-discuss-CallInvitation");

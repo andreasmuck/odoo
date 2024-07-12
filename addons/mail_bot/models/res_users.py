@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from markupsafe import Markup
@@ -15,6 +14,7 @@ class Users(models.Model):
             ('onboarding_attachement', 'Onboarding attachment'),
             ('onboarding_command', 'Onboarding command'),
             ('onboarding_ping', 'Onboarding ping'),
+            ('onboarding_canned', 'Onboarding canned'),
             ('idle', 'Idle'),
             ('disabled', 'Disabled'),
         ], string="OdooBot Status", readonly=True, required=False)  # keep track of the state: correspond to the code of the last message sent
@@ -30,7 +30,7 @@ class Users(models.Model):
             odoobot_onboarding = True
             self._init_odoobot()
         super()._init_messaging(store)
-        store.add({"Store": {"odoobotOnboarding": odoobot_onboarding}})
+        store.add({"odoobotOnboarding": odoobot_onboarding})
 
     def _init_odoobot(self):
         self.ensure_one()

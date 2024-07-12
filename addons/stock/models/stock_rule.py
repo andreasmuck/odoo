@@ -116,7 +116,12 @@ class StockRule(models.Model):
         for rule in self:
             route = rule.route_id
             if route.company_id and rule.company_id.id != route.company_id.id:
-                raise ValidationError(_("Rule %s belongs to %s while the route belongs to %s.", rule.display_name, rule.company_id.display_name, route.company_id.display_name))
+                raise ValidationError(_(
+                    "Rule %(rule)s belongs to %(rule_company)s while the route belongs to %(route_company)s.",
+                    rule=rule.display_name,
+                    rule_company=rule.company_id.display_name,
+                    route_company=route.company_id.display_name,
+                ))
 
     @api.onchange('picking_type_id')
     def _onchange_picking_type(self):
@@ -163,8 +168,18 @@ class StockRule(models.Model):
             if self.procure_method == 'mts_else_mto' and self.location_src_id:
                 suffix += _("<br>If the products are not available in <b>%s</b>, a rule will be triggered to bring products in this location.", source)
             message_dict = {
-                'pull': _('When products are needed in <b>%s</b>, <br/> <b>%s</b> are created from <b>%s</b> to fulfill the need.', destination, operation, source) + suffix,
-                'push': _('When products arrive in <b>%s</b>, <br/> <b>%s</b> are created to send them in <b>%s</b>.', source, operation, destination)
+                'pull': _(
+                    'When products are needed in <b>%(destination)s</b>, <br/> <b>%(operation)s</b> are created from <b>%(source_location)s</b> to fulfill the need.',
+                    destination=destination,
+                    operation=operation,
+                    source_location=source,
+                ) + suffix,
+                'push': _(
+                    'When products arrive in <b>%(source_location)s</b>, <br/> <b>%(operation)s</b> are created to send them to <b>%(destination)s</b>.',
+                    source_location=source,
+                    operation=operation,
+                    destination=destination,
+                ),
             }
         return message_dict
 
@@ -219,10 +234,13 @@ class StockRule(models.Model):
 
     def _push_prepare_move_copy_values(self, move_to_copy, new_date):
         company_id = self.company_id.id
+        copied_quantity = move_to_copy.quantity
+        if float_compare(move_to_copy.product_uom_qty, 0, precision_rounding=move_to_copy.product_uom.rounding) < 0:
+            copied_quantity = move_to_copy.product_uom_qty
         if not company_id:
             company_id = self.sudo().warehouse_id and self.sudo().warehouse_id.company_id.id or self.sudo().picking_type_id.warehouse_id.company_id.id
         new_move_vals = {
-            'product_uom_qty': move_to_copy.quantity,
+            'product_uom_qty': copied_quantity,
             'origin': move_to_copy.origin or move_to_copy.picking_id.name or "/",
             'location_id': move_to_copy.location_dest_id.id,
             'location_dest_id': self.location_dest_id.id,
@@ -445,7 +463,7 @@ class ProcurementGroup(models.Model):
 
     @api.model
     def _skip_procurement(self, procurement):
-        return procurement.product_id.type not in ("consu", "product") or float_is_zero(
+        return procurement.product_id.type != "consu" or float_is_zero(
             procurement.product_qty, precision_rounding=procurement.product_uom.rounding
         )
 
@@ -482,8 +500,8 @@ class ProcurementGroup(models.Model):
                 continue
             rule = self._get_rule(procurement.product_id, procurement.location_id, procurement.values)
             if not rule:
-                error = _('No rule has been found to replenish %r in %r.\nVerify the routes configuration on the product.',
-                    procurement.product_id.display_name, procurement.location_id.display_name)
+                error = _('No rule has been found to replenish "%(product)s" in "%(location)s".\nVerify the routes configuration on the product.',
+                    product=procurement.product_id.display_name, location=procurement.location_id.display_name)
                 procurement_errors.append((procurement, error))
             else:
                 action = 'pull' if rule.action == 'pull_push' else rule.action
@@ -578,9 +596,6 @@ class ProcurementGroup(models.Model):
         # Minimum stock rules
         domain = self._get_orderpoint_domain(company_id=company_id)
         orderpoints = self.env['stock.warehouse.orderpoint'].search(domain)
-        # ensure that qty_* which depends on datetime.now() are correctly
-        # recomputed
-        orderpoints.sudo()._compute_qty_to_order()
         if use_new_cursor:
             self._cr.commit()
         orderpoints.sudo()._procure_orderpoint_confirm(use_new_cursor=use_new_cursor, company_id=company_id, raise_user_error=False)

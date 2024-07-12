@@ -15,9 +15,9 @@ function addMedia(position = "right") {
 }
 function assertCssVariable(variableName, variableValue, trigger = ':iframe body') {
     return {
+        isActive: ["auto"],
         content: `Check CSS variable ${variableName}=${variableValue}`,
         trigger: trigger,
-        auto: true,
         run: function () {
             const styleValue = getComputedStyle(this.anchor).getPropertyValue(variableName);
             if ((styleValue && styleValue.trim().replace(/["']/g, '')) !== variableValue.trim().replace(/["']/g, '')) {
@@ -39,12 +39,14 @@ function assertPathName(pathName, trigger) {
 }
 
 function changeBackground(snippet, position = "bottom") {
-    return {
-        trigger: ".o_we_customize_panel .o_we_bg_success",
+    return [
+        {
+            trigger: ".o_we_customize_panel .o_we_bg_success",
         content: markup(_t("<b>Customize</b> any block through this menu. Try to change the background image of this block.")),
-        position: position,
-        run: "click",
-    };
+            position: position,
+            run: "click",
+        },
+    ];
 }
 
 function changeBackgroundColor(position = "bottom") {
@@ -63,7 +65,6 @@ function selectColorPalette(position = "left") {
         content: markup(_t(`<b>Select</b> a Color Palette.`)),
         position: position,
         run: 'click',
-        location: position === 'left' ? '#oe_snippets' : undefined,
     };
 }
 
@@ -72,27 +73,22 @@ function changeColumnSize(position = "right") {
         trigger: `:iframe .oe_overlay.o_draggable.o_we_overlay_sticky.oe_active .o_handle.e`,
         content: markup(_t("<b>Slide</b> this button to change the column size.")),
         position: position,
-    };
-}
-
-function changeIcon(snippet, index = 0, position = "bottom") {
-    return {
-        trigger: `#wrapwrap .${snippet.id} i:eq(${index})`,
-        extra_trigger: "body.editor_enable",
-        content: markup(_t("<b>Double click on an icon</b> to change it with one of your choice.")),
-        position: position,
-        run: "dblclick",
+        run: "click",
     };
 }
 
 function changeImage(snippet, position = "bottom") {
-    return {
-        trigger: snippet.id ? `#wrapwrap .${snippet.id} img` : snippet,
-        extra_trigger: "body.editor_enable",
+    return [
+        {
+            trigger: "body.editor_enable",
+        },
+        {
+            trigger: snippet.id ? `#wrapwrap .${snippet.id} img` : snippet,
         content: markup(_t("<b>Double click on an image</b> to change it with one of your choice.")),
-        position: position,
-        run: "dblclick",
-    };
+            position: position,
+            run: "dblclick",
+        },
+    ];
 }
 
 /**
@@ -121,7 +117,6 @@ function selectNested(trigger, optionName, alt_trigger = null, optionTooltipLabe
         alt_trigger: alt_trigger == null ? undefined : `${option_block} ${alt_trigger}`,
         position: position,
         run: 'click',
-        location: position === 'left' ? '#oe_snippets' : undefined,
     };
 }
 
@@ -137,6 +132,7 @@ function changePaddingSize(direction) {
         content: markup(_t("<b>Slide</b> this button to change the %s padding", direction)),
         consumeEvent: 'mousedown',
         position: position,
+        run: "click",
     };
 }
 
@@ -187,11 +183,11 @@ function clickOnEditAndWaitEditMode(position = "bottom") {
         content: markup(_t("<b>Click Edit</b> to start designing your homepage.")),
         trigger: ".o_menu_systray .o_edit_website_container a",
         position: position,
+        run: "click",
     }, {
+        isActive: ["auto"], // Checking step only for automated tests
         content: "Check that we are in edit mode",
         trigger: ".o_website_preview.editor_enable.editor_has_snippets",
-        auto: true, // Checking step only for automated tests
-        isCheck: true,
     }];
 }
 
@@ -206,15 +202,16 @@ function clickOnEditAndWaitEditModeInTranslatedPage(position = "bottom") {
         content: markup(_t("<b>Click Edit</b> dropdown")),
         trigger: ".o_edit_website_container button",
         position: position,
+        run: "click",
     }, {
         content: markup(_t("<b>Click Edit</b> to start designing your homepage.")),
         trigger: ".o_edit_website_dropdown_item",
         position: position,
+        run: "click",
     }, {
+        isActive: ["auto"], // Checking step only for automated tests
         content: "Check that we are in edit mode",
         trigger: ".o_website_preview.editor_enable.editor_has_snippets",
-        auto: true, // Checking step only for automated tests
-        isCheck: true,
     }];
 }
 
@@ -225,36 +222,52 @@ function clickOnEditAndWaitEditModeInTranslatedPage(position = "bottom") {
  */
 function clickOnSnippet(snippet, position = "bottom") {
     const trigger = snippet.id ? `#wrapwrap .${snippet.id}` : snippet;
-    return {
-        trigger: `:iframe ${trigger}`,
-        extra_trigger: "body.editor_has_snippets",
+    return [
+        {
+            trigger: "body.editor_has_snippets",
+            noPrepend: true,
+        },
+        {
+            trigger: `:iframe ${trigger}`,
         content: markup(_t("<b>Click on a snippet</b> to access its options menu.")),
-        position: position,
-        run: "click",
-    };
+            position: position,
+            run: "click",
+        },
+    ];
 }
 
 function clickOnSave(position = "bottom", timeout) {
-    return [{
-        trigger: "div:not(.o_loading_dummy) > #oe_snippets button[data-action=\"save\"]:not([disabled])",
-        // TODO this should not be needed but for now it better simulates what
-        // an human does. By the time this was added, it's technically possible
-        // to drag and drop a snippet then immediately click on save and have
-        // some problem. Worst case probably is a traceback during the redirect
-        // after save though so it's not that big of an issue. The problem will
-        // of course be solved (or at least prevented in stable). More details
-        // in related commit message.
-        extra_trigger: "body:not(:has(.o_dialog)) #oe_snippets:not(:has(.o_we_already_dragging))",
-        in_modal: false,
+    return [
+        {
+            trigger: "#oe_snippets:not(:has(.o_we_already_dragging))",
+        },
+        {
+            trigger: "body:not(:has(.o_dialog))",
+            noPrepend: true,
+        },
+        {
+            trigger:
+                'div:not(.o_loading_dummy) > #oe_snippets button[data-action="save"]:not([disabled])',
+            // TODO this should not be needed but for now it better simulates what
+            // an human does. By the time this was added, it's technically possible
+            // to drag and drop a snippet then immediately click on save and have
+            // some problem. Worst case probably is a traceback during the redirect
+            // after save though so it's not that big of an issue. The problem will
+            // of course be solved (or at least prevented in stable). More details
+            // in related commit message.
+            in_modal: false,
         content: markup(_t("Good job! It's time to <b>Save</b> your work.")),
-        position: position,
-        timeout: timeout,
-    }, {
-        trigger: ':iframe body:not(.editor_enable)',
-        noPrepend: true,
-        auto: true, // Just making sure save is finished in automatic tests
-        run: () => null,
-    }];
+            position: position,
+            timeout: timeout,
+            run: "click",
+        },
+        {
+            isActive: ["auto"], // Just making sure save is finished in automatic tests
+            trigger: ":iframe body:not(.editor_enable)",
+            noPrepend: true,
+            timeout: timeout,
+        },
+    ];
 }
 
 /**
@@ -264,14 +277,17 @@ function clickOnSave(position = "bottom", timeout) {
  * @param {*} position
  */
 function clickOnText(snippet, element, position = "bottom") {
-    return {
-        trigger: snippet.id ? `:iframe #wrapwrap .${snippet.id} ${element}` : snippet,
-        extra_trigger: ":iframe body.editor_enable",
+    return [
+        {
+            trigger: ":iframe body.editor_enable",
+        },
+        {
+            trigger: snippet.id ? `:iframe #wrapwrap .${snippet.id} ${element}` : snippet,
         content: markup(_t("<b>Click on a text</b> to start editing it.")),
-        position: position,
-        run: "text",
-        consumeEvent: "click",
-    };
+            position: position,
+            run: "click",
+        },
+    ];
 }
 
 /**
@@ -280,15 +296,20 @@ function clickOnText(snippet, element, position = "bottom") {
  * @param {*} position Where the purple arrow will show up
  */
 function dragNDrop(snippet, position = "bottom") {
-    return {
-        trigger: `#oe_snippets .oe_snippet[name="${snippet.name}"] .oe_snippet_thumbnail:not(.o_we_already_dragging)`,
-        extra_trigger: ".o_website_preview.editor_enable.editor_has_snippets",
+    return [
+        {
+            trigger: ".o_website_preview.editor_enable.editor_has_snippets",
+            noPrepend: true,
+        },
+        {
+            trigger: `#oe_snippets .oe_snippet[name="${snippet.name}"].o_we_draggable .oe_snippet_thumbnail:not(.o_we_already_dragging)`,
         content: markup(_t("Drag the <b>%s</b> building block and drop it at the bottom of the page.", snippet.name)),
-        position: position,
-        // Normally no main snippet can be dropped in the default footer but
-        // targeting it allows to force "dropping at the end of the page".
-        run: "drag_and_drop_native :iframe #wrapwrap > footer",
-    };
+            position: position,
+            // Normally no main snippet can be dropped in the default footer but
+            // targeting it allows to force "dropping at the end of the page".
+            run: "drag_and_drop :iframe #wrapwrap > footer",
+        },
+    ];
 }
 
 function goBackToBlocks(position = "bottom") {
@@ -301,13 +322,17 @@ function goBackToBlocks(position = "bottom") {
 }
 
 function goToTheme(position = "bottom") {
-    return {
-        trigger: '.o_we_customize_theme_btn',
-        extra_trigger: '#oe_snippets.o_loaded',
-        content: _t("Go to the Theme tab"),
-        position: position,
-        run: "click",
-    };
+    return [
+        {
+            trigger: "#oe_snippets.o_loaded",
+        },
+        {
+            trigger: ".o_we_customize_theme_btn",
+            content: _t("Go to the Theme tab"),
+            position: position,
+            run: "click",
+        },
+    ];
 }
 
 function selectHeader(position = "bottom") {
@@ -387,11 +412,10 @@ function registerWebsitePreviewTour(name, options, steps) {
             // of course.
             if (options.edition) {
                 tourSteps.unshift({
+                    isActive: ["auto"],
                     content: "Wait for the edit mode to be started",
                     trigger: ".o_website_preview.editor_enable.editor_has_snippets",
                     timeout: 30000,
-                    auto: true,
-                    run: () => {}, // It's a check
                 });
             } else {
                 tourSteps[0].timeout = 20000;
@@ -429,9 +453,6 @@ function registerBackendAndFrontendTour(name, options, steps) {
             for (const step of steps()) {
                 const newStep = Object.assign({}, step);
                 newStep.trigger = `:iframe ${step.trigger}`;
-                if (step.extra_trigger) {
-                    newStep.extra_trigger = `:iframe ${step.extra_trigger}`;
-                }
                 newSteps.push(newStep);
             }
             return newSteps;
@@ -460,7 +481,7 @@ function selectElementInWeSelectWidget(widgetName, elementName, searchNeeded = f
         steps.push({
             content: `Inputing ${elementName} in m2o widget search`,
             trigger: `we-select[data-name=${widgetName}] div.o_we_m2o_search input`,
-            run: `text ${elementName}`
+            run: `edit ${elementName}`,
         });
     }
     steps.push(clickOnElement(`${elementName} in the ${widgetName} widget`,
@@ -480,18 +501,49 @@ function switchWebsite(websiteId, websiteName) {
     return [{
         content: `Click on the website switch to switch to website '${websiteName}'`,
         trigger: '.o_website_switcher_container button',
-    }, {
+        run: "click",
+    },
+    {
+        trigger: `:iframe html:not([data-website-id="${websiteId}"])`,
+    },
+    {
         content: `Switch to website '${websiteName}'`,
-        extra_trigger: `:iframe html:not([data-website-id="${websiteId}"])`,
         trigger: `.o-dropdown--menu .dropdown-item:contains("${websiteName}")`,
+        run: "click",
     }, {
         content: "Wait for the iframe to be loaded",
         // The page reload generates assets for the new website, it may take
         // some time
         timeout: 20000,
         trigger: `:iframe html[data-website-id="${websiteId}"]`,
-        isCheck: true,
     }];
+}
+
+/**
+ * Toggles the mobile preview on or off.
+ *
+ * @param {Boolean} toggleOn true to toggle the mobile preview on, false to
+ *     toggle it off.
+ * @returns {Array}
+ */
+function toggleMobilePreview(toggleOn) {
+    const onOrOff = toggleOn ? "on" : "off";
+    const mobileOnSelector = ".o_is_mobile";
+    const mobileOffSelector = ":not(.o_is_mobile)";
+    return [
+        {
+            trigger: `:iframe #wrapwrap${toggleOn ? mobileOffSelector : mobileOnSelector}`,
+        },
+        {
+            content: `Toggle the mobile preview ${onOrOff}`,
+            trigger: ".o_we_website_top_actions [data-action='mobile']",
+            run: "click",
+        },
+        {
+            content: `Check that the mobile preview is ${onOrOff}`,
+            trigger: `:iframe #wrapwrap${toggleOn ? mobileOnSelector : mobileOffSelector}`,
+        },
+    ];
 }
 
 export default {
@@ -501,7 +553,6 @@ export default {
     changeBackground,
     changeBackgroundColor,
     changeColumnSize,
-    changeIcon,
     changeImage,
     changeOption,
     changePaddingSize,
@@ -526,4 +577,5 @@ export default {
     selectNested,
     selectSnippetColumn,
     switchWebsite,
+    toggleMobilePreview,
 };

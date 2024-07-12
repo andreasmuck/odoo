@@ -20,10 +20,7 @@ patch(MockServer.prototype, {
             return this._mockMailThreadMessageUnsubscribe(args.model, ids, partner_ids);
         }
         if (args.method === "message_get_followers") {
-            const ids = args.args[0];
-            const after = args.args[1] || args.kwargs.after;
-            const limit = args.args[2] || args.kwargs.limit;
-            return this._mockMailThreadMessageGetFollowers(args.model, ids, after, limit);
+            return {};
         }
         if (args.method === "message_post") {
             const id = args.args[0];
@@ -31,12 +28,6 @@ patch(MockServer.prototype, {
             const context = kwargs.context;
             delete kwargs.context;
             return this._mockMailThreadMessagePost(args.model, [id], kwargs, context);
-        }
-        if (args.method === "notify_cancel_by_type") {
-            return this._mockMailThreadNotifyCancelByType(
-                args.model,
-                args.kwargs.notification_type
-            );
         }
         return super._performRPC(route, args);
     },
@@ -146,34 +137,6 @@ patch(MockServer.prototype, {
         return result;
     },
     /**
-     * Simulates `message_get_followers` on `mail.thread`.
-     *
-     * @private
-     * @param {string} model
-     * @param {integer[]} ids
-     * @param {integer} [after]
-     * @param {integer} [limit=100]
-     * @returns {Object[]}
-     */
-    _mockMailThreadMessageGetFollowers(model, ids, after, limit = 100, kwargs = {}) {
-        const domain = [
-            ["res_id", "=", ids[0]],
-            ["res_model", "=", model],
-            ["partner_id", "!=", this.pyEnv.currentPartnerId],
-        ];
-        if (after) {
-            domain.push(["id", ">", after]);
-        }
-        if (kwargs.filter_recipients) {
-            domain.push(["partner_id", "!=", this.pyEnv.currentPartnerId]);
-        }
-        const followers = this.getRecords("mail.followers", domain).sort(
-            (f1, f2) => (f1.id < f2.id ? -1 : 1) // sorted from lowest ID to highest ID (i.e. from oldest to youngest)
-        );
-        followers.length = Math.min(followers.length, limit);
-        return this._mockMailFollowers_FormatForChatter(followers.map((follower) => follower.id));
-    },
-    /**
      * Simulates `_message_get_suggested_recipients` on `mail.thread`.
      *
      * @private
@@ -280,9 +243,7 @@ patch(MockServer.prototype, {
             });
         }
         this._mockMailThread_NotifyThread(model, ids, messageId, context?.temporary_id);
-        return Object.assign(this._mockMailMessageMessageFormat([messageId])[0], {
-            temporary_id: context?.temporary_id,
-        });
+        return { Message: this._mockMailMessageMessageFormat([messageId]) };
     },
     /**
      * Simulates `message_subscribe` on `mail.thread`.
@@ -369,14 +330,8 @@ patch(MockServer.prototype, {
                 notifications.push([
                     channel,
                     "discuss.channel/new_message",
-                    {
-                        id: channel.id,
-                        message: Object.assign(messageFormat, { temporary_id }),
-                    },
+                    { data: { Message: messageFormat }, id: channel.id, temporary_id },
                 ]);
-                if (message.author_id === this.pyEnv.currentPartnerId) {
-                    this._mockDiscussChannel_ChannelSeen(ids, message.id);
-                }
             }
         }
         this.pyEnv["bus.bus"]._sendmany(notifications);
@@ -482,36 +437,5 @@ patch(MockServer.prototype, {
      */
     _mockMailThread_TrackSubtype(initialFieldValuesByRecordId) {
         return false;
-    },
-    /**
-     * Simulate the `notify_cancel_by_type` on `mail.thread` .
-     * Note that this method is overridden by snailmail module but not simulated here.
-     */
-    _mockMailThreadNotifyCancelByType(model, notificationType) {
-        // Query matching notifications
-        const notifications = this.getRecords("mail.notification", [
-            ["notification_type", "=", notificationType],
-            ["notification_status", "in", ["bounce", "exception"]],
-        ]).filter((notification) => {
-            const message = this.getRecords("mail.message", [
-                ["id", "=", notification.mail_message_id],
-            ])[0];
-            return message.model === model && message.author_id === this.pyEnv.currentPartnerId;
-        });
-        // Update notification status
-        this.pyEnv["mail.notification"].write(
-            notifications.map((notification) => notification.id),
-            { notification_status: "canceled" }
-        );
-        // Send bus notifications to update status of notifications in the web client
-        this.pyEnv["bus.bus"]._sendone(
-            this.pyEnv.currentPartner,
-            "mail.message/notification_update",
-            {
-                elements: this._mockMailMessage_MessageNotificationFormat(
-                    notifications.map((notification) => notification.mail_message_id)
-                ),
-            }
-        );
     },
 });

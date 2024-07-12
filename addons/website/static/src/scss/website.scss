@@ -337,6 +337,13 @@ $-seen-urls: ();
         }
     }
     @include o-add-gradient('menu-gradient');
+
+    a.nav-link {
+        color: var(--#{$variable-prefix}nav-link-color);
+        &:hover {
+            color: var(--#{$variable-prefix}nav-link-hover-color);
+        }
+    }
 }
 
 // TODO this should be reviewed. While it allowed to choose a color for the
@@ -350,15 +357,15 @@ $-seen-urls: ();
 }
 
 .o_navlink_background {
-    background: var(--NavLinkWithBackground-bg-color, rgba($navbar-light-active-color, .05));
+    background: var(--NavLinkWithBackground-bg-color, rgba(var(--#{$variable-prefix}emphasis-color-rgb), .05));
 
     &:hover {
-        background: var(--NavLinkWithBackground-bg-color--hover, rgba($navbar-light-active-color, .1));
+        background: var(--NavLinkWithBackground-bg-color--hover, rgba(var(--#{$variable-prefix}emphasis-color-rgb), .1));
     }
 }
 
 .o_navlink_background_hover:hover {
-    background: var(--NavLinkWithBackground-bg-color, rgba($navbar-light-active-color, .05));
+    background: var(--NavLinkWithBackground-bg-color, rgba(var(--#{$variable-prefix}emphasis-color-rgb), .05));
 }
 
 // Apply background color to the offcanvas menu
@@ -402,6 +409,12 @@ $-header-nav-link-height: $nav-link-height;
         @include o-apply-colors('copyright', $background: $-footer-color);
         @include o-apply-colors('copyright-custom', $background: $-footer-color);
         @include o-add-gradient('copyright-gradient');
+    }
+}
+
+@for $index from 1 through 5 {
+    .o_cc#{$index} {
+        @include o-add-gradient('o-cc#{$index}-bg-gradient')
     }
 }
 
@@ -507,7 +520,19 @@ p {
 
 font[style*='background']:not(.text-gradient),
 font[class*='bg-'] {
-    padding: 2px 6px 4px;
+    // Not adding any horizontal padding is important as it ensures that several
+    // features work:
+    // - Highlighting part of a word -> you don't want the word to be split
+    // - Coloring a word inside a highlighted sentence -> in this case, the DOM
+    //   is a succession of 3 <font> elements, the word one with both the
+    //   background-color and the color.
+    // - Even in the good cases, you might just not want the padding, to align
+    //   the highlighted element with the general layout.
+    // => The user can still add surrounding spaces if needed anyway which is
+    //    actually both technically and functionally intuitive.
+    $-base-padding: 0.05em;
+    $-bottom-factor: 2;
+    padding: MAX($-base-padding, 1px) 0 MAX(($-bottom-factor * $-base-padding), ($-bottom-factor * 1px));
 }
 
 // Icons
@@ -1170,7 +1195,7 @@ header {
     }
     #wrapwrap > header .o_extra_menu_items {
         height: 100%;
-        border-left: $border-width solid var(--NavLinkWithBackground-bg-color--hover, rgba($navbar-light-active-color, .1));
+        border-left: $border-width solid var(--NavLinkWithBackground-bg-color--hover, rgba(var(--#{$variable-prefix}emphasis-color-rgb), .1));
 
         > .nav-link {
             display: flex;
@@ -1219,13 +1244,13 @@ header {
     width: $border-width * 2;
     height: 50%;
     margin: auto (map-get($spacers, 2) * -1) auto auto;
-    background: var(--HeaderSeparator-bg-color, rgba($navbar-light-active-color, .1));
+    background: var(--HeaderSeparator-bg-color, rgba(var(--#{$variable-prefix}emphasis-color-rgb), .1));
 }
 
 // Default border color didn't match with background custom colors.
 // This allows to use the same contrast system than the text but for borders.
 .o_border_contrast {
-    border-color: var(--NavLinkWithBackground-bg-color--hover, rgba($navbar-light-active-color, .1)) !important;
+    border-color: var(--NavLinkWithBackground-bg-color--hover, rgba(var(--#{$variable-prefix}emphasis-color-rgb), .1)) !important;
 }
 
 // Mega menu
@@ -1286,17 +1311,20 @@ header {
 }
 
 #wrapwrap.o_header_overlay {
-    > header:not(.o_header_affixed):not(.o_top_menu_collapse_shown):not(.o_header_sidebar) {
+    > header:not(.o_header_affixed):not(.o_header_sidebar) {
         @include o-position-absolute(0, 0, auto, 0);
         z-index: 1000;
 
         > .navbar {
-            @include o-apply-colors(1); // Reset to default colored components
             // Prevent the nav color/gradient to impact the header color.
             background-color: transparent !important;
             background-image: none !important;
             border-color: transparent;
-            color: inherit;
+            color: inherit !important;
+        }
+
+        &:not(.o_top_menu_collapse_shown) > .navbar {
+            @include o-apply-colors(1); // Reset to default colored components
 
             .nav-item {
                 > .nav-link {
@@ -1309,6 +1337,15 @@ header {
                         font-weight: bolder;
                     }
                 }
+            }
+            .o_header_mobile_buttons_wrap, .btn[data-bs-toggle="offcanvas"] {
+                color: inherit;
+            }
+            .navbar-toggler-icon {
+                background-color: currentColor;
+                background-image: none;
+                mask: $navbar-light-toggler-icon-bg;
+                -webkit-mask: $navbar-light-toggler-icon-bg;
             }
         }
     }
@@ -1594,6 +1631,12 @@ $ribbon-padding: 100px;
     height: 0px;
 }
 
+.o_cookies_bar_toggle {
+    inset-inline-end: 1rem;
+    inset-block-end: var(--cookies-bar-toggle-inset-block-end, 1rem);
+    z-index: $zindex-modal + 1; // Over the modal backdrop.
+}
+
 // Search results
 .o_search_result_item_detail {
     flex: 1;
@@ -1620,7 +1663,7 @@ ul.o_checklist > li.o_checked::after {
 .o_text_content_invisible {
     color: transparent !important;
 }
-[placeholder*="data-oe-translation-initial-sha"] {
+[placeholder*="data-oe-translation-source-sha"] {
     &::-webkit-input-placeholder{ /* WebKit */
         color: transparent;
         opacity: 0;
@@ -1630,10 +1673,10 @@ ul.o_checklist > li.o_checked::after {
         opacity: 0;
     }
 }
-input[value*="data-oe-translation-initial-sha"] {
+input[value*="data-oe-translation-source-sha"] {
     @extend .o_text_content_invisible;
 }
-[data-oe-translation-initial-sha] {
+[data-oe-translation-source-sha] {
     > .o_translation_select {
         border: $input-border-width solid $input-border-color;
         @include border-radius($input-border-radius, 0);
@@ -1695,7 +1738,7 @@ input[value*="data-oe-translation-initial-sha"] {
 .o_wanim_overflow_xy_hidden {
     overflow-x: hidden !important;
 
-    &.o_rtl {
+    &.o_rtl, .o_rtl {
         // Fix for Chrome and Edge bug: resolves slow/stuck scrolling during
         // left-overflowing animations on RTL web pages. Note: using overflow on
         // the main element hides animated elements outside of it (e.g. "Framed"
@@ -2454,4 +2497,49 @@ input[value*="data-oe-translation-initial-sha"] {
 // Disables the offset on dropdown to match relative position in mobile/offcanvas.
 .o_dropdown_without_offset {
     transform: none !important;
+}
+
+// Subtle input-group-text
+// This can be set to an input-group-text placed directly before or after the input.
+.input-group-text.input-group-text-subtle {
+    @include transition($input-transition);
+    border-color: $input-border-color;
+    background-color: $input-bg;
+    background-clip: padding-box;
+    color: $input-color;
+
+    // The input border color is based on "currentColor", so we can't apply this
+    // color to the whole element, otherwise the border color won't match the
+    // input border. To fix that, we need to define the color on a child element
+    // (eg. <i/> for an icon or <span/> for text).
+    > * {
+        color: rgba($input-color, 0.6);
+    }
+    .is-invalid ~ &,
+    &:has(~ .is-invalid) {
+        border-color: $form-feedback-invalid-color;
+    }
+    .is-invalid ~ & + .input-group-text {
+        border-left-color: $form-feedback-invalid-color;
+    }
+    .form-control ~ &, .form-select ~ & {
+        padding-left: $input-group-addon-padding-x * .5;
+    }
+    &:has(~ .form-control), &:has(~ .form-select) {
+        padding-right: $input-group-addon-padding-x * .5;
+    }
+    .form-control:disabled ~ &, .form-control[readonly] ~ &, &:has(~ .form-select:disabled), &:has(~ .form-select[readonly]) {
+        background-color: $input-disabled-bg;
+        border-color: $input-disabled-border-color;
+    }
+}
+
+.input-group-text-subtle ~ .form-control:not(:focus),
+.input-group-text-subtle ~ .form-select:not(:focus):not(:hover) {
+    border-left-width: 0;
+}
+
+.form-control:not(:focus):has(~ .input-group-text-subtle),
+.form-select:not(:focus):not(:hover):has(~ .input-group-text-subtle) {
+    border-right-width: 0;
 }

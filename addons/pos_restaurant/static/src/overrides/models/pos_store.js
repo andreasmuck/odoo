@@ -1,14 +1,10 @@
-/** @odoo-module */
-
 import { patch } from "@web/core/utils/patch";
 import { PosStore } from "@point_of_sale/app/store/pos_store";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
-import { ProductScreen } from "@point_of_sale/app/screens/product_screen/product_screen";
 import { FloorScreen } from "@pos_restaurant/app/floor_screen/floor_screen";
-import { TipScreen } from "@pos_restaurant/app/tip_screen/tip_screen";
 import { ConnectionLostError } from "@web/core/network/rpc";
-import { _t } from "@web/core/l10n/translation";
-import { ask } from "@point_of_sale/app/store/make_awaitable_dialog";
+import { ReceiptScreen } from "@point_of_sale/app/screens/receipt_screen/receipt_screen";
+import { TicketScreen } from "@point_of_sale/app/screens/ticket_screen/ticket_screen";
 
 const NON_IDLE_EVENTS = [
     "mousemove",
@@ -28,10 +24,11 @@ patch(PosStore.prototype, {
      */
     async setup() {
         this.orderToTransferUuid = null; // table transfer feature
-        this.floorPlanStyle = "default";
         this.isEditMode = false;
-        this.isTableToMerge = false;
+        this.tableSyncing = false;
         await super.setup(...arguments);
+        this.floorPlanStyle =
+            localStorage.getItem("floorPlanStyle") || (this.ui.isSmall ? "kanban" : "default");
         if (this.config.module_pos_restaurant) {
             this.setActivityListeners();
             this.showScreen("FloorScreen", { floor: this.selectedTable?.floor || null });
@@ -71,6 +68,30 @@ patch(PosStore.prototype, {
             tableByIds[table.id].uiState.skipCount = table.skip_changes;
         }
     },
+    get categoryCount() {
+        const orderChange = this.getOrderChanges().orderlines;
+
+        const categories = Object.values(orderChange).reduce((acc, curr) => {
+            const categories =
+                this.models["product.product"].get(curr.product_id)?.pos_categ_ids || [];
+
+            for (const category of categories) {
+                if (category) {
+                    if (!acc[category.id]) {
+                        acc[category.id] = {
+                            count: curr.quantity,
+                            name: category.name,
+                        };
+                    } else {
+                        acc[category.id].count += curr.quantity;
+                    }
+                }
+            }
+
+            return acc;
+        }, {});
+        return Object.values(categories);
+    },
     createNewOrder() {
         const order = super.createNewOrder(...arguments);
 
@@ -89,7 +110,7 @@ patch(PosStore.prototype, {
     setIdleTimer() {
         clearTimeout(this.idleTimer);
         if (this.shouldResetIdleTimer()) {
-            this.idleTimer = setTimeout(() => this.actionAfterIdle(), 60000);
+            this.idleTimer = setTimeout(() => this.actionAfterIdle(), 180000);
         }
     },
     async actionAfterIdle() {
@@ -155,11 +176,18 @@ patch(PosStore.prototype, {
         return super.closePos(...arguments);
     },
     showBackButton() {
-        return (
-            super.showBackButton(...arguments) ||
-            this.mainScreen.component === TipScreen ||
-            (this.mainScreen.component === ProductScreen && this.config.module_pos_restaurant)
-        );
+        if (this.orderToTransferUuid) {
+            return true;
+        }
+        if (this.config.module_pos_restaurant) {
+            const screenWoBackBtn = [ReceiptScreen, FloorScreen, TicketScreen];
+            return (
+                !screenWoBackBtn.includes(this.mainScreen.component) ||
+                (this.ui.isSmall && this.mainScreen.component === TicketScreen)
+            );
+        } else {
+            return super.showBackButton(...arguments);
+        }
     },
     //@override
     async afterProcessServerData() {
@@ -185,16 +213,27 @@ patch(PosStore.prototype, {
     },
     getPendingOrder() {
         const context = this.getSyncAllOrdersContext();
-        const { orderToCreate, orderToUpdate } = super.getPendingOrder();
+        const { orderToCreate, orderToUpdate, paidOrdersNotSent } = super.getPendingOrder();
 
         if (!this.config.module_pos_restaurant || !context.table_ids || !context.table_ids.length) {
-            return { orderToCreate, orderToUpdate };
+            return { orderToCreate, orderToUpdate, paidOrdersNotSent };
         }
 
         return {
-            orderToCreate: orderToCreate.filter((o) => context.table_ids.includes(o.table_id.id)),
-            orderToUpdate: orderToUpdate.filter((o) => context.table_ids.includes(o.table_id.id)),
+            paidOrdersNotSent,
+            orderToCreate: orderToCreate.filter(
+                (o) => context.table_ids.includes(o.table_id?.id) && !this.tableSyncing
+            ),
+            orderToUpdate: orderToUpdate.filter(
+                (o) => context.table_ids.includes(o.table_id?.id) && !this.tableSyncing
+            ),
         };
+    },
+    async addLineToCurrentOrder(vals, opts = {}, configure = true) {
+        if (this.config.module_pos_restaurant && !this.get_order().uiState.booked) {
+            this.get_order().setBooked(true);
+        }
+        return super.addLineToCurrentOrder(vals, opts, configure);
     },
     async getServerOrders() {
         if (this.config.module_pos_restaurant) {
@@ -246,7 +285,7 @@ patch(PosStore.prototype, {
         }
     },
     getTableOrders(tableId) {
-        return this.get_order_list().filter((order) => order.table_id?.id === tableId);
+        return this.get_open_orders().filter((order) => order.table_id?.id === tableId);
     },
     async unsetTable() {
         try {
@@ -264,46 +303,47 @@ patch(PosStore.prototype, {
         }
         this.set_order(null);
     },
+    getActiveOrdersOnTable(table) {
+        return this.models["pos.order"].filter(
+            (o) => o.table_id?.id === table.id && !o.finalized && o.lines.length
+        );
+    },
     tableHasOrders(table) {
-        return this.models["pos.order"]
-            .filter((o) => !o.finalized)
-            .some((o) => o.table_id?.id === table?.id && o.lines.length);
+        return this.getActiveOrdersOnTable(table).length > 0;
     },
     shouldShowNavbarButtons() {
         return super.shouldShowNavbarButtons(...arguments) && !this.orderToTransferUuid;
     },
-    async transferTable(table) {
+    async transferOrder(destinationTable) {
         const order = this.models["pos.order"].getBy("uuid", this.orderToTransferUuid);
         const originalTable = order.table_id;
-        if (table.id === originalTable.id) {
+        this.loadingOrderState = false;
+        this.orderToTransferUuid = null;
+        this.alert.dismiss();
+        if (destinationTable.id === originalTable?.id) {
+            this.set_order(order);
+            this.setTable(destinationTable);
             return;
         }
-        if (
-            order.table_id.id !== table.id &&
-            this.tableHasOrders(table) &&
-            this.tableHasOrders(originalTable)
-        ) {
-            const confirm = await ask(this.dialog, {
-                title: _t("Multiple open orders"),
-                body: _t(
-                    "Both tables have an open order. If you proceed, both orders will live on the same table. You can access them anytime from the Orders menu."
-                ),
-            });
-            if (!confirm) {
-                return;
+        if (!this.tableHasOrders(destinationTable)) {
+            order.update({ table_id: destinationTable });
+            this.set_order(order);
+        } else {
+            const destinationOrder = this.getActiveOrdersOnTable(destinationTable)[0];
+            for (const orphanLine of order.lines) {
+                const adoptingLine = destinationOrder.lines.find((l) =>
+                    l.can_be_merged_with(orphanLine)
+                );
+                if (adoptingLine) {
+                    adoptingLine.merge(orphanLine);
+                } else {
+                    orphanLine.update({ order_id: destinationOrder });
+                }
             }
+            this.set_order(destinationOrder);
+            await this.deleteOrders([order]);
         }
-        this.selectedTable = table;
-        this.loadingOrderState = false;
-        if (this.isTableToMerge && order.table_id.id !== table.id) {
-            originalTable.update({ parent_id: table });
-            this.updateTables(originalTable);
-            this.isTableToMerge = false;
-        }
-        order.update({ table_id: table });
-        this.set_order(order);
-        this.orderToTransferUuid = null;
-        this.showScreen("ProductScreen");
+        await this.setTable(destinationTable);
     },
     updateTables(...tables) {
         this.data.call("restaurant.table", "update_tables", [
@@ -326,10 +366,7 @@ patch(PosStore.prototype, {
     toggleEditMode() {
         this.isEditMode = !this.isEditMode;
     },
-    async addProductToCurrentOrder(product, options = {}) {
-        if (this.config.module_pos_restaurant && !this.get_order().booked) {
-            this.get_order().setBooked(true);
-        }
-        return super.addProductToCurrentOrder(...arguments);
+    _shouldLoadOrders() {
+        return super._shouldLoadOrders() || this.config.module_pos_restaurant;
     },
 });

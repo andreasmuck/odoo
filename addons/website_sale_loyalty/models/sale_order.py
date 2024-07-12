@@ -7,11 +7,11 @@ from odoo import api, fields, models
 from odoo.exceptions import UserError
 from odoo.http import request
 from odoo.osv import expression
-from odoo.tools import float_is_zero
+from odoo.tools import str2bool
 
 
 class SaleOrder(models.Model):
-    _inherit = "sale.order"
+    _inherit = 'sale.order'
 
     # List of disabled rewards for automatic claim
     disabled_auto_rewards = fields.Many2many("loyalty.reward", relation="sale_order_disabled_auto_rewards_rel")
@@ -125,7 +125,7 @@ class SaleOrder(models.Model):
                     continue
                 new_lines += self.env['sale.order.line'].new({
                     'product_id': lines[0].product_id.id,
-                    'tax_id': False,
+                    'tax_ids': False,
                     'price_unit': sum(lines.mapped('price_unit')),
                     'price_subtotal': sum(lines.mapped('price_subtotal')),
                     'price_total': sum(lines.mapped('price_total')),
@@ -161,16 +161,21 @@ class SaleOrder(models.Model):
             request.session.pop('successful_code')
         return code
 
-    def _cart_update(self, *args, **kwargs):
-        product_id, set_qty = kwargs['product_id'], kwargs.get('set_qty')
+    def _set_delivery_method(self, *args, **kwargs):
+        super()._set_delivery_method(*args, **kwargs)
+        self._update_programs_and_rewards()
 
-        line = self.order_line.filtered(lambda l: l.product_id.id == product_id)
+    def _remove_delivery_line(self):
+        super()._remove_delivery_line()
+        self._update_programs_and_rewards()
+
+    def _cart_update(self, product_id, line_id=None, add_qty=0, set_qty=0, **kwargs):
+        line = self.order_line.filtered(lambda sol: sol.product_id.id == product_id)[:1]
         reward_id = line.reward_id
         if set_qty == 0 and line.coupon_id and reward_id and reward_id.reward_type == 'discount':
             # Force the deletion of the line even if it's a temporary record created by new()
-            kwargs['line_id'] = line.id
-
-        res = super(SaleOrder, self)._cart_update(*args, **kwargs)
+            line_id = line.id
+        res = super()._cart_update(product_id, line_id, add_qty, set_qty, **kwargs)
         self._update_programs_and_rewards()
         self._auto_apply_rewards()
         return res
@@ -211,12 +216,16 @@ class SaleOrder(models.Model):
                 ('program_id.trigger', '=', 'with_code'),
                 '&', ('program_id.trigger', '=', 'auto'), ('program_id.applies_on', '=', 'future'),
         ])
-        total_is_zero = float_is_zero(self.amount_total, precision_digits=2)
+        total_is_zero = self.currency_id.is_zero(self.amount_total)
         global_discount_reward = self._get_applied_global_discount()
         for coupon in loyality_cards:
             points = self._get_real_points_for_coupon(coupon)
             for reward in coupon.program_id.reward_ids:
-                if reward.is_global_discount and global_discount_reward and global_discount_reward.discount >= reward.discount:
+                if (
+                    reward.is_global_discount
+                    and global_discount_reward
+                    and self._best_global_discount_already_applied(global_discount_reward, reward)
+                ):
                     continue
                 if reward.reward_type == 'discount' and total_is_zero:
                     continue
@@ -237,3 +246,11 @@ class SaleOrder(models.Model):
         lines = super()._cart_find_product_line(product_id, line_id, **kwargs)
         lines = lines.filtered(lambda l: not l.is_reward_line) if not line_id else lines
         return lines
+
+    def _validate_zero_amount_cart(self):
+        super()._validate_zero_amount_cart()
+        auto_invoice = self.env['ir.config_parameter'].get_param('sale.automatic_invoice')
+        if str2bool(auto_invoice) and self.reward_amount:
+            # create an invoice for order with zero total amount and automatic invoice enabled
+            invoice = self._create_invoices(final=True)
+            invoice.action_post()

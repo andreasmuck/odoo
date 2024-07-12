@@ -60,36 +60,24 @@
             <field name="model">account.payment</field>
             <field name="arch" type="xml">
                 <kanban class="o_kanban_mobile" create="0" group_create="0" sample="1">
-                    <field name="name"/>
-                    <field name="partner_id"/>
-                    <field name="date"/>
-                    <field name="state"/>
                     <templates>
-                        <t t-name="kanban-box">
-                            <div t-attf-class="oe_kanban_global_click">
-                                <div class="row mb4">
-                                    <div class="col-6">
-                                        <strong><span><field name="name"/></span></strong>
-                                    </div>
-                                    <div class="col-6 text-end">
-                                        <strong><i class="fa fa-clock-o" role="img" aria-label="Date" title="Date"/> <t t-out="record.date.value"/></strong>
-                                    </div>
+                        <t t-name="kanban-card">
+                            <div class="row mb4">
+                                <div class="col-6">
+                                   <field class="fw-bolder" name="name"/>
                                 </div>
-                                <div class="row">
-                                    <div class="col-12">
-                                        <span><field name="partner_id"/></span>
-                                    </div>
+                                <div class="col-6 text-end">
+                                    <i class="fa fa-clock-o fw-bold" role="img" aria-label="Date" title="Date"/> <field class="fw-bold" name="date"/>
                                 </div>
-                                <div class="row">
-                                    <div class="col-6">
-                                        <field name="amount" widget='monetary'/>
-                                        <field name="currency_id" invisible="1"/>
-                                    </div>
-                                    <div class="col-6">
-                                        <span class="float-end">
-                                            <field name="state" widget="label_selection" options="{'classes': {'draft': 'secondary', 'sent': 'success'}}"/>
-                                        </span>
-                                    </div>
+                            </div>
+                            <field name="partner_id"/>
+                            <div class="row">
+                                <div class="col-6">
+                                    <field name="amount" widget='monetary'/>
+                                    <field name="currency_id" invisible="1"/>
+                                </div>
+                                <div class="col-6">
+                                    <field class="float-end" name="state" widget="label_selection" options="{'classes': {'draft': 'secondary', 'sent': 'success'}}"/>
                                 </div>
                             </div>
                         </t>
@@ -127,7 +115,7 @@
                     <filter string="Payment Date" name="date" date="date"/>
                     <separator/>
                     <field name="company_id" groups="base.group_multi_company"/>
-                    <filter string="Customer/Vendor" name="partner" domain="[]" context="{'group_by': 'partner_id'}"/>
+                    <filter string="Partner" name="partner" domain="[]" context="{'group_by': 'partner_id'}"/>
                     <filter string="Journal" name="journal" domain="[]" context="{'group_by': 'journal_id'}"/>
                     <filter string="Payment Method Line" name="paymentmethodline" domain="[]" context="{'group_by': 'payment_method_line_id'}"/>
                     <filter string="Status" name="state" domain="[]" context="{'group_by': 'state'}"/>
@@ -174,6 +162,10 @@
                     <div class="alert alert-warning text-center" role="alert" invisible="not is_internal_transfer or not require_partner_bank_account or partner_bank_id">
                         The selected payment method requires a bank account but none is set on
                         <button class="oe_link alert-link" type="object" name="action_open_destination_journal" style="padding: 0; vertical-align: baseline;">the destination journal</button>.
+                    </div>
+                    <div class="alert alert-warning mb-0" role="alert" invisible="not duplicate_move_ids or state!='draft'">
+                        <span>This payment has the same partner, amount and date as </span>
+                        <field name="duplicate_move_ids" widget="x2many_buttons" string="Duplicated Payments"/>
                     </div>
                     <sheet>
                         <!-- Invisible fields -->

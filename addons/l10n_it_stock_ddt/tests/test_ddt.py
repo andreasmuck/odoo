@@ -8,11 +8,11 @@ from odoo.tests import Form, tagged
 class TestDDT(TestSaleCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref='it'):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    @TestSaleCommon.setup_country('it')
+    def setUpClass(cls):
+        super().setUpClass()
         cls.company_data['company'].write({
                         'vat':"IT12345670017",
-                        'country_id': cls.env.ref('base.it').id,
                         'l10n_it_codice_fiscale': '01234560157',
                         'l10n_it_tax_system': 'RF01',
                         'street': 'Via Giovanni Maria Platina 66',
@@ -36,13 +36,6 @@ class TestDDT(TestSaleCommon):
             # Needed when `l10n_it_edi_sdiscoop` is installed
             settings._create_proxy_user(cls.company_data['company'], 'demo')
 
-    @classmethod
-    def setup_company_data(cls, company_name, **kwargs):
-        return super().setup_company_data(company_name, **{
-            **kwargs,
-            'country_id': cls.env.ref('base.it').id,
-        })
-
     def test_ddt_flow(self):
         """
             We confirm a sale order and handle its delivery partially.
@@ -58,7 +51,7 @@ class TestDDT(TestSaleCommon):
                                    'product_uom_qty': 5,
                                    'product_uom': p.uom_id.id,
                                    'price_unit': p.list_price,
-                                   'tax_id': self.company_data['default_tax_sale']})
+                                   'tax_ids': self.company_data['default_tax_sale']})
                            for p in (
                     self.company_data['product_order_no'],
                     self.company_data['product_service_delivery'],
@@ -119,7 +112,7 @@ class TestDDT(TestSaleCommon):
                                    'product_uom_qty': 3,
                                    'product_uom': self.product_a.uom_id.id,
                                    'price_unit': self.product_a.list_price,
-                                   'tax_id': self.company_data['default_tax_sale']
+                                    'tax_ids': self.company_data['default_tax_sale']
                                    }
                             )],
             'pricelist_id': self.company_data['default_pricelist'].id,

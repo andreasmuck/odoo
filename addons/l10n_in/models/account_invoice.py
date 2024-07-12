@@ -20,7 +20,7 @@ class AccountMove(models.Model):
             ('special_economic_zone', 'Special Economic Zone'),
             ('deemed_export', 'Deemed Export'),
             ('uin_holders', 'UIN Holders'),
-        ], string="GST Treatment", compute="_compute_l10n_in_gst_treatment", store=True, readonly=False, copy=True)
+        ], string="GST Treatment", compute="_compute_l10n_in_gst_treatment", store=True, readonly=False, copy=True, precompute=True)
     l10n_in_state_id = fields.Many2one('res.country.state', string="Place of supply", compute="_compute_l10n_in_state_id", store=True, readonly=False)
     l10n_in_gstin = fields.Char(string="GSTIN")
     # For Export invoice this data is need in GSTR report
@@ -29,6 +29,7 @@ class AccountMove(models.Model):
     l10n_in_shipping_port_code_id = fields.Many2one('l10n_in.port.code', 'Port code')
     l10n_in_reseller_partner_id = fields.Many2one('res.partner', 'Reseller', domain=[('vat', '!=', False)], help="Only Registered Reseller")
     l10n_in_journal_type = fields.Selection(string="Journal Type", related='journal_id.type')
+    l10n_in_hsn_code_warning = fields.Json(compute="_compute_hsn_code_warning")
 
     @api.depends('partner_id', 'partner_id.l10n_in_gst_treatment', 'state')
     def _compute_l10n_in_gst_treatment(self):
@@ -45,17 +46,22 @@ class AccountMove(models.Model):
                 record.l10n_in_gst_treatment = gst_treatment
         (self - indian_invoice).l10n_in_gst_treatment = False
 
-    @api.depends('partner_id', 'company_id')
+    @api.depends('partner_id', 'partner_shipping_id', 'company_id')
     def _compute_l10n_in_state_id(self):
         for move in self:
             if move.country_code == 'IN' and move.journal_id.type == 'sale':
-                country_code = move.partner_id.country_id.code
+                partner_state = (
+                    move.partner_id.commercial_partner_id == move.partner_shipping_id.commercial_partner_id
+                    and move.partner_shipping_id.state_id
+                    or move.partner_id.state_id
+                )
+                if not partner_state:
+                    partner_state = move.partner_id.commercial_partner_id.state_id or move.company_id.state_id
+                country_code = partner_state.country_id.code or move.country_code
                 if country_code == 'IN':
-                    move.l10n_in_state_id = move.partner_id.state_id
-                elif country_code:
-                    move.l10n_in_state_id = self.env.ref('l10n_in.state_in_oc', raise_if_not_found=False)
+                    move.l10n_in_state_id = partner_state
                 else:
-                    move.l10n_in_state_id = move.company_id.state_id
+                    move.l10n_in_state_id = self.env.ref('l10n_in.state_in_oc', raise_if_not_found=False)
             elif move.country_code == 'IN' and move.journal_id.type == 'purchase':
                 move.l10n_in_state_id = move.company_id.state_id
             else:
@@ -73,6 +79,46 @@ class AccountMove(models.Model):
             }}
         return super()._onchange_name_warning()
 
+    @api.depends('invoice_line_ids.l10n_in_hsn_code', 'company_id.l10n_in_hsn_code_digit')
+    def _compute_hsn_code_warning(self):
+
+        def build_warning(record, action_name, message, views, domain=False):
+            return {
+                'message': message,
+                'action_text': _("View %s", action_name),
+                'action': record._get_records_action(name=_("Check %s", action_name), target='current', views=views, domain=domain or [])
+            }
+
+        indian_invoice = self.filtered(lambda m: m.country_code == 'IN' and m.move_type != 'entry')
+        for move in indian_invoice:
+            filtered_lines = move.invoice_line_ids.filtered(lambda line: line.display_type == 'product' and line.tax_ids and line._origin)
+            if move.company_id.l10n_in_hsn_code_digit and filtered_lines:
+                lines = self.env['account.move.line']
+                for line in filtered_lines:
+                    if (line.l10n_in_hsn_code and (not re.match(r'^\d{4}$|^\d{6}$|^\d{8}$', line.l10n_in_hsn_code) or len(line.l10n_in_hsn_code) < int(move.company_id.l10n_in_hsn_code_digit))) or not line.l10n_in_hsn_code:
+                        lines |= line._origin
+
+                digit_suffixes = {
+                    '4': _("4 digits, 6 digits or 8 digits"),
+                    '6': _("6 digits or 8 digits"),
+                    '8': _("8 digits")
+                }
+                msg = _("Ensure that the HSN/SAC Code consists either %s in invoice lines",
+                    digit_suffixes.get(move.company_id.l10n_in_hsn_code_digit, _("Invalid HSN/SAC Code digit"))
+                )
+                move.l10n_in_hsn_code_warning = {
+                    'invalid_hsn_code_length': build_warning(
+                        message=msg,
+                        action_name=_("Journal Items(s)"),
+                        record=lines,
+                        views=[(self.env.ref("l10n_in.view_move_line_tree_hsn_l10n_in").id, "tree")],
+                        domain=[('id', 'in', lines.ids)]
+                    )
+                } if lines else {}
+            else:
+                move.l10n_in_hsn_code_warning = {}
+        (self - indian_invoice).l10n_in_hsn_code_warning = {}
+
     def _get_name_invoice_report(self):
         self.ensure_one()
         if self.country_code == 'IN':
@@ -84,7 +130,7 @@ class AccountMove(models.Model):
         posted = super()._post(soft)
         gst_treatment_name_mapping = {k: v for k, v in
                              self._fields['l10n_in_gst_treatment']._description_selection(self.env)}
-        for move in posted.filtered(lambda m: m.country_code == 'IN'):
+        for move in posted.filtered(lambda m: m.country_code == 'IN' and m.is_sale_document()):
             if move.l10n_in_state_id and not move.l10n_in_state_id.l10n_in_tin:
                 raise UserError(_("Please set a valid TIN Number on the Place of Supply %s", move.l10n_in_state_id.name))
             if not move.company_id.state_id:
@@ -131,14 +177,20 @@ class AccountMove(models.Model):
         self.ensure_one()
         display_uom = self.env.user.has_group('uom.group_uom')
 
-        base_lines = [
-            {
+        base_lines = []
+        for line in self.invoice_line_ids.filtered(lambda x: x.display_type == 'product'):
+            taxes_data = line.tax_ids._convert_to_dict_for_taxes_computation()
+            product_values = self.env['account.tax']._eval_taxes_computation_turn_to_product_values(
+                taxes_data,
+                product=line.product_id,
+            )
+
+            base_lines.append({
                 'l10n_in_hsn_code': line.l10n_in_hsn_code,
                 'quantity': line.quantity,
                 'price_unit': line.price_unit,
+                'product_values': product_values,
                 'uom': {'id': line.product_uom_id.id, 'name': line.product_uom_id.name},
-                'tax_values_list': line.tax_ids._convert_to_dict_for_taxes_computation(),
-            }
-            for line in self.invoice_line_ids.filtered(lambda x: x.display_type == 'product')
-        ]
+                'taxes_data': taxes_data,
+            })
         return self.env['account.tax']._l10n_in_get_hsn_summary_table(base_lines, display_uom)

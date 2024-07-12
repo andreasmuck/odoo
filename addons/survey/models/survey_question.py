@@ -260,19 +260,10 @@ class SurveyQuestion(models.Model):
 
     @api.depends('survey_id.question_and_page_ids.is_page', 'survey_id.question_and_page_ids.sequence')
     def _compute_question_ids(self):
-        """Will take all questions of the survey for which the index is higher than the index of this page
-        and lower than the index of the next page."""
         for question in self:
             if question.is_page:
-                next_page_index = False
-                for page in question.survey_id.page_ids:
-                    if page._index() > question._index():
-                        next_page_index = page._index()
-                        break
-
-                question.question_ids = question.survey_id.question_ids.filtered(
-                    lambda q: q._index() > question._index() and (not next_page_index or q._index() < next_page_index)
-                )
+                question.question_ids = question.survey_id.question_ids\
+                    .filtered(lambda q: q.page_id == question).sorted(lambda q: q._index())
             else:
                 question.question_ids = self.env['survey.question']
 
@@ -602,7 +593,7 @@ class SurveyQuestion(models.Model):
                 answer_line_ids=answer_lines,
                 answer_line_done_ids=done_lines,
                 answer_input_done_ids=done_lines.mapped('user_input_id'),
-                answer_input_skipped_ids=skipped_lines.mapped('user_input_id'),
+                answer_input_ids=answer_lines.mapped('user_input_id'),
                 comment_line_ids=comment_line_ids)
             question_data.update(question._get_stats_summary_data(answer_lines))
 
@@ -808,8 +799,8 @@ class SurveyQuestionAnswer(models.Model):
     MAX_ANSWER_NAME_LENGTH = 90  # empirically tested in client dropdown
 
     # question and question related fields
-    question_id = fields.Many2one('survey.question', string='Question', ondelete='cascade')
-    matrix_question_id = fields.Many2one('survey.question', string='Question (as matrix row)', ondelete='cascade')
+    question_id = fields.Many2one('survey.question', string='Question', ondelete='cascade', index='btree_not_null')
+    matrix_question_id = fields.Many2one('survey.question', string='Question (as matrix row)', ondelete='cascade', index='btree_not_null')
     question_type = fields.Selection(related='question_id.question_type')
     sequence = fields.Integer('Label Sequence order', default=10)
     scoring_type = fields.Selection(related='question_id.scoring_type')

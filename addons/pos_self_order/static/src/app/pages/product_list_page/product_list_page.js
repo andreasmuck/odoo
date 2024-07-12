@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { Component, useEffect, useRef, useState, onWillStart } from "@odoo/owl";
 import { useSelfOrder } from "@pos_self_order/app/self_order_service";
 import { ProductCard } from "@pos_self_order/app/components/product_card/product_card";
@@ -27,7 +25,7 @@ export class ProductListPage extends Component {
             searchInput: "",
         });
         this.categoryButton = Object.fromEntries(
-            Array.from(this.selfOrder.categoryList).map((category) => {
+            this.selfOrder.productCategories.map((category) => {
                 return [category.id, useRef(`category_${category.id}`)];
             })
         );
@@ -47,14 +45,14 @@ export class ProductListPage extends Component {
                     this.scrollTo(this.currentProductCard, { behavior: "instant" });
                 }
                 const scrollSpyContentEl = document.getElementById("scrollspy-products");
-                const currentCategId = this.selfOrder.currentCategory.id;
+                const currentCategId = this.selfOrder.currentCategory?.id;
                 const categ = document.querySelectorAll(`[categId="${currentCategId}"]`);
                 if (categ[0]) {
                     categ[0].scrollIntoView();
                 }
                 const onActivateScrollSpy = ({ relatedTarget }) => {
-                    const categId = parseInt(relatedTarget.split("_")[1]);
-                    this.selfOrder.currentCategory = this.selfOrder.pos_category.find(
+                    const categId = parseInt(relatedTarget.getAttribute("href").split("_")[1]);
+                    this.selfOrder.currentCategory = this.selfOrder.models["pos.category"].find(
                         (categ) => categ.id === categId
                     );
                 };
@@ -72,7 +70,7 @@ export class ProductListPage extends Component {
         useEffect(
             () => {
                 const category = this.selfOrder.currentCategory;
-                const categBtn = this.categoryButton[category.name]?.el;
+                const categBtn = this.categoryButton[category?.name]?.el;
 
                 if (!categBtn) {
                     return;
@@ -87,12 +85,8 @@ export class ProductListPage extends Component {
         );
 
         onWillStart(() => {
-            this.onWillStart();
+            this.selfOrder.computeAvailableCategories();
         });
-    }
-
-    onWillStart() {
-        this.selfOrder.updateCategoryList();
     }
 
     focusSearch() {

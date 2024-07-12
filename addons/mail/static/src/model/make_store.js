@@ -1,13 +1,6 @@
 import { markRaw, reactive, toRaw } from "@odoo/owl";
 import { Store } from "./store";
-import {
-    IS_RECORD_SYM,
-    STORE_SYM,
-    isFieldDefinition,
-    isMany,
-    isRelation,
-    modelRegistry,
-} from "./misc";
+import { STORE_SYM, isFieldDefinition, isMany, isRelation, modelRegistry } from "./misc";
 import { Record } from "./record";
 import { StoreInternal } from "./store_internal";
 import { ModelInternal } from "./model_internal";
@@ -45,9 +38,9 @@ export function makeStore(env, { localRegistry } = {}) {
         // Produce another class with changed prototype, so that there are automatic get/set on relational fields
         const Class = {
             [OgClass.name]: class extends OgClass {
-                [IS_RECORD_SYM] = true;
                 constructor() {
                     super();
+                    this.setup();
                     const record = this;
                     record._raw = record;
                     record.Model = Model;
@@ -62,6 +55,13 @@ export function makeStore(env, { localRegistry } = {}) {
                          */
                         get(record, name, recordFullProxy) {
                             recordFullProxy = record._.downgradeProxy(record, recordFullProxy);
+                            if (record._.gettingField || !Model._.fields.get(name)) {
+                                let res = Reflect.get(...arguments);
+                                if (typeof res === "function") {
+                                    res = res.bind(recordFullProxy);
+                                }
+                                return res;
+                            }
                             if (Model._.fieldsCompute.get(name) && !Model._.fieldsEager.get(name)) {
                                 record._.fieldsComputeInNeed.set(name, true);
                                 if (record._.fieldsComputeOnNeed.get(name)) {
@@ -74,9 +74,11 @@ export function makeStore(env, { localRegistry } = {}) {
                                     record._.sort(record, name);
                                 }
                             }
+                            record._.gettingField = true;
+                            const val = recordFullProxy[name];
+                            record._.gettingField = false;
                             if (isRelation(Model, name)) {
-                                const recordListFullProxy =
-                                    recordFullProxy._fieldsValue.get(name)._proxy;
+                                const recordListFullProxy = val._proxy;
                                 if (isMany(Model, name)) {
                                     return recordListFullProxy;
                                 }
@@ -91,7 +93,7 @@ export function makeStore(env, { localRegistry } = {}) {
                         deleteProperty(record, name) {
                             return store.MAKE_UPDATE(function recordDeleteProperty() {
                                 if (isRelation(Model, name)) {
-                                    const recordList = record._fieldsValue.get(name);
+                                    const recordList = record[name];
                                     recordList.clear();
                                     return true;
                                 }
@@ -102,16 +104,21 @@ export function makeStore(env, { localRegistry } = {}) {
                          * Using record.update(data) is preferable for performance to batch process
                          * when updating multiple fields at the same time.
                          */
-                        set(record, name, val) {
+                        set(record, name, val, receiver) {
                             // ensure each field write goes through the updatingAttrs method exactly once
                             if (record._.updatingAttrs.has(name)) {
                                 record[name] = val;
                                 return true;
                             }
                             return store.MAKE_UPDATE(function recordSet() {
-                                record._.proxyUsed.set(name, true);
+                                const reactiveSet = receiver !== record._proxyInternal;
+                                if (reactiveSet) {
+                                    record._.proxyUsed.set(name, true);
+                                }
                                 store._.updateFields(record, { [name]: val });
-                                record._.proxyUsed.delete(name);
+                                if (reactiveSet) {
+                                    record._.proxyUsed.delete(name);
+                                }
                                 return true;
                             });
                         },
@@ -142,6 +149,7 @@ export function makeStore(env, { localRegistry } = {}) {
         store[name] = Model;
         // Detect fields with a dummy record and setup getter/setters on them
         const obj = new OgClass();
+        obj.setup();
         for (const [name, val] of Object.entries(obj)) {
             if (isFieldDefinition(val)) {
                 Model._.prepareField(name, val);

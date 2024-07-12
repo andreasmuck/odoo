@@ -5,6 +5,7 @@ from datetime import timedelta
 from collections import defaultdict
 
 from odoo import api, fields, models, _
+from odoo.osv import expression
 from odoo.tools import float_compare
 from odoo.exceptions import UserError
 
@@ -20,20 +21,43 @@ class SaleOrderLine(models.Model):
     forecast_expected_date = fields.Datetime(compute='_compute_qty_at_date')
     free_qty_today = fields.Float(compute='_compute_qty_at_date', digits='Product Unit of Measure')
     qty_available_today = fields.Float(compute='_compute_qty_at_date')
-    warehouse_id = fields.Many2one(related='order_id.warehouse_id')
+    warehouse_id = fields.Many2one('stock.warehouse', compute='_compute_warehouse_id', store=True)
     qty_to_deliver = fields.Float(compute='_compute_qty_to_deliver', digits='Product Unit of Measure')
     is_mto = fields.Boolean(compute='_compute_is_mto')
     display_qty_widget = fields.Boolean(compute='_compute_qty_to_deliver')
+    is_storable = fields.Boolean(related='product_id.is_storable')
     customer_lead = fields.Float(
         compute='_compute_customer_lead', store=True, readonly=False, precompute=True,
         inverse='_inverse_customer_lead')
 
-    @api.depends('product_type', 'product_uom_qty', 'qty_delivered', 'state', 'move_ids', 'product_uom')
+    @api.depends('route_id', 'order_id.warehouse_id', 'product_packaging_id', 'product_id')
+    def _compute_warehouse_id(self):
+        for line in self:
+            line.warehouse_id = line.order_id.warehouse_id
+            if line.route_id:
+                domain = [
+                    ('location_dest_id', '=', line.order_id.partner_shipping_id.property_stock_customer.id),
+                    ('action', '!=', 'push'),
+                ]
+                # prefer rules on the route itself even if they pull from a different warehouse than the SO's
+                rules = sorted(
+                    self.env['stock.rule'].search(
+                        domain=expression.AND([[('route_id', '=', line.route_id.id)], domain]),
+                        order='route_sequence, sequence'
+                    ),
+                    # if there are multiple rules on the route, prefer those that pull from the SO's warehouse
+                    # or those that are not warehouse specific
+                    key=lambda rule: 0 if rule.location_src_id.warehouse_id in (False, line.order_id.warehouse_id) else 1
+                )
+                if rules:
+                    line.warehouse_id = rules[0].location_src_id.warehouse_id
+
+    @api.depends('is_storable', 'product_uom_qty', 'qty_delivered', 'state', 'move_ids', 'product_uom')
     def _compute_qty_to_deliver(self):
         """Compute the visibility of the inventory widget."""
         for line in self:
             line.qty_to_deliver = line.product_uom_qty - line.qty_delivered
-            if line.state in ('draft', 'sent', 'sale') and line.product_type == 'product' and line.product_uom and line.qty_to_deliver > 0:
+            if line.state in ('draft', 'sent', 'sale') and line.is_storable and line.product_uom and line.qty_to_deliver > 0:
                 if line.state == 'sale' and not line.move_ids:
                     line.display_qty_widget = False
                 else:
@@ -52,13 +76,29 @@ class SaleOrderLine(models.Model):
          2. The quotation hasn't commitment_date, we compute the estimated delivery
             date based on lead time"""
         treated = self.browse()
+        all_move_ids = {
+            move.id
+            for line in self
+            if line.state == 'sale'
+            for move in line.move_ids
+            if move.product_id == line.product_id
+        }
+        all_moves = self.env['stock.move'].browse(all_move_ids)
+        forecast_expected_date_per_move = dict(all_moves.mapped(lambda m: (m.id, m.forecast_expected_date)))
         # If the state is already in sale the picking is created and a simple forecasted quantity isn't enough
         # Then used the forecasted data of the related stock.move
         for line in self.filtered(lambda l: l.state == 'sale'):
             if not line.display_qty_widget:
                 continue
             moves = line.move_ids.filtered(lambda m: m.product_id == line.product_id)
-            line.forecast_expected_date = max(moves.filtered("forecast_expected_date").mapped("forecast_expected_date"), default=False)
+            line.forecast_expected_date = max(
+                (
+                    forecast_expected_date_per_move[move.id]
+                    for move in moves
+                    if forecast_expected_date_per_move[move.id]
+                ),
+                default=False,
+            )
             line.qty_available_today = 0
             line.free_qty_today = 0
             for move in moves:
@@ -78,7 +118,7 @@ class SaleOrderLine(models.Model):
             grouped_lines[(line.warehouse_id.id, line.order_id.commitment_date or line._expected_date())] |= line
 
         for (warehouse, scheduled_date), lines in grouped_lines.items():
-            product_qties = lines.mapped('product_id').with_context(to_date=scheduled_date, warehouse=warehouse).read([
+            product_qties = lines.mapped('product_id').with_context(to_date=scheduled_date, warehouse_id=warehouse).read([
                 'qty_available',
                 'free_qty',
                 'virtual_available',
@@ -126,7 +166,7 @@ class SaleOrderLine(models.Model):
             mto_route = line.order_id.warehouse_id.mto_pull_id.route_id
             if not mto_route:
                 try:
-                    mto_route = self.env['stock.warehouse']._find_global_route('stock.route_warehouse0_mto', _('Replenish on Order (MTO)'))
+                    mto_route = self.env['stock.warehouse']._find_or_create_global_route('stock.route_warehouse0_mto', _('Replenish on Order (MTO)'), create=False)
                 except UserError:
                     # if route MTO not found in ir_model_data, we treat the product as in MTS
                     pass
@@ -138,14 +178,14 @@ class SaleOrderLine(models.Model):
 
     @api.depends('product_id')
     def _compute_qty_delivered_method(self):
-        """ Stock module compute delivered qty for product [('type', 'in', ['consu', 'product'])]
+        """ Stock module compute delivered qty for product [('type', '=', 'consu')]
             For SO line coming from expense, no picking should be generate: we don't manage stock for
             those lines, even if the product is a storable.
         """
         super(SaleOrderLine, self)._compute_qty_delivered_method()
 
         for line in self:
-            if not line.is_expense and line.product_id.type in ['consu', 'product']:
+            if not line.is_expense and line.product_id.type == 'consu':
                 line.qty_delivered_method = 'stock_move'
 
     @api.depends('move_ids.state', 'move_ids.scrapped', 'move_ids.quantity', 'move_ids.product_uom')
@@ -215,7 +255,7 @@ class SaleOrderLine(models.Model):
         values = super(SaleOrderLine, self)._prepare_procurement_values(group_id)
         self.ensure_one()
         # Use the delivery date if there is else use date_order and lead time
-        date_deadline = self.order_id.commitment_date or (self.order_id.date_order + timedelta(days=self.customer_lead or 0.0))
+        date_deadline = self.order_id.commitment_date or self._expected_date()
         date_planned = date_deadline - timedelta(days=self.order_id.company_id.security_lead)
         values.update({
             'group_id': group_id,
@@ -223,7 +263,7 @@ class SaleOrderLine(models.Model):
             'date_planned': date_planned,
             'date_deadline': date_deadline,
             'route_ids': self.route_id,
-            'warehouse_id': self.order_id.warehouse_id or False,
+            'warehouse_id': self.warehouse_id,
             'partner_id': self.order_id.partner_shipping_id.id,
             'location_final_id': self.order_id.partner_shipping_id.property_stock_customer,
             'product_description_variants': self.with_context(lang=self.order_id.partner_id.lang)._get_sale_order_line_multiline_description_variants(),
@@ -272,7 +312,7 @@ class SaleOrderLine(models.Model):
                (not strict and move.rule_id.id in triggering_rule_ids and move.location_final_id.usage == "customer"):
                 if not move.origin_returned_move_id or (move.origin_returned_move_id and move.to_refund):
                     outgoing_moves |= move
-            elif move.location_dest_id.usage != "customer" and move.to_refund:
+            elif move.location_id.usage == "customer" and move.to_refund:
                 incoming_moves |= move
 
         return outgoing_moves, incoming_moves
@@ -306,7 +346,7 @@ class SaleOrderLine(models.Model):
         procurements = []
         for line in self:
             line = line.with_company(line.company_id)
-            if line.state != 'sale' or line.order_id.locked or not line.product_id.type in ('consu', 'product'):
+            if line.state != 'sale' or line.order_id.locked or line.product_id.type != 'consu':
                 continue
             qty = line._get_qty_procurement(previous_product_uom_qty)
             if float_compare(qty, line.product_uom_qty, precision_digits=precision) == 0:
@@ -349,7 +389,7 @@ class SaleOrderLine(models.Model):
 
     def _update_line_quantity(self, values):
         precision = self.env['decimal.precision'].precision_get('Product Unit of Measure')
-        line_products = self.filtered(lambda l: l.product_id.type in ['product', 'consu'])
+        line_products = self.filtered(lambda l: l.product_id.type == 'consu')
         if line_products.mapped('qty_delivered') and float_compare(values['product_uom_qty'], max(line_products.mapped('qty_delivered')), precision_digits=precision) == -1:
             raise UserError(_('The ordered quantity of a sale order line cannot be decreased below the amount already delivered. Instead, create a return in your inventory.'))
         super(SaleOrderLine, self)._update_line_quantity(values)
@@ -358,7 +398,7 @@ class SaleOrderLine(models.Model):
 
     def _get_action_add_from_catalog_extra_context(self, order):
         extra_context = super()._get_action_add_from_catalog_extra_context(order)
-        extra_context.update(warehouse=order.warehouse_id.id)
+        extra_context.update(warehouse_id=order.warehouse_id.id)
         return extra_context
 
     def _get_product_catalog_lines_data(self, **kwargs):

@@ -1,5 +1,11 @@
-import { Command, fields, models, serverState } from "@web/../tests/web_test_helpers";
-import { parseModelParams } from "../mail_mock_server";
+import {
+    Command,
+    fields,
+    getKwArgs,
+    makeKwArgs,
+    models,
+    serverState,
+} from "@web/../tests/web_test_helpers";
 
 /** @typedef {import("@web/core/domain").DomainListRepr} DomainListRepr */
 
@@ -7,22 +13,13 @@ export class MailMessage extends models.ServerModel {
     _name = "mail.message";
 
     author_id = fields.Generic({ default: () => serverState.partnerId });
-    history_partner_ids = fields.Many2many({
-        relation: "res.partner",
-        string: "Partners with History",
-    });
     is_discussion = fields.Boolean({ string: "Discussion" });
     is_note = fields.Boolean({ string: "Note" });
-    needaction_partner_ids = fields.Many2many({
-        relation: "res.partner",
-        string: "Partners with Need Action",
-    });
     pinned_at = fields.Generic({ default: false });
 
     /** @param {DomainListRepr} [domain] */
     mark_all_as_read(domain) {
-        const kwargs = parseModelParams(arguments, "domain");
-        domain = kwargs.domain || [];
+        ({ domain } = getKwArgs(arguments, "domain"));
 
         /** @type {import("mock_models").BusBus} */
         const BusBus = this.env["bus.bus"];
@@ -57,9 +54,6 @@ export class MailMessage extends models.ServerModel {
         for (const message of messages) {
             this.write([message.id], {
                 needaction: false,
-                needaction_partner_ids: message.needaction_partner_ids.filter(
-                    (partnerId) => partnerId !== this.env.user.partner_id
-                ),
             });
         }
         const [partner] = ResPartner.read(this.env.user.partner_id);
@@ -71,13 +65,23 @@ export class MailMessage extends models.ServerModel {
     }
 
     /** @param {number[]} ids */
-    message_format(ids) {
+    _to_store(ids, store, for_current_user = false, add_followers = false) {
+        const kwargs = getKwArgs(arguments, "ids", "store", "for_current_user", "add_followers");
+        ids = kwargs.ids;
+        store = kwargs.store;
+        for_current_user = kwargs.for_current_user;
+        add_followers = kwargs.add_followers;
+
         /** @type {import("mock_models").IrAttachment} */
         const IrAttachment = this.env["ir.attachment"];
         /** @type {import("mock_models").MailGuest} */
         const MailGuest = this.env["mail.guest"];
+        /** @type {import("mock_models").MailFollowers} */
+        const MailFollowers = this.env["mail.followers"];
         /** @type {import("mock_models").MailLinkPreview} */
         const MailLinkPreview = this.env["mail.link.preview"];
+        /** @type {import("mock_models").MailMessage} */
+        const MailMessage = this.env["mail.message"];
         /** @type {import("mock_models").MailMessageReaction} */
         const MailMessageReaction = this.env["mail.message.reaction"];
         /** @type {import("mock_models").MailMessageSubtype} */
@@ -93,50 +97,23 @@ export class MailMessage extends models.ServerModel {
         /** @type {import("mock_models").ResPartner} */
         const ResPartner = this.env["res.partner"];
 
-        const messages = this._filter([["id", "in", ids]]);
-        // sorted from highest ID to lowest ID (i.e. from most to least recent)
-        messages.sort((m1, m2) => (m1.id < m2.id ? 1 : -1));
-        return messages.map((message) => {
+        const messages = MailMessage._filter([["id", "in", ids]]).sort(
+            (a, b) => ids.indexOf(a) - ids.indexOf(b)
+        );
+        const notifications = MailNotification._filtered_for_web_client(
+            MailNotification._filter([["mail_message_id", "in", ids]]).map((n) => n.id)
+        );
+        for (const message of messages) {
             const thread =
                 message.model && this.env[message.model]._filter([["id", "=", message.res_id]])[0];
-            let author;
-            if (message.author_id) {
-                const [partner] = ResPartner._filter([["id", "=", message.author_id]], {
-                    active_test: false,
-                });
-                author = ResPartner.mail_partner_format([partner.id])[partner.id];
-            } else {
-                author = false;
-            }
-            const attachments = IrAttachment._filter([["id", "in", message.attachment_ids]]);
-            const formattedAttachments = IrAttachment._attachment_format(
-                attachments.map((attachment) => attachment.id)
-            ).sort((a1, a2) => (a1.id < a2.id ? -1 : 1)); // sort attachments from oldest to most recent
-            const allNotifications = MailNotification._filter([
-                ["mail_message_id", "=", message.id],
-            ]);
-            const historyPartnerIds = allNotifications
-                .filter((notification) => notification.is_read)
-                .map((notification) => notification.res_partner_id);
-            const needactionPartnerIds = allNotifications
-                .filter((notification) => !notification.is_read)
-                .map((notification) => notification.res_partner_id);
-            let notifications = MailNotification._filtered_for_web_client(
-                allNotifications.map((notification) => notification.id)
+            // sort attachments from oldest to most recent;
+            const attachments = IrAttachment._filter([["id", "in", message.attachment_ids]]).sort(
+                (a1, a2) => (a1.id < a2.id ? -1 : 1)
             );
-            notifications = MailNotification._notification_format(
-                notifications.map((notification) => notification.id)
-            );
-            const trackingValues = MailTrackingValue._filter([
-                ["id", "in", message.tracking_value_ids],
-            ]);
-            const formattedTrackingValues =
-                MailTrackingValue._tracking_value_format(trackingValues);
+            store.add(IrAttachment.browse(attachments.map((attachment) => attachment.id)));
             const partners = ResPartner._filter([["id", "in", message.partner_ids]]);
             const linkPreviews = MailLinkPreview._filter([["id", "in", message.link_preview_ids]]);
-            const linkPreviewsFormatted = linkPreviews.map((linkPreview) =>
-                MailLinkPreview._link_preview_format(linkPreview)
-            );
+            store.add(linkPreviews);
             const reactionsPerContent = {};
             for (const reactionId of message.reaction_ids ?? []) {
                 const [reaction] = MailMessageReaction._filter([["id", "=", reactionId]]);
@@ -171,10 +148,10 @@ export class MailMessage extends models.ServerModel {
                 });
             }
             const response = {
-                ...message,
-                attachments: formattedAttachments,
-                author,
-                history_partner_ids: historyPartnerIds,
+                attachments: attachments.map((attachment) => ({ id: attachment.id })),
+                body: message.body,
+                create_date: message.create_date,
+                date: message.date,
                 default_subject:
                     message.model &&
                     message.res_id &&
@@ -182,31 +159,32 @@ export class MailMessage extends models.ServerModel {
                         ? ResFake._message_compute_subject([message.res_id])
                         : MailThread._message_compute_subject([message.res_id])
                     ).get(message.res_id),
-                linkPreviews: linkPreviewsFormatted,
+                id: message.id,
+                is_discussion: message.is_discussion,
+                is_note: message.is_note,
+                linkPreviews: linkPreviews.map((linkPreview) => ({ id: linkPreview.id })),
+                message_type: message.message_type,
+                model: message.model,
+                notifications: notifications
+                    .filter((notification) => notification.mail_message_id == message.id)
+                    .map((notification) => ({ id: notification.id })),
+                parentMessage: message.parent_id ? { id: message.parent_id } : false,
+                pinned_at: message.pinned_at,
                 reactions: reactionGroups,
-                needaction_partner_ids: needactionPartnerIds,
-                notifications,
-                parentMessage: message.parent_id
-                    ? this.message_format([message.parent_id])[0]
-                    : false,
                 recipients: partners.map((p) => ({ id: p.id, name: p.name, type: "partner" })),
                 record_name:
                     thread && (thread.name !== undefined ? thread.name : thread.display_name),
-                starredPersonas: message.starred_partner_ids.map((id) => ({ id, type: "partner" })),
-                trackingValues: formattedTrackingValues,
-                pinned_at: message.pinned_at,
+                res_id: message.res_id,
+                scheduledDatetime: false,
+                subject: message.subject,
+                subtype_description: message.subtype_description,
+                write_date: message.write_date,
             };
             delete response.author_id;
             if (message.subtype_id) {
                 const subtype = MailMessageSubtype._filter([["id", "=", message.subtype_id]])[0];
                 response.subtype_description = subtype.description;
             }
-            let guestAuthor;
-            if (message.author_guest_id) {
-                const [guest] = MailGuest.search_read([["id", "=", message.author_guest_id]]);
-                guestAuthor = { id: guest.id, name: guest.name, type: "guest" };
-            }
-            response.author = author || guestAuthor;
             if (response.model && response.res_id) {
                 const thread = {
                     model: response.model,
@@ -218,8 +196,90 @@ export class MailMessage extends models.ServerModel {
                 }
                 Object.assign(response, { thread });
             }
-            return response;
-        });
+            if (for_current_user) {
+                response["needaction"] = Boolean(
+                    this.env.user &&
+                        MailNotification.search([
+                            ["mail_message_id", "=", message.id],
+                            ["is_read", "=", false],
+                            ["res_partner_id", "=", this.env.user.partner_id],
+                        ]).length
+                );
+                response["starred"] = message.starred_partner_ids?.includes(
+                    this.env.user?.partner_id
+                );
+                const trackingValues = MailTrackingValue._filter([
+                    ["id", "in", message.tracking_value_ids],
+                ]);
+                const formattedTrackingValues =
+                    MailTrackingValue._tracking_value_format(trackingValues);
+                response["trackingValues"] = formattedTrackingValues;
+                if (message.model && message.res_id && add_followers) {
+                    const follower = MailFollowers._filter([
+                        ["res_model", "=", message.model],
+                        ["res_id", "=", message.res_id],
+                        ["partner_id", "=", this.env.user.partner_id],
+                    ]);
+                    if (follower.length !== 0) {
+                        response.thread.selfFollower = {
+                            id: follower[0].id,
+                            is_active: true,
+                            partner: { id: this.env.user.partner_id, type: "partner" },
+                        };
+                    } else {
+                        response.thread.selfFollower = false;
+                    }
+                }
+            }
+            store.add("Message", response);
+            if (message.parent_id) {
+                store.add(MailMessage.browse(message.parent_id));
+            }
+        }
+        this._author_to_store(ids, store);
+        store.add(notifications);
+    }
+    _author_to_store(ids, store) {
+        /** @type {import("mock_models").MailGuest} */
+        const MailGuest = this.env["mail.guest"];
+        /** @type {import("mock_models").MailMessage} */
+        const MailMessage = this.env["mail.message"];
+        /** @type {import("mock_models").ResPartner} */
+        const ResPartner = this.env["res.partner"];
+
+        for (const message of MailMessage._filter([["id", "in", ids]]).sort(
+            (a, b) => ids.indexOf(a) - ids.indexOf(b)
+        )) {
+            const data = {
+                author: false,
+                email_from: message.email_from,
+                id: message.id,
+                type: "partner",
+            };
+            if (message.author_guest_id) {
+                const [guestId] = MailGuest.search([["id", "=", message.author_guest_id]]);
+                store.add(MailGuest.browse(guestId));
+                data.author = { id: guestId, type: "guest" };
+            } else if (message.author_id) {
+                const [partner] = ResPartner._filter([["id", "=", message.author_id]], {
+                    active_test: false,
+                });
+                store.add(
+                    ResPartner.browse(partner.id),
+                    makeKwArgs({
+                        fields: {
+                            id: true,
+                            name: true,
+                            is_company: true,
+                            user: { id: true },
+                            write_date: true,
+                        },
+                    })
+                );
+                data.author = { id: partner.id, type: "partner" };
+            }
+            store.add("Message", data);
+        }
     }
 
     /**
@@ -258,9 +318,6 @@ export class MailMessage extends models.ServerModel {
         for (const message of messages) {
             this.write([message.id], {
                 needaction: false,
-                needaction_partner_ids: message.needaction_partner_ids.filter(
-                    (partnerId) => partnerId !== this.env.user.partner_id
-                ),
             });
             const [partner] = ResPartner.read(this.env.user.partner_id);
             BusBus._sendone(partner, "mail.message/mark_as_read", {
@@ -342,11 +399,7 @@ export class MailMessage extends models.ServerModel {
      * @param {string} action
      */
     _message_reaction(id, content, action) {
-        const kwargs = parseModelParams(arguments, "id", "content", "action");
-        id = kwargs.id;
-        delete kwargs.id;
-        content = kwargs.content;
-        action = kwargs.action;
+        ({ id, content, action } = getKwArgs(arguments, "id", "content", "action"));
 
         /** @type {import("mock_models").BusBus} */
         const BusBus = this.env["bus.bus"];
@@ -357,16 +410,20 @@ export class MailMessage extends models.ServerModel {
         /** @type {import("mock_models").ResPartner} */
         const ResPartner = this.env["res.partner"];
 
+        const partner_id = this.env.user?.partner_id ?? false;
+        const guest_id = this.env.cookie.get("dgid") ?? false;
         const [reaction] = MailMessageReaction.search_read([
             ["content", "=", content],
             ["message_id", "=", id],
-            ["partner_id", "=", this.env.user.partner_id],
+            ["partner_id", "=", partner_id],
+            ["guest_id", "=", guest_id],
         ]);
         if (action === "add" && !reaction) {
             MailMessageReaction.create({
                 content,
                 message_id: id,
-                partner_id: this.env.user.partner_id,
+                partner_id,
+                guest_id,
             });
         }
         if (action === "remove" && reaction) {
@@ -377,7 +434,7 @@ export class MailMessage extends models.ServerModel {
             ["content", "=", content],
         ]);
         const guest = MailGuest._get_guest_from_context();
-        const [partner] = ResPartner.read(this.env.user.partner_id);
+        const [partner] = ResPartner.read(serverState.partnerId);
         const result = {
             id,
             reactions: [
@@ -414,21 +471,14 @@ export class MailMessage extends models.ServerModel {
      * @returns {Object[]}
      */
     _message_fetch(domain, search_term, before, after, around, limit) {
-        const kwargs = parseModelParams(
-            arguments,
-            "domain",
-            "search_term",
-            "before",
-            "after",
-            "around",
-            "limit"
-        );
-        domain = kwargs.domain;
-        search_term = kwargs.search_term;
-        before = kwargs.before;
-        after = kwargs.after;
-        around = kwargs.around;
-        limit = kwargs.limit || 30;
+        ({
+            domain,
+            search_term,
+            before,
+            after,
+            around,
+            limit = 30,
+        } = getKwArgs(arguments, "domain", "search_term", "before", "after", "around", "limit"));
 
         const res = {};
         if (search_term) {
@@ -436,7 +486,7 @@ export class MailMessage extends models.ServerModel {
             domain.push(["body", "ilike", search_term]);
             res.count = this.search_count(domain);
         }
-        if (around) {
+        if (around !== undefined) {
             const messagesBefore = this._filter(domain.concat([["id", "<=", around]])).sort(
                 (m1, m2) => m2.id - m1.id
             );
@@ -445,7 +495,10 @@ export class MailMessage extends models.ServerModel {
                 (m1, m2) => m1.id - m2.id
             );
             messagesAfter.length = Math.min(messagesAfter.length, limit / 2);
-            return { ...res, messages: messagesAfter.concat(messagesBefore.reverse()) };
+            const messages = messagesAfter
+                .concat(messagesBefore.reverse())
+                .sort((m1, m2) => m2.id - m1.id);
+            return { ...res, messages };
         }
         if (before) {
             domain.push(["id", "<", before]);
@@ -453,74 +506,82 @@ export class MailMessage extends models.ServerModel {
         if (after) {
             domain.push(["id", ">", after]);
         }
-        const messages = this._filter(domain);
-        // sorted from highest ID to lowest ID (i.e. from youngest to oldest)
-        messages.sort(function (m1, m2) {
-            return m1.id < m2.id ? 1 : -1;
-        });
+        const messages = this._filter(domain).sort((m1, m2) => m2.id - m1.id);
         // pick at most 'limit' messages
         messages.length = Math.min(messages.length, limit);
         res.messages = messages;
         return res;
     }
 
-    /** @param {number[]} ids */
-    _message_format_personalize(ids) {
-        /** @type {import("mock_models").MailFollowers} */
-        const MailFollowers = this.env["mail.followers"];
-
-        const messages = this.message_format(ids);
-        messages.forEach((message) => {
-            if (message.model && message.res_id) {
-                const follower = MailFollowers._filter([
-                    ["res_model", "=", message.model],
-                    ["res_id", "=", message.res_id],
-                    ["partner_id", "=", this.env.user.partner_id],
-                ]);
-                if (follower.length !== 0) {
-                    message.thread.selfFollower = {
-                        id: follower[0].id,
-                        is_active: true,
-                        partner: { id: this.env.user.partner_id, type: "partner" },
-                    };
-                }
-            }
-        });
-        return messages;
-    }
-
     /**
-     * @returns {number[]} ids
-     * @returns {Object[]}
+     * @param {number[]} ids
+     * @param {import("@mail/../tests/mock_server/mail_mock_server").mailDataHelpers.Store} store
      */
-    _message_notification_format(ids) {
+    _message_notifications_to_store(ids, store) {
         /** @type {import("mock_models").MailNotification} */
         const MailNotification = this.env["mail.notification"];
 
         const messages = this._filter([["id", "in", ids]]);
-        return messages.map((message) => {
-            let notifications = MailNotification._filter([["mail_message_id", "=", message.id]]);
-            notifications = MailNotification._filtered_for_web_client(
-                notifications.map((notification) => notification.id)
-            );
-            notifications = MailNotification._notification_format(
-                notifications.map((notification) => notification.id)
-            );
-            return {
+        const notifications = MailNotification._filtered_for_web_client(
+            MailNotification._filter([["mail_message_id", "in", ids]]).map((n) => n.id)
+        );
+        for (const message of messages) {
+            const message_data = {
                 author: message.author_id ? { id: message.author_id, type: "partner" } : false,
                 body: message.body,
                 date: message.date,
                 id: message.id,
                 message_type: message.message_type,
-                notifications: notifications,
-                thread: message.res_id
-                    ? {
-                          id: message.res_id,
-                          model: message.model,
-                          modelName: this.env[message.model]._description,
-                      }
-                    : false,
+                notifications: notifications
+                    .filter((notification) => notification.mail_message_id == message.id)
+                    .map((notification) => ({ id: notification.id })),
+                thread: false,
             };
-        });
+            if (message.res_id) {
+                message_data.thread = { id: message.res_id, model: message.model };
+                store.add("Thread", {
+                    id: message.res_id,
+                    model: message.model,
+                    modelName: this.env[message.model]._description,
+                });
+            }
+            store.add("Message", message_data);
+        }
+        store.add(notifications);
+    }
+
+    _cleanup_side_records([id]) {
+        /** @type {import("mock_models").BusBus} */
+        const BusBus = this.env["bus.bus"];
+        /** @type {import("mock_models").MailMessage} */
+        const MailMessage = this.env["mail.message"];
+        /** @type {import("mock_models").ResPartner} */
+        const ResPartner = this.env["res.partner"];
+        const [message] = this._filter([["id", "=", id]]);
+        const outdatedStarredPartners = message.starred_partner_ids
+            ? ResPartner._filter([["id", "in", message.starred_partner_ids]])
+            : [];
+        this.write([id], { starred_partner_ids: [Command.clear()] });
+        if (outdatedStarredPartners.length === 0) {
+            return;
+        }
+        const notifications = [];
+        for (const partner of outdatedStarredPartners) {
+            notifications.push([
+                partner,
+                "mail.record/insert",
+                {
+                    Thread: {
+                        id: "starred",
+                        messages: [["DELETE", { id: message.id }]],
+                        model: "mail.box",
+                        counter: MailMessage._filter([["starred_partner_ids", "in", partner.id]])
+                            .length,
+                        counter_bus_id: this.env["bus.bus"].lastBusNotificationId,
+                    },
+                },
+            ]);
+        }
+        BusBus._sendmany(notifications);
     }
 }

@@ -18,5 +18,12 @@ class MailTemplate(models.Model):
         method to filtrate the mail templates.
         """
         if self.env.context.get('filter_template_on_event'):
-            domain = expression.AND([[('model', '=', 'event.registration')], domain])
+            domain = expression.AND([[('model', '=', 'event.registration')], domain or []])
         return super()._name_search(name, domain, operator, limit, order)
+
+    def unlink(self):
+        res = super().unlink()
+        domain = ('template_ref', 'in', [f"{template._name},{template.id}" for template in self])
+        self.env['event.mail'].sudo().search([domain]).unlink()
+        self.env['event.type.mail'].sudo().search([domain]).unlink()
+        return res

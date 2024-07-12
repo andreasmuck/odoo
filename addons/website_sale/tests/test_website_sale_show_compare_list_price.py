@@ -10,8 +10,8 @@ from odoo.addons.account.tests.common import AccountTestInvoicingHttpCommon
 class WebsiteSaleShopPriceListCompareListPriceDispayTests(AccountTestInvoicingHttpCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
         ProductTemplate = cls.env['product.template']
         Pricelist = cls.env['product.pricelist']
@@ -65,7 +65,6 @@ class WebsiteSaleShopPriceListCompareListPriceDispayTests(AccountTestInvoicingHt
             'company_id': cls.env.company.id,
             'selectable': True,
             'sequence': 2,
-            'discount_policy': 'with_discount',
             'item_ids': [
                 Command.create({
                     'applied_on': '1_product',
@@ -87,7 +86,6 @@ class WebsiteSaleShopPriceListCompareListPriceDispayTests(AccountTestInvoicingHt
             'company_id': cls.env.company.id,
             'selectable': True,
             'sequence': 3,
-            'discount_policy': 'without_discount',
             'item_ids': [
                 Command.create({
                     'applied_on': '1_product',

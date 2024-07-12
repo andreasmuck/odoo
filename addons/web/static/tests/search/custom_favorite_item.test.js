@@ -1,5 +1,5 @@
 import { after, expect, test } from "@odoo/hoot";
-import { queryAll, queryAllTexts } from "@odoo/hoot-dom";
+import { press, queryAll, queryAllTexts } from "@odoo/hoot-dom";
 import { Component, xml } from "@odoo/owl";
 import {
     contains,
@@ -7,6 +7,7 @@ import {
     editFavoriteName,
     fields,
     models,
+    mountWithSearch,
     toggleSaveFavorite,
     toggleSearchBarMenu,
     saveFavorite,
@@ -16,7 +17,6 @@ import {
     validateSearch,
     mockService,
 } from "@web/../tests/web_test_helpers";
-import { mountWithSearch } from "./helpers";
 
 import { SearchBar } from "@web/search/search_bar/search_bar";
 import { SearchBarMenu } from "@web/search/search_bar_menu/search_bar_menu";
@@ -103,7 +103,7 @@ test("save filter", async () => {
             });
         }
     }
-    onRpc("create_or_replace", (route, { args }) => {
+    onRpc("create_or_replace", ({ args, route }) => {
         expect.step(route);
         const irFilter = args[0];
         expect(irFilter.context).toEqual({ group_by: [], someKey: "foo" });
@@ -118,17 +118,17 @@ test("save filter", async () => {
     const clearCacheListener = () => expect.step("CLEAR-CACHES");
     component.env.bus.addEventListener("CLEAR-CACHES", clearCacheListener);
     after(() => component.env.bus.removeEventListener("CLEAR-CACHES", clearCacheListener));
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     await toggleSearchBarMenu();
     await toggleSaveFavorite();
     await editFavoriteName("aaa");
     await saveFavorite();
-    expect(["/web/dataset/call_kw/ir.filters/create_or_replace", "CLEAR-CACHES"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/ir.filters/create_or_replace", "CLEAR-CACHES"]);
 });
 
 test("dynamic filters are saved dynamic", async () => {
-    onRpc("create_or_replace", (route, { args }) => {
+    onRpc("create_or_replace", ({ args, route }) => {
         expect.step(route);
         const irFilter = args[0];
         expect(irFilter.domain).toBe(
@@ -136,6 +136,7 @@ test("dynamic filters are saved dynamic", async () => {
         );
         return 7; // fake serverSideId
     });
+
     await mountWithSearch(SearchBar, {
         resModel: "foo",
         context: { search_default_filter: 1 },
@@ -154,16 +155,17 @@ test("dynamic filters are saved dynamic", async () => {
     await editFavoriteName("My favorite");
     await saveFavorite();
     expect(getFacetTexts()).toEqual(["My favorite"]);
-    expect(["/web/dataset/call_kw/ir.filters/create_or_replace"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/ir.filters/create_or_replace"]);
 });
 
 test("save filters created via autocompletion works", async () => {
-    onRpc("create_or_replace", (route, { args }) => {
+    onRpc("create_or_replace", ({ args, route }) => {
         expect.step(route);
         const irFilter = args[0];
         expect(irFilter.domain).toBe(`[("foo", "ilike", "a")]`);
         return 7; // fake serverSideId
     });
+
     await mountWithSearch(SearchBar, {
         resModel: "foo",
         searchMenuTypes: ["favorite"],
@@ -181,18 +183,19 @@ test("save filters created via autocompletion works", async () => {
     await editFavoriteName("My favorite");
     await saveFavorite();
     expect(getFacetTexts()).toEqual(["My favorite"]);
-    expect(["/web/dataset/call_kw/ir.filters/create_or_replace"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/ir.filters/create_or_replace"]);
 });
 
 test("favorites have unique descriptions (the submenus of the favorite menu are correctly updated)", async () => {
-    mockService("notification", () => ({
+    mockService("notification", {
         add(message, options) {
             expect.step("notification");
             expect(message).toBe("A filter with same name already exists.");
             expect(options).toEqual({ type: "danger" });
         },
-    }));
-    onRpc("create_or_replace", (route, { args }) => {
+    });
+
+    onRpc("create_or_replace", ({ args, route }) => {
         expect.step(route);
         expect(args[0]).toEqual({
             action_id: false,
@@ -202,10 +205,13 @@ test("favorites have unique descriptions (the submenus of the favorite menu are 
             model_id: "foo",
             name: "My favorite 2",
             sort: `[]`,
+            embedded_action_id: false,
+            embedded_parent_res_id: false,
             user_id: 7,
         });
         return 2; // fake serverSideId
     });
+
     await mountWithSearch(SearchBar, {
         resModel: "foo",
         searchMenuTypes: ["favorite"],
@@ -229,30 +235,30 @@ test("favorites have unique descriptions (the submenus of the favorite menu are 
     // first try: should fail
     await editFavoriteName("My favorite");
     await saveFavorite();
-    expect(["notification"]).toVerifySteps();
+    expect.verifySteps(["notification"]);
 
     // second try: should succeed
     await editFavoriteName("My favorite 2");
     await saveFavorite();
-    expect(["/web/dataset/call_kw/ir.filters/create_or_replace"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/ir.filters/create_or_replace"]);
 
     // third try: should fail
     await editFavoriteName("My favorite 2");
     await saveFavorite();
-    expect(["notification"]).toVerifySteps();
+    expect.verifySteps(["notification"]);
 });
 
 test("undefined name for filter shows notification and not error", async () => {
-    mockService("notification", () => ({
+    mockService("notification", {
         add(message, options) {
             expect.step("notification");
             expect(message).toBe("A name for your favorite filter is required.");
             expect(options).toEqual({ type: "danger" });
         },
-    }));
-    onRpc("create_or_replace", (route, { args }) => {
-        return 7; // fake serverSideId
     });
+
+    onRpc("create_or_replace", () => 7); // fake serverSideId
+
     await mountWithSearch(SearchBarMenu, {
         resModel: "foo",
         searchViewId: false,
@@ -261,5 +267,36 @@ test("undefined name for filter shows notification and not error", async () => {
     await toggleSearchBarMenu();
     await toggleSaveFavorite();
     await saveFavorite();
-    expect(["notification"]).toVerifySteps();
+    expect.verifySteps(["notification"]);
+});
+
+test("add favorite with enter which already exists", async () => {
+    mockService("notification", {
+        add(message, options) {
+            expect.step("notification");
+            expect(message).toBe("A name for your favorite filter is required.");
+            expect(options).toEqual({ type: "danger" });
+        },
+    });
+    await mountWithSearch(SearchBarMenu, {
+        resModel: "foo",
+        searchViewId: false,
+        irFilters: [
+            {
+                context: "{}",
+                domain: "[]",
+                id: 1,
+                is_default: false,
+                name: "My favorite",
+                sort: "[]",
+                user_id: [2, "Mitchell Admin"],
+            },
+        ],
+    });
+
+    await toggleSearchBarMenu();
+    await toggleSaveFavorite();
+    await editFavoriteName("My favorite");
+    press("Enter");
+    expect.verifySteps(["notification"]);
 });

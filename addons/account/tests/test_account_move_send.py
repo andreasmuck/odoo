@@ -51,7 +51,7 @@ class TestAccountComposerPerformance(AccountTestInvoicingCommon, MailCommon):
         cls.user_account = cls.env['res.users'].with_context(cls._test_context).create({
             'company_id': cls.company_main.id,
             'company_ids': [
-                (6, 0, (cls.company_data['company'] + cls.company_data_2['company']).ids)
+                Command.set(cls.company_data['company'].ids)
             ],
             'country_id': cls.env.ref('base.be').id,
             'email': 'e.e@example.com',
@@ -122,6 +122,11 @@ class TestAccountComposerPerformance(AccountTestInvoicingCommon, MailCommon):
             test_template=cls.move_template,
         )
 
+    @classmethod
+    def default_env_context(cls):
+        # OVERRIDE
+        return {}
+
     def setUp(self):
         super().setUp()
 
@@ -154,9 +159,8 @@ class TestAccountComposerPerformance(AccountTestInvoicingCommon, MailCommon):
         for test_move in test_moves:
             self.assertFalse(test_move.is_move_sent)
 
-        composer = self.env['account.move.send']\
-            .with_context(active_model='account.move', active_ids=test_moves.ids)\
-            .create({'mail_template_id': move_template.id})
+        options = self.env['account.move.send']._get_wizard_vals_restrict_to({'mail_template_id': move_template.id, 'checkbox_send_mail': True})
+        composer = self.env['account.move.send'].with_context(active_model='account.move', active_ids=test_moves.ids).create(options)
 
         with self.mock_mail_gateway(mail_unlink_sent=False):
             composer.action_send_and_print(force_synchronous=True)
@@ -226,9 +230,8 @@ class TestAccountComposerPerformance(AccountTestInvoicingCommon, MailCommon):
         test_customer = self.test_customers[0].with_env(self.env)
         move_template = self.move_template.with_env(self.env)
 
-        composer = self.env['account.move.send']\
-            .with_context(active_model='account.move', active_ids=test_move.ids)\
-            .create({'mail_template_id': move_template.id})
+        options = self.env['account.move.send']._get_wizard_vals_restrict_to({'mail_template_id': move_template.id, 'checkbox_send_mail': True})
+        composer = self.env['account.move.send'].with_context(active_model='account.move', active_ids=test_move.ids).create(options)
 
         with self.mock_mail_gateway(mail_unlink_sent=False), \
              self.mock_mail_app():
@@ -313,9 +316,8 @@ class TestAccountComposerPerformance(AccountTestInvoicingCommon, MailCommon):
         test_customer = self.test_customers[1].with_env(self.env)
         move_template = self.move_template.with_env(self.env)
 
-        composer = self.env['account.move.send']\
-            .with_context(active_model='account.move', active_ids=test_move.ids)\
-            .create({'mail_template_id': move_template.id})
+        options = self.env['account.move.send']._get_wizard_vals_restrict_to({'mail_template_id': move_template.id, 'checkbox_send_mail': True})
+        composer = self.env['account.move.send'].with_context(active_model='account.move', active_ids=test_move.ids).create(options)
 
         with self.mock_mail_gateway(mail_unlink_sent=False), \
              self.mock_mail_app():
@@ -402,18 +404,17 @@ class TestAccountComposerPerformance(AccountTestInvoicingCommon, MailCommon):
         test_move = self.test_account_moves[1].with_env(self.env)
         move_template = self.move_template.with_env(self.env)
 
-        # add a follower to the invoice
-        self.partner_b.email = 'partner_b@example.com'
-        test_move.message_subscribe(self.partner_b.ids)
-
         additional_partner = self.env['res.partner'].create({
             'name': "Additional Partner",
             'email': "additional@example.com",
         })
 
-        composer = self.env['account.move.send']\
-            .with_context(active_model='account.move', active_ids=test_move.ids)\
-            .create({'mail_template_id': move_template.id, 'mail_partner_ids': additional_partner.ids})
+        options = self.env['account.move.send']._get_wizard_vals_restrict_to({
+            'mail_template_id': move_template.id,
+            'mail_partner_ids': additional_partner.ids,
+            'checkbox_send_mail': True,
+        })
+        composer = self.env['account.move.send'].with_context(active_model='account.move', active_ids=test_move.ids).create(options)
 
         with self.mock_mail_gateway(mail_unlink_sent=False):
             composer.action_send_and_print()
@@ -431,21 +432,13 @@ class TestAccountComposerPerformance(AccountTestInvoicingCommon, MailCommon):
             content='access_token='
         )
 
-        follower_mail = self.assertMailMail(
-            self.partner_b,
-            'sent',
-            author=self.user_account_other.partner_id,
-        )
-
-        self.assertNotIn('access_token=', follower_mail.body_html,
-                      "The followers should not bet sent the access token by default")
-
 @tagged('post_install_l10n', 'post_install', '-at_install')
 class TestAccountMoveSendCommon(AccountTestInvoicingCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
+
         cls.partner_a.email = "partner_a@tsointsoin"
         cls.partner_b.email = "partner_b@tsointsoin"
 
@@ -477,6 +470,11 @@ class TestAccountMoveSendCommon(AccountTestInvoicingCommon):
 @tagged('post_install_l10n', 'post_install', '-at_install')
 class TestAccountMoveSend(TestAccountMoveSendCommon):
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.company_data_2 = cls.setup_other_company()
+
     def test_invoice_single(self):
         invoice = self.init_invoice("out_invoice", amounts=[1000], post=True)
         wizard = self.create_send_and_print(invoice)
@@ -491,7 +489,7 @@ class TestAccountMoveSend(TestAccountMoveSendCommon):
             'mail_lang': 'en_US',
             'mail_partner_ids': wizard.move_ids.partner_id.ids,
         }])
-        self.assertFalse(wizard.send_mail_warning_message)
+        self.assertFalse(wizard.warnings)
         self.assertTrue(wizard.mail_subject)
         self.assertTrue(wizard.mail_body)
         self._assert_mail_attachments_widget(wizard, [{
@@ -707,7 +705,7 @@ class TestAccountMoveSend(TestAccountMoveSendCommon):
         self.partner_a.email = None
         self.partner_b.email = None
         wizard = self.create_send_and_print(invoice1 + invoice2)
-        self.assertTrue(wizard.send_mail_warning_message)
+        self.assertTrue('account_missing_email' in wizard.warnings)
         self.assertRecordValues(wizard, [{
             'send_mail_readonly': True,
             'checkbox_send_mail': False,
@@ -715,7 +713,7 @@ class TestAccountMoveSend(TestAccountMoveSendCommon):
 
         self.partner_a.email = "turlututu@tsointsoin"
         wizard = self.create_send_and_print(invoice1 + invoice2)
-        self.assertTrue(wizard.send_mail_warning_message)
+        self.assertTrue('account_missing_email' in wizard.warnings)
         self.assertRecordValues(wizard, [{
             'send_mail_readonly': False,
             'checkbox_send_mail': True,
@@ -723,7 +721,7 @@ class TestAccountMoveSend(TestAccountMoveSendCommon):
 
         self.partner_b.email = "turlututu@tsointsoin"
         wizard = self.create_send_and_print(invoice1 + invoice2)
-        self.assertFalse(wizard.send_mail_warning_message)
+        self.assertFalse(wizard.warnings)
         self.assertRecordValues(wizard, [{
             'send_mail_readonly': False,
             'checkbox_send_mail': True,
@@ -1059,3 +1057,20 @@ class TestAccountMoveSend(TestAccountMoveSendCommon):
 
         self.assertTrue(self._get_mail_message(invoice))  # email was sent
         self.assertEqual(res['type'], 'ir.actions.act_window_close')  # the download which is a default value didn't happen
+
+    def test_is_move_sent_state(self):
+        # Post a move, nothing sent yet
+        invoice = self.init_invoice("out_invoice", amounts=[1000], post=True)
+        self.assertFalse(invoice.is_move_sent)
+        # Send via send & print
+        wizard = self.create_send_and_print(invoice)
+        wizard.action_send_and_print()
+        self.assertTrue(invoice.is_move_sent)
+        # Revert move to draft
+        invoice.button_draft()
+        self.assertTrue(invoice.is_move_sent)
+        # Unlink PDF
+        pdf_report = invoice.invoice_pdf_report_id
+        self.assertTrue(pdf_report)
+        invoice.invoice_pdf_report_id.unlink()
+        self.assertTrue(invoice.is_move_sent)

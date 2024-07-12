@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 {
@@ -44,6 +43,7 @@ Print product labels with barcode.
         'views/product_pricelist_item_views.xml',
         'views/product_pricelist_views.xml',
         'views/product_supplierinfo_views.xml',
+        'views/product_template_attribute_line_views.xml',
         'views/product_template_views.xml',
         'views/res_country_group_views.xml',
         'views/res_partner_views.xml',
@@ -55,7 +55,11 @@ Print product labels with barcode.
         'report/product_pricelist_report_templates.xml',
     ],
     'demo': [
+        'data/product_attribute_demo.xml',
+        'data/product_category_demo.xml',
         'data/product_demo.xml',
+        'data/product_document_demo.xml',
+        'data/product_supplierinfo_demo.xml',
     ],
     'installable': True,
     'assets': {
@@ -64,6 +68,7 @@ Print product labels with barcode.
             'product/static/src/product_catalog/**/*.js',
             'product/static/src/product_catalog/**/*.xml',
             'product/static/src/product_catalog/**/*.scss',
+            'product/static/src/scss/product_form.scss',
         ],
         'web.report_assets_common': [
             'product/static/src/scss/report_label_sheet.scss',

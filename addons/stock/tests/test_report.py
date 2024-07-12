@@ -20,7 +20,7 @@ class TestReportsCommon(TransactionCase):
 
         cls.product1 = cls.env['product.product'].create({
             'name': 'Mellohi"',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': cls.env.ref('product.product_category_all').id,
             'tracking': 'lot',
             'default_code': 'C4181234""154654654654',
@@ -28,7 +28,7 @@ class TestReportsCommon(TransactionCase):
         })
 
         product_form = Form(cls.env['product.product'])
-        product_form.detailed_type = 'product'
+        product_form.is_storable = True
         product_form.name = 'Product'
         cls.product = product_form.save()
         cls.product_template = cls.product.product_tmpl_id
@@ -75,7 +75,7 @@ class TestReports(TestReportsCommon):
     def test_reports_with_special_characters(self):
         product_test = self.env['product.product'].create({
             'name': 'Mellohi"',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': self.env.ref('product.product_category_all').id,
             'tracking': 'lot',
             'default_code': 'C4181234""154654654654',
@@ -95,9 +95,19 @@ class TestReports(TestReportsCommon):
         self.assertEqual(target, rendering.replace(b' ', b''), 'The rendering is not good, make sure quotes are correctly escaped')
         self.assertEqual(qweb_type, 'text', 'the report type is not good')
 
+    def test_reports_product_no_barcode(self):
+        """ Test that product without barcode is correctly rendered without a barcode.
+        """
+        report = self.env.ref('stock.label_product_product')
+        self.product1.barcode = False
+        target = b'\n\n^XA^CI28\n^FT100,80^A0N,40,30^FD[C4181234""154654654654]Mellohi"^FS\n^FT100,115^A0N,30,24^FDC4181234""15465^FS\n^FT100,150^A0N,30,24^FD4654654^FS\n^XZ\n'
+        rendering, qweb_type = report._render_qweb_text('stock.label_product_product', self.product1.product_tmpl_id.id, {'quantity_by_product': {self.product1.product_tmpl_id.id: 1}, 'active_model': 'product.template'})
+        self.assertEqual(target, rendering.replace(b' ', b''), 'Product name, default code or barcode is not correctly rendered, make sure the quotes are escaped correctly')
+        self.assertEqual(qweb_type, 'text', 'the report type is not good')
+
     def test_report_quantity_1(self):
         product_form = Form(self.env['product.product'])
-        product_form.detailed_type = 'product'
+        product_form.is_storable = True
         product_form.name = 'Product'
         product = product_form.save()
 
@@ -216,7 +226,7 @@ class TestReports(TestReportsCommon):
         """ Not supported case.
         """
         product_form = Form(self.env['product.product'])
-        product_form.detailed_type = 'product'
+        product_form.is_storable = True
         product_form.name = 'Product'
         product = product_form.save()
 
@@ -276,7 +286,7 @@ class TestReports(TestReportsCommon):
 
     def test_report_quantity_3(self):
         product_form = Form(self.env['product.product'])
-        product_form.detailed_type = 'product'
+        product_form.is_storable = True
         product_form.name = 'Product'
         product = product_form.save()
 
@@ -691,7 +701,7 @@ class TestReports(TestReportsCommon):
 
         report_values, docs, lines = self.get_report_forecast(
             product_template_ids=self.product_template.ids,
-            context={'warehouse': wh_2.id},
+            context={'warehouse_id': wh_2.id},
         )
         draft_picking_qty = docs['draft_picking_qty']
         self.assertEqual(len(lines), 0)
@@ -708,7 +718,7 @@ class TestReports(TestReportsCommon):
 
         report_values, docs, lines = self.get_report_forecast(
             product_template_ids=self.product_template.ids,
-            context={'warehouse': wh_2.id},
+            context={'warehouse_id': wh_2.id},
         )
         draft_picking_qty = docs['draft_picking_qty']
         self.assertEqual(len(lines), 0)
@@ -733,7 +743,7 @@ class TestReports(TestReportsCommon):
 
         report_values, docs, lines = self.get_report_forecast(
             product_template_ids=self.product_template.ids,
-            context={'warehouse': wh_2.id},
+            context={'warehouse_id': wh_2.id},
         )
         draft_picking_qty = docs['draft_picking_qty']
         self.assertEqual(len(lines), 0)
@@ -749,7 +759,7 @@ class TestReports(TestReportsCommon):
 
         report_values, docs, lines = self.get_report_forecast(
             product_template_ids=self.product_template.ids,
-            context={'warehouse': wh_2.id},
+            context={'warehouse_id': wh_2.id},
         )
         draft_picking_qty = docs['draft_picking_qty']
         self.assertEqual(len(lines), 1)
@@ -805,7 +815,7 @@ class TestReports(TestReportsCommon):
         self.assertEqual(len(inter_wh_delivery), 1)
         _, _, lines = self.get_report_forecast(
             product_template_ids=self.product_template.ids,
-            context={'warehouse': wh.id},
+            context={'warehouse_id': wh.id},
         )
         # The forecast should show 1 line linking the delivery with the replenish
         self.assertEqual(len(lines), 1)
@@ -849,7 +859,7 @@ class TestReports(TestReportsCommon):
 
         report_values, docs, lines = self.get_report_forecast(
             product_template_ids=self.product_template.ids,
-            context={'warehouse': wh_2.id},
+            context={'warehouse_id': wh_2.id},
         )
         draft_picking_qty = docs['draft_picking_qty']
         self.assertEqual(len(lines), 0, "Must have 0 line.")
@@ -867,7 +877,7 @@ class TestReports(TestReportsCommon):
 
         report_values, docs, lines = self.get_report_forecast(
             product_template_ids=self.product_template.ids,
-            context={'warehouse': wh_2.id},
+            context={'warehouse_id': wh_2.id},
         )
         self.assertEqual(len(lines), 1, "Must have 1 line.")
         self.assertEqual(lines[0]['document_in']['id'], wh_2_receipt.id)
@@ -901,7 +911,7 @@ class TestReports(TestReportsCommon):
         # Create a new product and set some variants on the product.
         product_template = self.env['product.template'].create({
             'name': 'Game Joy',
-            'type': 'product',
+            'is_storable': True,
             'attribute_line_ids': [
                 (0, 0, {
                     'attribute_id': product_attr_color.id,
@@ -1297,13 +1307,13 @@ class TestReports(TestReportsCommon):
         """
         product2 = self.env['product.product'].create({
             'name': 'Extra Product',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': self.env.ref('product.product_category_all').id,
         })
 
         product3 = self.env['product.product'].create({
             'name': 'Unpopular Product',
-            'type': 'product',
+            'is_storable': True,
             'categ_id': self.env.ref('product.product_category_all').id,
         })
 
@@ -1525,8 +1535,8 @@ class TestReports(TestReportsCommon):
         self.assertEqual(mto_move.product_uom_qty, receipt1_qty, "Incorrect quantity split for remaining MTO move qty")
         self.assertEqual(mto_move.quantity, receipt1_qty, "Incorrect reserved amount split for remaining MTO move qty")
         self.assertEqual(mto_move.state, 'assigned', "MTO move state shouldn't have changed")
-        for move in non_mto_moves:
-            self.assertEqual(move.quantity, move.product_uom_qty, "Incorrect reserved amount split for remaining MTO move qty")
+        total_non_mto_qty = sum(move.quantity for move in non_mto_moves)
+        self.assertEqual(total_non_mto_qty, outgoing_qty - (receipt1_qty + receipt2_qty), "Unassigned move should be also unreserved")
 
     def test_report_reception_3_multiwarehouse(self):
         """ Check that reception report respects same warehouse for
@@ -1771,4 +1781,4 @@ class TestReports(TestReportsCommon):
         report.action_unassign([mto_move.id], incoming_qty, receipt.move_ids_without_package.ids)
         self.assertEqual(mto_move.product_uom_qty, incoming_qty, "Move quantities should be unchanged")
         self.assertEqual(mto_move.procure_method, 'make_to_stock', "Procure method not correctly reset")
-        self.assertEqual(mto_move.state, 'assigned', "Unassigning receipt move shouldn't affect the out move reservation")
+        self.assertEqual(mto_move.state, 'confirmed', "Unassigning receipt move should also unreserve the out move")

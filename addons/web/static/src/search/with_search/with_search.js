@@ -38,6 +38,7 @@ export class WithSearch extends Component {
         dynamicFilters: { type: Array, element: Object, optional: true },
         hideCustomGroupBy: { type: Boolean, optional: true },
         searchMenuTypes: { type: Array, element: String, optional: true },
+        canOrderByCount: { type: Boolean, optional: true },
     };
 
     setup() {
@@ -56,11 +57,15 @@ export class WithSearch extends Component {
                 view: useService("view"),
                 field: useService("field"),
                 name: useService("name"),
+                dialog: useService("dialog"),
             },
             this.props.searchModelArgs
         );
 
-        useSubEnv({ searchModel: this.searchModel });
+        const searchPanelState = this.props.globalState?.searchPanel
+            ? JSON.parse(this.props.globalState?.searchPanel)
+            : null;
+        useSubEnv({ searchModel: this.searchModel, searchPanelState });
 
         useBus(this.searchModel, "update", this.render);
         useSetupAction({

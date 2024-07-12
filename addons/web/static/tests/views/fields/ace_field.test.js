@@ -40,7 +40,7 @@ test("AceEditorField on text fields works", async () => {
         type: "form",
         arch: `<form><field name="foo" widget="code"/></form>`,
     });
-    expect("ace" in window).toBeTruthy({ message: "the ace library should be loaded" });
+    expect("ace" in window).toBe(true, { message: "the ace library should be loaded" });
     expect(`div.ace_content`).toHaveCount(1);
     expect(".o_field_code").toHaveText(/yop/);
 });
@@ -73,9 +73,7 @@ test("AceEditorField on html fields works", async () => {
     Partner._fields.html_field = fields.Html();
     Partner._records.push({ id: 3, html_field: `<p>My little HTML Test</p>` });
 
-    onRpc((_, { method }) => {
-        expect.step(method);
-    });
+    onRpc(({ method }) => expect.step(method));
 
     await mountView({
         resModel: "res.partner",
@@ -84,12 +82,12 @@ test("AceEditorField on html fields works", async () => {
         arch: `<form><field name="html_field" widget="code" /></form>`,
     });
     expect(".o_field_code").toHaveText(/My little HTML Test/);
-    expect(["get_views", "web_read"]).toVerifySteps();
+    expect.verifySteps(["get_views", "web_read"]);
 
     // Modify foo and save
     await editAce("DEF");
     await clickSave();
-    expect(["web_save"]).toVerifySteps();
+    expect.verifySteps(["web_save"]);
 });
 
 test.tags`desktop`("AceEditorField doesn't crash when editing", async () => {
@@ -125,7 +123,7 @@ test("leaving an untouched record with an unset ace field should not write", asy
         record.foo = false;
     }
 
-    onRpc((_, { args, method }) => {
+    onRpc(({ args, method }) => {
         if (method) {
             expect.step(`${method}: ${JSON.stringify(args)}`);
         }
@@ -138,10 +136,10 @@ test("leaving an untouched record with an unset ace field should not write", asy
         type: "form",
         arch: `<form><field name="foo" widget="code"/></form>`,
     });
-    expect(["get_views: []", "web_read: [[1]]"]).toVerifySteps();
+    expect.verifySteps(["get_views: []", "web_read: [[1]]"]);
 
     await pagerNext();
-    expect(["web_read: [[2]]"]).toVerifySteps();
+    expect.verifySteps(["web_read: [[2]]"]);
 });
 
 test("AceEditorField only trigger onchanges when blurred", async () => {
@@ -150,7 +148,7 @@ test("AceEditorField only trigger onchanges when blurred", async () => {
         record.foo = false;
     }
 
-    onRpc((_, { args, method }) => {
+    onRpc(({ args, method }) => {
         expect.step(`${method}: ${JSON.stringify(args)}`);
     });
 
@@ -161,12 +159,12 @@ test("AceEditorField only trigger onchanges when blurred", async () => {
         type: "form",
         arch: `<form><field name="display_name"/><field name="foo" widget="code"/></form>`,
     });
-    expect(["get_views: []", "web_read: [[1]]"]).toVerifySteps();
+    expect.verifySteps(["get_views: []", "web_read: [[1]]"]);
 
     await editAce("a");
     await contains(getFixture()).focus(); // blur ace editor
-    expect([`onchange: [[1],{"foo":"a"},["foo"],{"display_name":{},"foo":{}}]`]).toVerifySteps();
+    expect.verifySteps([`onchange: [[1],{"foo":"a"},["foo"],{"display_name":{},"foo":{}}]`]);
 
     await clickSave();
-    expect([`web_save: [[1],{"foo":"a"}]`]).toVerifySteps();
+    expect.verifySteps([`web_save: [[1],{"foo":"a"}]`]);
 });

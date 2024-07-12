@@ -2,21 +2,24 @@
     .table-handle {
         padding: 0px;
         position: absolute;
-        width: 48px;
-        height: 48px;
-        border-radius: 24px;
+        width: 20px;
+        height: 20px;
+        border-radius: 10px;
         background: white;
         box-shadow: 0px 2px 3px rgba(0,0,0,0.2);
         /* See o-grab-cursor mixin */
         cursor: url(/web/static/img/openhand.cur), grab;
-        transition: width 150ms linear, height 150ms linear;
         z-index: 100;
-
         &:hover {
-            width: 60px;
-            height: 60px;
-            border-radius: 30px;
+            transform: scale(1.5);
+            transition: 150ms;
         }
+    }
+    &.floor-grid {
+        background-image:
+            linear-gradient(0, #D3D3D3 14%, transparent 14%),
+            linear-gradient(90deg, transparent 90%, #D3D3D3 70%);
+        background-size: 10px 10px;
     }
 }
 .floor-picture {

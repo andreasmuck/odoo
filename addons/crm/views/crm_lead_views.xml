@@ -700,7 +700,7 @@
                     <filter string="Lost" name="lost"
                             domain="['&amp;', ('probability', '=', 0), ('active', '=', False)]"/>
                     <separator/>
-                    <filter string="Creation Date" name="filter_creation_date" date="create_date" default_period="this_month"/>
+                    <filter string="Creation Date" name="filter_creation_date" date="create_date" default_period="month"/>
                     <filter name="filter_date_closed" date="date_closed"/>
                     <separator/>
                     <separator/>
@@ -793,7 +793,6 @@
                     <field name="activity_ids" optional="hide" widget="list_activity"/>
                     <field name="activity_user_id" optional="hide" string="Activity by" widget="many2one_avatar_user"/>
                     <field name="my_activity_date_deadline" optional="hide" string="My Deadline" widget="remaining_days" options="{'allow_order': '1'}"/>
-                    <field name="activity_calendar_event_id" column_invisible="True"/>
                     <field name="campaign_id" optional="hide"/>
                     <field name="medium_id" optional="hide"/>
                     <field name="source_id" optional="hide"/>
@@ -815,9 +814,11 @@
                     <field name="lead_properties"/>
                     <button name="%(crm.action_lead_mail_compose)d" type="action" string="Email" icon="fa-envelope"/>
                     <button name="action_reschedule_meeting" class="text-warning" type="object" string="Reschedule"
-                        icon="fa-calendar" invisible="not my_activity_date_deadline or not activity_calendar_event_id"/>
+                        icon="fa-calendar" invisible="not my_activity_date_deadline or not activity_calendar_event_id"
+                        groups="base.group_user"/>
                     <button name="action_snooze" class="text-warning" type="object" string="Snooze 7d"
-                        icon="fa-bell-slash" invisible="not my_activity_date_deadline or activity_calendar_event_id"/>
+                        icon="fa-bell-slash" invisible="not my_activity_date_deadline or activity_calendar_event_id"
+                        groups="base.group_user"/>
                 </tree>
             </field>
         </record>
@@ -896,6 +897,12 @@
                     <field name="stage_id"/>
                     <field name="user_id"/>
                     <field name="color" invisible="1"/>
+                    <field name="automated_probability" invisible="1"/>
+                    <field name="message_bounce" invisible="1"/>
+                    <field name="recurring_revenue_monthly" groups="!crm.group_use_recurring_revenues" invisible="1"/>
+                    <field name="recurring_revenue_monthly_prorated" groups="!crm.group_use_recurring_revenues" invisible="1"/>
+                    <field name="recurring_revenue" groups="!crm.group_use_recurring_revenues" invisible="1"/>
+                    <field name="recurring_revenue_prorated" groups="!crm.group_use_recurring_revenues" invisible="1"/>
                 </graph>
             </field>
         </record>
@@ -914,9 +921,10 @@
                     <field name="day_close" invisible="1"/>
                     <field name="message_bounce" invisible="1"/>
                     <field name="probability" invisible="1"/>
-                    <field name="recurring_revenue_monthly" groups="crm.group_use_recurring_revenues"/>
-                    <field name="recurring_revenue_monthly_prorated" groups="crm.group_use_recurring_revenues"/>
-                    <field name="recurring_revenue" groups="crm.group_use_recurring_revenues"/>
+                    <field name="recurring_revenue_monthly" groups="!crm.group_use_recurring_revenues" invisible="1"/>
+                    <field name="recurring_revenue_monthly_prorated" groups="!crm.group_use_recurring_revenues" invisible="1"/>
+                    <field name="recurring_revenue" groups="!crm.group_use_recurring_revenues" invisible="1"/>
+                    <field name="recurring_revenue_prorated" groups="!crm.group_use_recurring_revenues" invisible="1"/>
                 </graph>
             </field>
         </record>
@@ -933,9 +941,10 @@
                     <field name="automated_probability" invisible="1"/>
                     <field name="message_bounce" invisible="1"/>
                     <field name="probability" invisible="1"/>
-                    <field name="recurring_revenue_monthly" type="measure" groups="crm.group_use_recurring_revenues"/>
-                    <field name="recurring_revenue_monthly_prorated" groups="crm.group_use_recurring_revenues"/>
-                    <field name="recurring_revenue" groups="crm.group_use_recurring_revenues"/>
+                    <field name="recurring_revenue_monthly" type="measure" groups="!crm.group_use_recurring_revenues" invisible="1"/>
+                    <field name="recurring_revenue_monthly_prorated" groups="!crm.group_use_recurring_revenues" invisible="1"/>
+                    <field name="recurring_revenue" groups="!crm.group_use_recurring_revenues" invisible="1"/>
+                    <field name="recurring_revenue_prorated" groups="!crm.group_use_recurring_revenues" invisible="1"/>
                 </pivot>
             </field>
         </record>
@@ -955,9 +964,10 @@
                     <field name="day_close" invisible="1"/>
                     <field name="message_bounce" invisible="1"/>
                     <field name="probability" invisible="1"/>
-                    <field name="recurring_revenue_monthly" groups="crm.group_use_recurring_revenues"/>
-                    <field name="recurring_revenue_monthly_prorated" groups="crm.group_use_recurring_revenues"/>
-                    <field name="recurring_revenue" groups="crm.group_use_recurring_revenues"/>
+                    <field name="recurring_revenue_monthly" groups="!crm.group_use_recurring_revenues" invisible="1"/>
+                    <field name="recurring_revenue_monthly_prorated" groups="!crm.group_use_recurring_revenues" invisible="1"/>
+                    <field name="recurring_revenue" groups="!crm.group_use_recurring_revenues" invisible="1"/>
+                    <field name="recurring_revenue_prorated" groups="!crm.group_use_recurring_revenues" invisible="1"/>
                 </pivot>
             </field>
         </record>

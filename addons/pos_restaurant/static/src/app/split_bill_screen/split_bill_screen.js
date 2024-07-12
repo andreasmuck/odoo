@@ -1,4 +1,3 @@
-/** @odoo-module */
 import { registry } from "@web/core/registry";
 import { usePos } from "@point_of_sale/app/store/pos_hook";
 import { Component, useState } from "@odoo/owl";
@@ -55,28 +54,37 @@ export class SplitBillScreen extends Component {
 
     createSplittedOrder() {
         const curOrderUuid = this.currentOrder.uuid;
-        this.newOrder = this.pos.createNewOrder();
-        this.newOrder.uiState.splittedOrderUuid = curOrderUuid;
+        const originalOrder = this.pos.models["pos.order"].find((o) => o.uuid === curOrderUuid);
+        this.pos.selectedTable = null;
+        const newOrder = this.pos.add_new_order();
+        newOrder.note = `${newOrder.tracking_number} Split from ${originalOrder.table_id.name}`;
+        newOrder.uiState.splittedOrderUuid = curOrderUuid;
+        newOrder.originalSplittedOrder = originalOrder;
 
         // Create lines for the new order
-        for (const line of this.orderlines) {
+        const lineToDel = [];
+        for (const line of originalOrder.lines) {
             if (this.qtyTracker[line.uuid]) {
                 this.pos.models["pos.order.line"].create(
                     {
                         ...line.serialize(),
                         qty: this.qtyTracker[line.uuid],
-                        order_id: this.newOrder.id,
+                        order_id: newOrder.id,
                     },
                     false,
                     true
                 );
 
                 if (line.get_quantity() === this.qtyTracker[line.uuid]) {
-                    line.delete();
+                    lineToDel.push(line);
                 } else {
                     line.update({ qty: line.get_quantity() - this.qtyTracker[line.uuid] });
                 }
             }
+        }
+
+        for (const line of lineToDel) {
+            line.delete();
         }
 
         // for the kitchen printer we assume that everything
@@ -86,17 +94,15 @@ export class SplitBillScreen extends Component {
         // but avoids flooding the kitchen with unnecessary orders.
         // Not sure what to do in this case.
         if (this.pos.orderPreparationCategories.size) {
-            this.currentOrder.updateLastOrderChange();
-            this.newOrder.updateLastOrderChange();
+            originalOrder.updateLastOrderChange();
+            newOrder.updateLastOrderChange();
         }
 
-        this.newOrder.originalSplittedOrder = this.currentOrder;
-        this.newOrder.set_screen_data({ name: "PaymentScreen" });
-        this.currentOrder.setCustomerCount(this.currentOrder.getCustomerCount() - 1);
-        this.currentOrder.set_screen_data({ name: "ProductScreen" });
-
-        this.pos.selectedOrderUuid = this.newOrder.uuid;
-        this.pos.showScreen("PaymentScreen");
+        originalOrder.customerCount -= 1;
+        originalOrder.set_screen_data({ name: "ProductScreen" });
+        this.pos.selectedOrderUuid = null;
+        this.pos.set_order(newOrder);
+        this.back();
     }
 
     getLineData(line) {

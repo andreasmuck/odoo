@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
 import { formatDateTime } from "@web/core/l10n/dates";
@@ -15,10 +13,16 @@ import { ReprintReceiptButton } from "@point_of_sale/app/screens/ticket_screen/r
 import { SearchBar } from "@point_of_sale/app/screens/ticket_screen/search_bar/search_bar";
 import { usePos } from "@point_of_sale/app/store/pos_hook";
 import { Component, onMounted, useState } from "@odoo/owl";
-import { Numpad, getButtons } from "@point_of_sale/app/generic_components/numpad/numpad";
+import {
+    BACKSPACE,
+    Numpad,
+    getButtons,
+    DEFAULT_LAST_ROW,
+} from "@point_of_sale/app/generic_components/numpad/numpad";
 import { ask } from "@point_of_sale/app/store/make_awaitable_dialog";
 import { PosOrderLineRefund } from "@point_of_sale/app/models/pos_order_line_refund";
 import { fuzzyLookup } from "@web/core/utils/search";
+import { parseUTCString } from "@point_of_sale/utils";
 
 const { DateTime } = luxon;
 const NBR_BY_PAGE = 30;
@@ -88,11 +92,11 @@ export class TicketScreen extends Component {
         }
     }
     getNumpadButtons() {
-        return getButtons(this.env, [
-            { value: "quantity", text: "Qty", class: "active border-primary" },
-            { value: "discount", text: "% Disc", disabled: true },
-            { value: "price", text: "Price", disabled: true },
-            { value: "-", text: "+/-", disabled: true },
+        return getButtons(DEFAULT_LAST_ROW, [
+            { value: "quantity", text: _t("Qty"), class: "active border-primary" },
+            { value: "discount", text: _t("% Disc"), disabled: true },
+            { value: "price", text: _t("Price"), disabled: true },
+            BACKSPACE,
         ]);
     }
     async onSearch(search) {
@@ -121,7 +125,6 @@ export class TicketScreen extends Component {
     }
     async onDeleteOrder(order) {
         const screen = order.get_screen_data();
-        order.uiState.displayed = false;
 
         if (
             ["ProductScreen", "PaymentScreen"].includes(screen.name) &&
@@ -138,28 +141,25 @@ export class TicketScreen extends Component {
             if (!confirmed) {
                 return false;
             }
-        }
-        if (order && (await this._onBeforeDeleteOrder(order))) {
-            if (Object.keys(order.last_order_preparation_change).length > 0) {
-                await this.pos.sendOrderInPreparationUpdateLastChange(order, true);
-            }
-            if (order === this.pos.get_order()) {
-                this._selectNextOrder(order);
-            }
-            const deleted = this.pos.removeOrder(order, true);
-
-            if (!deleted) {
-                order.uiState.displayed = true;
-            }
-
             if (this.state.selectedOrder === order) {
-                if (this.pos.get_order_list().length > 0) {
-                    this.state.selectedOrder = this.pos.get_order_list()[0];
-                } else {
-                    this.state.selectedOrder = null;
-                }
+                this.state.selectedOrder = null;
             }
         }
+
+        order.uiState.displayed = false;
+        if (order.id === this.pos.get_order()?.id) {
+            this._selectNextOrder(order);
+        }
+
+        const result = await this.pos.deleteOrders([order]);
+        if (!result) {
+            order.uiState.displayed = true;
+        } else {
+            if (this.pos.get_open_orders().length > 0) {
+                this.state.selectedOrder = this.pos.get_open_orders()[0];
+            }
+        }
+
         return true;
     }
     async onNextPage() {
@@ -224,14 +224,16 @@ export class TicketScreen extends Component {
                 const quantity = Math.abs(parseFloat(buffer));
                 if (quantity > refundableQty) {
                     this.numberBuffer.reset();
-                    this.dialog.add(AlertDialog, {
-                        title: _t("Maximum Exceeded"),
-                        body: _t(
-                            "The requested quantity to be refunded is higher than the ordered quantity. %s is requested while only %s can be refunded.",
-                            quantity,
-                            refundableQty
-                        ),
-                    });
+                    if (!toRefundDetail.line.combo_parent_id) {
+                        this.dialog.add(AlertDialog, {
+                            title: _t("Maximum Exceeded"),
+                            body: _t(
+                                "The requested quantity to be refunded is higher than the ordered quantity. %s is requested while only %s can be refunded.",
+                                quantity,
+                                refundableQty
+                            ),
+                        });
+                    }
                 } else {
                     toRefundDetail.qty = quantity;
                 }
@@ -248,18 +250,11 @@ export class TicketScreen extends Component {
             }
         }
 
-        if (!order) {
-            this.state.highlightHeaderNote = !this.state.highlightHeaderNote;
+        if (!order || !this.getHasItemsToRefund()) {
             return;
         }
 
         const partner = order.get_partner();
-        const allToRefundDetails = this._getRefundableDetails(partner, order);
-
-        if (!allToRefundDetails) {
-            this.state.highlightHeaderNote = !this.state.highlightHeaderNote;
-            return;
-        }
         // The order that will contain the refund orderlines.
         // Use the destinationOrder from props if the order to refund has the same
         // partner as the destinationOrder.
@@ -276,7 +271,8 @@ export class TicketScreen extends Component {
 
         destinationOrder.takeaway = order.takeaway;
         // Add orderline for each toRefundDetail to the destinationOrder.
-        for (const refundDetail of allToRefundDetails) {
+        const lines = [];
+        for (const refundDetail of this._getRefundableDetails(partner, order)) {
             const refundLine = refundDetail.line;
             const line = this.pos.models["pos.order.line"].create({
                 qty: -refundDetail.qty,
@@ -287,11 +283,22 @@ export class TicketScreen extends Component {
                 tax_ids: refundLine.tax_ids.map((tax) => ["link", tax]),
                 refunded_orderline_id: refundLine,
                 pack_lot_ids: refundLine.pack_lot_ids.map((packLot) => ["link", packLot]),
+                price_type: "automatic",
             });
-            line.setOptions({
-                uiState: { price_type: "automatic" },
-            });
+            lines.push(line);
             refundDetail.destination_order_uuid = destinationOrder.uuid;
+        }
+        // link the refund combo lines
+        const refundComboParentLines = lines.filter(
+            (l) => l.refunded_orderline_id.combo_line_ids.length > 0
+        );
+        for (const refundComboParent of refundComboParentLines) {
+            const children = refundComboParent.refunded_orderline_id.combo_line_ids
+                .map((l) => l.refund_orderline_ids)
+                .flat();
+            refundComboParent.update({
+                combo_line_ids: [["link", ...children]],
+            });
         }
 
         //Add a check too see if the fiscal position exist in the pos
@@ -371,11 +378,6 @@ export class TicketScreen extends Component {
         }
 
         if (this.state.filter === "SYNCED") {
-            console.log(
-                "PAID ORDER RANGE:",
-                (this.state.page - 1) * NBR_BY_PAGE,
-                this.state.page * NBR_BY_PAGE
-            );
             return orders
                 .sort((a, b) => {
                     const dateA = DateTime.fromFormat(a.date_order, "yyyy-MM-dd HH:mm:ss");
@@ -407,9 +409,7 @@ export class TicketScreen extends Component {
         }
     }
     getDate(order) {
-        return DateTime.fromFormat(order.date_order, "yyyy-MM-dd HH:mm:ss").toFormat(
-            "MM/dd/yyyy HH:mm:ss"
-        );
+        return formatDateTime(parseUTCString(order.date_order));
     }
     getTotal(order) {
         return this.env.utils.formatCurrency(order.get_total_with_tax());
@@ -442,7 +442,7 @@ export class TicketScreen extends Component {
         const productScreenStatus = this._getScreenToStatusMap().ProductScreen;
         return (
             order.get_orderlines().length === 0 &&
-            this.pos.get_order_list().length === 1 &&
+            this.pos.get_open_orders().length === 1 &&
             status === productScreenStatus &&
             order.payment_ids.length === 0
         );
@@ -494,10 +494,8 @@ export class TicketScreen extends Component {
         if (this._doesOrderHaveSoleItem(order)) {
             return true;
         }
-        const total = Object.values(this.pos.lineToRefund).reduce((acc, val) => {
-            if (val.line.order_id.id === order.id && !val.order_id) {
-                acc += val.qty;
-            }
+        const total = Object.values(order.uiState.lineToRefund).reduce((acc, val) => {
+            acc += val.qty;
             return acc;
         }, 0);
 
@@ -564,7 +562,7 @@ export class TicketScreen extends Component {
      * @returns
      */
     getToRefundDetail(orderline) {
-        const { lineToRefund } = this.pos;
+        const lineToRefund = orderline.order_id.uiState.lineToRefund;
 
         if (orderline.uuid in lineToRefund) {
             return lineToRefund[orderline.uuid];
@@ -593,12 +591,12 @@ export class TicketScreen extends Component {
      * @returns {Array} refundableDetails
      */
     _getRefundableDetails(partner, order) {
-        return Object.values(this.pos.lineToRefund).filter(
+        return Object.values(this.pos.linesToRefund).filter(
             (refund) =>
                 !this.pos.isProductQtyZero(refund.qty) &&
-                (partner ? refund.line.order_id.partner_id.id === partner.id : true) &&
-                !refund.destination_order_id &&
-                refund.line.order_id.uuid === order.uuid
+                refund.line.order_id.uuid === order.uuid &&
+                (partner ? refund.line.order_id.partner_id?.id === partner.id : true) &&
+                !refund.destination_order_id
         );
     }
 
@@ -623,7 +621,7 @@ export class TicketScreen extends Component {
     _getSearchFields() {
         const fields = {
             TRACKING_NUMBER: {
-                repr: (order) => order.trackingNumber,
+                repr: (order) => order.tracking_number,
                 displayName: _t("Order Number"),
                 modelField: "tracking_number",
             },
@@ -633,7 +631,7 @@ export class TicketScreen extends Component {
                 modelField: "pos_reference",
             },
             DATE: {
-                repr: (order) => formatDateTime(order.date_order),
+                repr: (order) => this.getDate(order),
                 displayName: _t("Date"),
                 modelField: "date_order",
             },
@@ -663,15 +661,6 @@ export class TicketScreen extends Component {
             PaymentScreen: "PAYMENT",
             ReceiptScreen: "RECEIPT",
         };
-    }
-    /**
-     * Override to do something before deleting the order.
-     * Make sure to return true to proceed on deleting the order.
-     * @param {*} order
-     * @returns {boolean}
-     */
-    async _onBeforeDeleteOrder(order) {
-        return true;
     }
     _getOrderStates() {
         // We need the items to be ordered, therefore, Map is used instead of normal object.

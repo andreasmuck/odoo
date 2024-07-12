@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { useService } from "@web/core/utils/hooks";
 import { usePos } from "@point_of_sale/app/store/pos_hook";
 import { MoneyDetailsPopup } from "@point_of_sale/app/utils/money_details_popup/money_details_popup";
@@ -9,9 +7,13 @@ import { Input } from "@point_of_sale/app/generic_components/inputs/input/input"
 import { parseFloat } from "@web/views/fields/parsers";
 import { Dialog } from "@web/core/dialog/dialog";
 
+class CustomDialog extends Dialog {
+    onEscape() {}
+}
+
 export class CashOpeningPopup extends Component {
     static template = "point_of_sale.CashOpeningPopup";
-    static components = { Input, Dialog };
+    static components = { Input, Dialog: CustomDialog };
     static props = {
         close: Function,
     };
@@ -54,6 +56,7 @@ export class CashOpeningPopup extends Component {
                     this.moneyDetails = moneyDetails;
                 }
             },
+            context: "Opening",
         });
     }
     handleInputChange() {
@@ -61,5 +64,9 @@ export class CashOpeningPopup extends Component {
             return;
         }
         this.state.notes = "";
+    }
+
+    get inputPlaceholder() {
+        return _t("Opening Balance Eg: 123");
     }
 }

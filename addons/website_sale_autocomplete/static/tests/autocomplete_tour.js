@@ -1,12 +1,11 @@
 /** @odoo-module */
 
 import { registry } from "@web/core/registry";
-import { TourError } from "@web_tour/tour_service/tour_utils";
 import tourUtils from '@website_sale/js/tours/tour_utils';
 
 
 function fail (errorMessage) {
-    throw new TourError(errorMessage);
+    console.error(errorMessage);
 }
 
 registry.category("web_tour.tours").add('autocomplete_tour', {
@@ -19,21 +18,22 @@ registry.category("web_tour.tours").add('autocomplete_tour', {
 { // Actual test
     content: 'Input in Street & Number field',
     trigger: 'input[name="street"]',
-    run: 'text This is a test'
+    run: "edit This is a test",
 }, {
     content: 'Check if results have appeared',
     trigger: '.js_autocomplete_result',
-    run: function () {}
 }, {
     content: 'Input again in street field',
     trigger: 'input[name="street"]',
-    run: 'text add more'
+    run: "edit add more",
 }, {
     content: 'Click on the first result',
-    trigger: '.js_autocomplete_result'
+    trigger: '.js_autocomplete_result',
+    run: "click",
 }, {
     content: 'Verify the autocomplete box disappeared',
-    trigger: 'body:not(:has(.js_autocomplete_result))'
+    trigger: 'body:not(:has(.js_autocomplete_result))',
+    run: "click",
 }, { // Verify test data has been input
     content: 'Check Street & number have been set',
     trigger: 'input[name="street"]',

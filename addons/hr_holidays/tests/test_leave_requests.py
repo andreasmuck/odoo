@@ -8,7 +8,7 @@ from pytz import timezone
 
 from odoo import fields, Command
 from odoo.exceptions import ValidationError
-from odoo.tools import mute_logger
+from odoo.tools import date_utils, mute_logger
 from odoo.tests import Form, tagged
 
 from odoo.exceptions import UserError
@@ -115,7 +115,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
 
     def test_limited_type_not_enough_days(self):
         with freeze_time('2022-01-05'):
-            self.env['hr.leave.allocation'].with_user(self.user_hruser_id).create({
+            allocation = self.env['hr.leave.allocation'].with_user(self.user_hruser_id).create({
                 'name': 'Days for limited category',
                 'employee_id': self.employee_emp_id,
                 'holiday_status_id': self.holidays_type_2.id,
@@ -124,6 +124,8 @@ class TestLeaveRequests(TestHrHolidaysCommon):
                 'date_from': time.strftime('%Y-1-1'),
                 'date_to': time.strftime('%Y-12-31'),
             })
+
+            allocation.action_validate()
 
             # Employee cannot take a leave longer than the allocation
             with self.assertRaises(ValidationError):
@@ -153,7 +155,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
     def test_limited_type_days_left(self):
         """  Employee creates a leave request in a limited category and has enough days left  """
         with freeze_time('2022-01-05'):
-            self.env['hr.leave.allocation'].with_user(self.user_hruser_id).create({
+            allocation = self.env['hr.leave.allocation'].with_user(self.user_hruser_id).create({
                 'name': 'Days for limited category',
                 'employee_id': self.employee_emp_id,
                 'holiday_status_id': self.holidays_type_2.id,
@@ -162,6 +164,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
                 'date_from': time.strftime('%Y-1-1'),
                 'date_to': time.strftime('%Y-12-31'),
             })
+            allocation.action_validate()
 
             holiday_status = self.holidays_type_2.with_user(self.user_employee_id)
             self._check_holidays_status(holiday_status, self.employee_emp, 2.0, 0.0, 2.0, 2.0)
@@ -209,14 +212,14 @@ class TestLeaveRequests(TestHrHolidaysCommon):
         """ Create a department leave """
         self.employee_hrmanager.write({'department_id': self.hr_dept.id})
         self.assertFalse(self.env['hr.leave'].search([('employee_id', 'in', self.hr_dept.member_ids.ids)]))
-        leave_form = Form(self.env['hr.leave'].with_user(self.user_hrmanager), view='hr_holidays.hr_leave_view_form_manager')
-        leave_form.holiday_type = 'department'
-        leave_form.department_id = self.hr_dept
-        leave_form.holiday_status_id = self.holidays_type_1
-        leave_form.request_date_from = date(2019, 5, 6)
-        leave_form.request_date_to = date(2019, 5, 6)
-        leave = leave_form.save()
-        leave.action_approve()
+        leave_wizard_form = Form(self.env['hr.leave.generate.multi.wizard'].with_user(self.user_hrmanager))
+        leave_wizard_form.allocation_mode = 'department'
+        leave_wizard_form.department_id = self.hr_dept
+        leave_wizard_form.holiday_status_id = self.holidays_type_1
+        leave_wizard_form.date_from = date(2019, 5, 6)
+        leave_wizard_form.date_to = date(2019, 5, 6)
+        leave_wizard = leave_wizard_form.save()
+        leave_wizard.action_generate_time_off()
         member_ids = self.hr_dept.member_ids.ids
         self.assertEqual(self.env['hr.leave'].search_count([('employee_id', 'in', member_ids)]), len(member_ids), "Time Off should be created for members of department")
 
@@ -255,7 +258,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
     @mute_logger('odoo.models.unlink', 'odoo.addons.mail.models.mail_mail')
     def test_timezone_employee_leave_request(self):
         """ Create a leave request for an employee in another timezone """
-        self.employee_emp.tz = 'NZ'  # GMT+12
+        self.employee_emp.tz = 'Pacific/Auckland'  # GMT+12
         leave = self.env['hr.leave'].new({
             'employee_id': self.employee_emp.id,
             'holiday_status_id': self.holidays_type_1.id,
@@ -272,13 +275,12 @@ class TestLeaveRequests(TestHrHolidaysCommon):
     def test_timezone_company_leave_request(self):
         """ Create a leave request for a company in another timezone """
         company = self.env['res.company'].create({'name': "Hergé"})
-        company.resource_calendar_id.tz = 'NZ'  # GMT+12
+        company.resource_calendar_id.tz = 'Australia/Sydney'  # GMT+12
         leave = self.env['hr.leave'].new({
             'employee_id': self.employee_emp.id,
             'holiday_status_id': self.holidays_type_1.id,
             'request_unit_hours': True,
-            'holiday_type': 'company',
-            'mode_company_id': company.id,
+            'company_id': company.id,
             'request_date_from': date(2019, 5, 6),
             'request_date_to': date(2019, 5, 6),
             'request_hour_from': '8',  # 8:00 AM in the company's timezone
@@ -290,43 +292,22 @@ class TestLeaveRequests(TestHrHolidaysCommon):
     @mute_logger('odoo.models.unlink', 'odoo.addons.mail.models.mail_mail')
     def test_timezone_company_validated(self):
         """ Create a leave request for a company in another timezone and validate it """
-        self.env.user.tz = 'NZ' # GMT+12
+        self.env.user.tz = 'Australia/Sydney' # GMT+12
         company = self.env['res.company'].create({'name': "Hergé"})
         employee = self.env['hr.employee'].create({'name': "Remi", 'company_id': company.id})
-        leave_form = Form(self.env['hr.leave'], view='hr_holidays.hr_leave_view_form_manager')
-        leave_form.holiday_type = 'company'
-        leave_form.mode_company_id = company
-        leave_form.holiday_status_id = self.holidays_type_1
-        leave_form.request_date_from = date(2019, 5, 6)
-        leave_form.request_date_to = date(2019, 5, 6)
-        leave = leave_form.save()
-        leave.state = 'confirm'
-        leave.action_validate()
+        leave_wizard_form = Form(self.env['hr.leave.generate.multi.wizard'])
+        leave_wizard_form.allocation_mode = 'company'
+        leave_wizard_form.company_id = company
+        leave_wizard_form.holiday_status_id = self.holidays_type_1
+        leave_wizard_form.date_from = date(2019, 5, 6)
+        leave_wizard_form.date_to = date(2019, 5, 6)
+        leave_wizard = leave_wizard_form.save()
+        leave_wizard.action_generate_time_off()
         employee_leave = self.env['hr.leave'].search([('employee_id', '=', employee.id)])
         self.assertEqual(
             employee_leave.request_date_from, date(2019, 5, 6),
             "Timezone should be be adapted on the employee leave"
         )
-
-    @mute_logger('odoo.models.unlink', 'odoo.addons.mail.models.mail_mail')
-    def test_timezone_department_leave_request(self):
-        """ Create a leave request for a department in another timezone """
-        company = self.env['res.company'].create({'name': "Hergé"})
-        company.resource_calendar_id.tz = 'NZ'  # GMT+12
-        department = self.env['hr.department'].create({'name': "Museum", 'company_id': company.id})
-        leave = self.env['hr.leave'].new({
-            'employee_id': self.employee_emp.id,
-            'holiday_status_id': self.holidays_type_1.id,
-            'request_unit_hours': True,
-            'holiday_type': 'department',
-            'department_id': department.id,
-            'request_date_from': date(2019, 5, 6),
-            'request_date_to': date(2019, 5, 6),
-            'request_hour_from': '8',  # 8:00 AM in the department's timezone
-            'request_hour_to': '17',  # 5:00 PM in the department's timezone
-        })
-        self.assertEqual(leave.date_from, datetime(2019, 5, 6, 6, 0, 0), "It should have been localized in the Employee timezone")
-        self.assertEqual(leave.date_to, datetime(2019, 5, 6, 15, 0, 0), "It should have been localized in the Employee timezone")
 
     def test_number_of_hours_display(self):
         # Test that the field number_of_hours_dispay doesn't change
@@ -469,7 +450,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
     @mute_logger('odoo.models.unlink', 'odoo.addons.mail.models.mail_mail')
     def test_leave_defaults_with_timezones(self):
         """ Make sure that leaves start with correct defaults for non-UTC timezones """
-        timezones_to_test = ('UTC', 'Pacific/Midway', 'US/Pacific', 'Asia/Taipei', 'Pacific/Kiritimati')  # UTC, UTC -11, UTC -8, UTC +8, UTC +14
+        timezones_to_test = ('UTC', 'Pacific/Midway', 'America/Los_Angeles', 'Asia/Taipei', 'Pacific/Kiritimati')  # UTC, UTC -11, UTC -8, UTC +8, UTC +14
 
         #     January 2020
         # Su Mo Tu We Th Fr Sa
@@ -490,7 +471,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
             self._test_leave_with_tz(tz, local_date_from, local_date_to, 6)
 
     def test_expired_allocation(self):
-        self.env['hr.leave.allocation'].create({
+        allocation = self.env['hr.leave.allocation'].create({
             'name': 'Expired Allocation',
             'employee_id': self.employee_emp_id,
             'holiday_status_id': self.holidays_type_2.id,
@@ -499,6 +480,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
             'date_from': '2020-01-01',
             'date_to': '2020-12-31',
         })
+        allocation.action_validate()
 
         with self.assertRaises(ValidationError):
             self.env['hr.leave'].with_user(self.user_employee_id).create({
@@ -518,7 +500,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
 
     def test_no_days_expired(self):
         # First expired allocation
-        self.env['hr.leave.allocation'].create({
+        allocation_one = self.env['hr.leave.allocation'].create({
             'name': 'Expired Allocation',
             'employee_id': self.employee_emp_id,
             'holiday_status_id': self.holidays_type_2.id,
@@ -527,7 +509,8 @@ class TestLeaveRequests(TestHrHolidaysCommon):
             'date_from': '2020-01-01',
             'date_to': '2020-12-31',
         })
-        self.env['hr.leave.allocation'].create({
+        allocation_one.action_validate()
+        allocation_two = self.env['hr.leave.allocation'].create({
             'name': 'Expired Allocation',
             'employee_id': self.employee_emp_id,
             'holiday_status_id': self.holidays_type_2.id,
@@ -536,6 +519,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
             'date_from': '2021-01-01',
             'date_to': '2021-12-31',
         })
+        allocation_two.action_validate()
         # Try creating a request that could be validated if allocation1 was still valid
         with self.assertRaises(ValidationError):
             self.env['hr.leave'].with_user(self.user_employee_id).create({
@@ -556,33 +540,22 @@ class TestLeaveRequests(TestHrHolidaysCommon):
 
     def test_company_leaves(self):
         # First expired allocation
-        self.env['hr.leave.allocation'].create({
+        self.env['hr.leave.allocation.generate.multi.wizard'].create({
             'name': 'Allocation',
-            'holiday_type': 'company',
-            'mode_company_id': self.env.company.id,
+            'company_id': self.env.company.id,
             'holiday_status_id': self.holidays_type_1.id,
-            'number_of_days': 20,
-            'state': 'confirm',
+            'duration': 20,
             'date_from': '2021-01-01',
         })
 
         req1_form = Form(self.env['hr.leave'].sudo())
-        req1_form.employee_ids.add(self.employee_emp)
-        req1_form.employee_ids.add(self.employee_hrmanager)
+        req1_form.employee_id = self.employee_emp
         req1_form.holiday_status_id = self.holidays_type_1
         req1_form.request_date_from = fields.Date.to_date('2021-12-06')
         req1_form.request_date_to = fields.Date.to_date('2021-12-08')
 
         self.assertEqual(req1_form.number_of_days, 3)
         req1_form.save().action_approve()
-
-        req2_form = Form(self.env['hr.leave'].sudo())
-        req2_form.employee_ids.add(self.employee_hruser)
-        req2_form.holiday_status_id = self.holidays_type_1
-        req2_form.request_date_from = fields.Date.to_date('2021-12-06')
-        req2_form.request_date_to = fields.Date.to_date('2021-12-08')
-
-        self.assertEqual(req2_form.number_of_days, 3)
 
     def test_leave_with_public_holiday_other_company(self):
         other_company = self.env['res.company'].create({
@@ -597,7 +570,6 @@ class TestLeaveRequests(TestHrHolidaysCommon):
 
         leave = self.env['hr.leave'].with_user(self.user_employee_id).create({
             'name': 'Holiday Request',
-            'holiday_type': 'employee',
             'employee_id': self.employee_emp.id,
             'holiday_status_id': self.holidays_type_1.id,
             'request_date_from': date(2022, 3, 11),
@@ -649,8 +621,10 @@ class TestLeaveRequests(TestHrHolidaysCommon):
 
             allocation_vals.update({'number_of_days': 4})
             allocation_4days = Allocation.create(allocation_vals)
+            allocation_4days.action_validate()
             allocation_vals.update({'number_of_days': 1})
             allocation_1day = Allocation.create(allocation_vals)
+            allocation_1day.action_validate()
             allocations = (allocation_4days + allocation_1day)
 
             leave_vals.update({
@@ -785,6 +759,29 @@ class TestLeaveRequests(TestHrHolidaysCommon):
         self.assertEqual(time_off.state, 'confirm')
         self.assertEqual(time_off.number_of_days, 0)
 
+    def test_time_off_irregular_working_schedule(self):
+        # Test a specific case where `_get_attendances` bugged out when a
+        # very specific working schedule was used.
+        calendar = self.env['resource.calendar'].create({
+            'name': 'Irregular Working Schedule (monday morning - wednesday afternoon)',
+            'attendance_ids': [
+                (0, 0, {'name': 'Monday Morning', 'dayofweek': '0', 'hour_from': 8, 'hour_to': 12, 'day_period': 'morning'}),
+                (0, 0, {'name': 'Wednesday Afternoon', 'dayofweek': '2', 'hour_from': 13, 'hour_to': 17, 'day_period': 'afternoon'}),
+            ],
+        })
+        self.employee_emp.resource_calendar_id = calendar
+        # Take a time off on the next tuesday (when the employee is not
+        # supposed to work) Previously this would raise a ValidationError.
+        next_tuesday = date_utils.start_of(fields.Date.today() + relativedelta(days=7), 'week') + relativedelta(days=1)
+        time_off = self.env['hr.leave'].create({
+            'name': 'Holiday Request',
+            'employee_id': self.employee_emp_id,
+            'holiday_status_id': self.holidays_type_1.id,
+            'request_date_from': next_tuesday,
+            'request_date_to': next_tuesday,
+        })
+        self.assertEqual(time_off.number_of_days, 0)
+
     def test_holiday_type_requires_no_allocation(self):
         # holiday_type_2 initially requires an allocation
         # Once an allocation is granted and a leave is taken,
@@ -800,6 +797,8 @@ class TestLeaveRequests(TestHrHolidaysCommon):
                 'date_from': '2020-01-01',
                 'date_to': '2020-12-31',
             })
+            allocation.action_validate()
+
             leave1 = self.env['hr.leave'].with_user(self.user_employee_id).create({
                 'name': 'Holiday Request',
                 'employee_id': self.employee_emp_id,
@@ -849,7 +848,9 @@ class TestLeaveRequests(TestHrHolidaysCommon):
                 'date_from': '2021-06-01',
                 'date_to': '2021-12-31',
             })
-            self.env['hr.leave.allocation'].create({
+            allocation_2021.action_validate()
+
+            allocation_2022 = self.env['hr.leave.allocation'].create({
                 'name': 'Annual Time Off 2022',
                 'employee_id': self.employee_emp_id,
                 'holiday_status_id': self.holidays_type_2.id,
@@ -858,11 +859,11 @@ class TestLeaveRequests(TestHrHolidaysCommon):
                 'date_from': '2022-01-01',
                 'date_to': '2022-12-31',
             })
+            allocation_2022.action_validate()
 
             # Leave taken in 2021
             leave_2021 = self.env['hr.leave'].with_user(self.user_employee_id).create({
                 'name': 'Holiday Request',
-                'holiday_type': 'employee',
                 'employee_id': self.employee_emp.id,
                 'holiday_status_id': self.holidays_type_2.id,
                 'request_date_from': datetime(2021, 8, 9),
@@ -885,7 +886,6 @@ class TestLeaveRequests(TestHrHolidaysCommon):
 
             leave_2022 = self.env['hr.leave'].with_user(self.user_employee_id).create({
                 'name': 'Holiday Request',
-                'holiday_type': 'employee',
                 'employee_id': self.employee_emp.id,
                 'holiday_status_id': self.holidays_type_2.id,
                 'request_date_from': datetime(2022, 8, 9),
@@ -955,7 +955,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
             The objective is to check that it is not possible to place leaves
             for which the interval does not correspond to the interval of allocations.
         """
-        holiday_type_A = self.env['hr.leave.type'].with_user(self.user_hrmanager_id).with_context(tracking_disable=True).create({
+        leave_type_A = self.env['hr.leave.type'].with_user(self.user_hrmanager_id).with_context(tracking_disable=True).create({
             'name': 'Type A',
             'requires_allocation': 'yes',
             'employee_requests': 'yes',
@@ -967,7 +967,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
             {
                 'name': 'Type A march 1 day without date to',
                 'employee_id': self.employee_emp_id,
-                'holiday_status_id': holiday_type_A.id,
+                'holiday_status_id': leave_type_A.id,
                 'number_of_days': 1,
                 'state': 'confirm',
                 'date_from': '2023-01-03',
@@ -975,7 +975,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
             {
                 'name': 'Type A april 5 day without date to',
                 'employee_id': self.employee_emp_id,
-                'holiday_status_id': holiday_type_A.id,
+                'holiday_status_id': leave_type_A.id,
                 'number_of_days': 5,
                 'state': 'confirm',
                 'date_from': '2023-04-01',
@@ -987,7 +987,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
         trigger_error_leave = {
             'name': 'Holiday Request',
             'employee_id': self.employee_emp_id,
-            'holiday_status_id': holiday_type_A.id,
+            'holiday_status_id': leave_type_A.id,
             'request_date_from': '2023-03-14',
             'request_date_to': '2023-03-16',
         }
@@ -1010,7 +1010,6 @@ class TestLeaveRequests(TestHrHolidaysCommon):
             })
             current_leave = self.env['hr.leave'].with_user(self.user_employee_id).create({
                 'name': 'Holiday Request',
-                'holiday_type': 'employee',
                 'employee_id': employee.id,
                 'holiday_status_id': leave_type.id,
                 'date_from': datetime.today() - timedelta(days=1),
@@ -1089,12 +1088,56 @@ class TestLeaveRequests(TestHrHolidaysCommon):
         self.assertEqual(sick_leave.duration_display, '2 days', msg)
         self.assertEqual(comp_leave.duration_display, '0 hours', msg)
 
+    def test_duration_display_public_leave_include(self):
+        """
+            The purpose is to test whether the duration_display
+            computation considers public holidays when the
+            `include_public_holidays_in_duration` is set to True.
+        """
+        employee = self.employee_emp
+        calendar = employee.resource_calendar_id
+        sick_leave_type = self.env['hr.leave.type'].create({
+            'name': 'Sick Leave (days)',
+            'request_unit': 'day',
+            'leave_validation_type': 'hr',
+        })
+        sick_leave = self.env['hr.leave'].create({
+            'name': 'Sick 3 days',
+            'employee_id': employee.id,
+            'holiday_status_id': sick_leave_type.id,
+            'request_date_from': '2021-11-15',
+            'request_date_to': '2021-11-17',
+        })
+
+        self.assertEqual(sick_leave.duration_display, '3 days')
+
+        calendar.global_leave_ids = [(0, 0, {
+            'name': 'Autumn Holidays',
+            'date_from': '2021-11-16 00:00:00',
+            'date_to': '2021-11-16 23:59:59',
+            'time_type': 'leave',
+        })]
+
+        self.assertEqual(sick_leave.duration_display, '2 days', "hr_holidays: duration_display should not count public holiday")
+
+        sick_leave_type.include_public_holidays_in_duration = True
+        sick_leave.unlink()
+        sick_leave = self.env['hr.leave'].create({
+            'name': 'Sick 3 days',
+            'employee_id': employee.id,
+            'holiday_status_id': sick_leave_type.id,
+            'request_date_from': '2021-11-15',
+            'request_date_to': '2021-11-17',
+        })
+
+        self.assertEqual(sick_leave.duration_display, '3 days', "hr_holidays: duration_display should not update after adding an overlapping holiday")
+
     @freeze_time('2024-01-18')
     def test_undefined_working_hours(self):
         """ Ensure time-off can also be allocated without ResourceCalendar. """
         employee = self.employee_emp
         employee.resource_calendar_id = False
-        self.env['hr.leave.allocation'].create({
+        allocation = self.env['hr.leave.allocation'].create({
             'name': 'Annual Time Off',
             'employee_id': employee.id,
             'holiday_status_id': self.holidays_type_4.id,
@@ -1103,6 +1146,7 @@ class TestLeaveRequests(TestHrHolidaysCommon):
             'date_from': '2024-01-01',
             'date_to': '2024-12-31',
         })
+        allocation.action_validate()
         self.env['hr.leave'].with_user(self.user_employee_id).create({
             'name': 'Holiday Request',
             'employee_id': employee.id,
@@ -1112,3 +1156,53 @@ class TestLeaveRequests(TestHrHolidaysCommon):
         })
         holiday_status = self.holidays_type_4.with_user(self.user_employee_id)
         self._check_holidays_status(holiday_status, employee, 20.0, 0.0, 20.0, 16.0)
+
+    def test_default_request_date_timezone(self):
+        """
+            The purpose is to test whether the timezone is
+            taken into account when requesting a leave.
+        """
+        self.user_employee.tz = 'Asia/Hong_Kong'  # UTC +08:00
+        context = {
+            # `date_from/to` in UTC to simulate client values
+            'default_date_from': '2024-03-27 23:00:00',
+            'default_date_to': '2024-03-28 08:00:00',
+        }
+        leave_form = Form(self.env['hr.leave'].with_user(self.user_employee).with_context(context))
+        leave_form.holiday_status_id = self.holidays_type_2
+        leave = leave_form.save()
+        self.assertEqual(leave.number_of_days, 1.0)
+
+    def test_filter_time_off_type_multiple_employees(self):
+        """ This test mimics the behavior of creating time off for multiple employees.
+        We check that the time off types that the user can select are correct.
+        In this example, we use a time off type that requires allocations.
+        Only the current user has an allocation for the time off type.
+        This time off type should not appear when multiple employees are select (user included or not).
+        """
+        self.assertFalse(self.env['hr.leave.allocation'].search([['holiday_status_id', '=', self.holidays_type_2.id]]))
+
+        self.env.user.employee_id = self.employee_hruser_id
+        allocation = self.env['hr.leave.allocation'].create({
+            'employee_id': self.employee_hruser_id,
+            'holiday_status_id': self.holidays_type_2.id,
+            'allocation_type': 'regular'
+        })
+        allocation.action_validate()
+
+        self.assertEqual(allocation.state, 'validate')
+
+        search_domain = ['|',
+                        ['requires_allocation', '=', 'no'],
+                        '&',
+                            ['has_valid_allocation', '=', True],
+                            '&',
+                                ['max_leaves', '>', '0'],
+                                '|',
+                                ['allows_negative', '=', True],
+                                '&',
+                                    ['virtual_remaining_leaves', '>', 0],
+                                    ['allows_negative', '=', False]]
+
+        search_result = self.env['hr.leave.type'].with_context(employee_id=False).name_search(args=search_domain)
+        self.assertFalse(self.holidays_type_2.id in [alloc_id for (alloc_id, _) in search_result])

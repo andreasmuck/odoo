@@ -1,6 +1,6 @@
 import { AND, Record } from "@mail/core/common/record";
-import { DEFAULT_AVATAR } from "@mail/core/common/persona_service";
 import { imageUrl } from "@web/core/utils/urls";
+import { rpc } from "@web/core/network/rpc";
 
 /**
  * @typedef {'offline' | 'bot' | 'online' | 'away' | 'im_partner' | undefined} ImStatus
@@ -38,7 +38,7 @@ export class Persona extends Record {
         /** @this {import("models").Persona} */
         compute() {
             if (this.type === "partner" && this.im_status !== "im_partner" && !this.is_public) {
-                return this._store;
+                return this.store;
             }
         },
         eager: true,
@@ -89,7 +89,20 @@ export class Persona extends Record {
         if (this.userId) {
             return imageUrl("res.users", this.userId, "avatar_128", { unique: this.write_date });
         }
-        return DEFAULT_AVATAR;
+        return this.store.DEFAULT_AVATAR;
+    }
+
+    searchChat() {
+        return Object.values(this.store.Thread.records).find(
+            (thread) => thread.channel_type === "chat" && thread.correspondent?.persona.eq(this)
+        );
+    }
+
+    async updateGuestName(name) {
+        await rpc("/mail/guest/update_name", {
+            guest_id: this.id,
+            name,
+        });
     }
 }
 

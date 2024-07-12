@@ -13,12 +13,18 @@ from odoo.exceptions import UserError, ValidationError
 @tagged('post_install', '-at_install')
 class TestAccountJournal(AccountTestInvoicingCommon):
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.other_currency = cls.setup_other_currency('EUR')
+        cls.company_data_2 = cls.setup_other_company()
+
     def test_constraint_currency_consistency_with_accounts(self):
         ''' The accounts linked to a bank/cash journal must share the same foreign currency
         if specified.
         '''
         journal_bank = self.company_data['default_journal_bank']
-        journal_bank.currency_id = self.currency_data['currency']
+        journal_bank.currency_id = self.other_currency
 
         # Try to set a different currency on the 'debit' account.
         with self.assertRaises(ValidationError), self.cr.savepoint():
@@ -151,6 +157,11 @@ class TestAccountJournal(AccountTestInvoicingCommon):
 
 @tagged('post_install', '-at_install', 'mail_alias')
 class TestAccountJournalAlias(AccountTestInvoicingCommon, MailCommon):
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.company_data_2 = cls.setup_other_company()
 
     def test_alias_name_creation(self):
         """ Test alias creation, notably avoid raising constraints due to ascii
@@ -294,3 +305,19 @@ class TestAccountJournalAlias(AccountTestInvoicingCommon, MailCommon):
                          'Journal alias owned by journal itself')
         self.assertEqual(journal_alias_2.alias_parent_thread_id, journal.id,
                          'Journal alias owned by journal itself')
+
+    def test_alias_create_unique(self):
+        """ Make auto-generated alias_name unique when needed """
+        company_name = self.company_data['company'].name
+        journal = self.env['account.journal'].create({
+            'name': 'Test Journal',
+            'type': 'sale',
+            'code': 'A',
+        })
+        journal2 = self.env['account.journal'].create({
+            'name': 'Test Journal',
+            'type': 'sale',
+            'code': 'B',
+        })
+        self.assertEqual(journal.alias_name, f'test-journal-{company_name}')
+        self.assertEqual(journal2.alias_name, f'test-journal-{company_name}-b')

@@ -1,5 +1,13 @@
 import { expect, test } from "@odoo/hoot";
-import { queryAllTexts, queryFirst, queryLast, queryOne } from "@odoo/hoot-dom";
+import {
+    pointerDown,
+    pointerUp,
+    queryAllTexts,
+    queryFirst,
+    queryLast,
+    queryOne,
+    queryAllAttributes,
+} from "@odoo/hoot-dom";
 import { Deferred, animationFrame, runAllTimers } from "@odoo/hoot-mock";
 import { Component, useState, xml } from "@odoo/owl";
 
@@ -26,6 +34,12 @@ test("can be rendered", async () => {
     await contains(".o-autocomplete input").click();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(1);
     expect(queryAllTexts(".o-autocomplete--dropdown-item")).toEqual(["World", "Hello"]);
+
+    const dropdownItemIds = queryAllAttributes(".dropdown-item", "id");
+    expect(dropdownItemIds).toEqual(["autocomplete_0_0", "autocomplete_0_1"]);
+    expect(queryAllAttributes(".dropdown-item", "role")).toEqual(["option", "option"]);
+    expect(queryAllAttributes(".dropdown-item", "aria-selected")).toEqual(["true", "false"]);
+    expect(".o-autocomplete--input").toHaveAttribute("aria-activedescendant", dropdownItemIds[0]);
 });
 
 test("select option", async () => {
@@ -63,12 +77,12 @@ test("select option", async () => {
     await contains(".o-autocomplete input").click();
     await contains(queryFirst(".o-autocomplete--dropdown-item")).click();
     expect(".o-autocomplete input").toHaveValue("World");
-    expect(["World"]).toVerifySteps();
+    expect.verifySteps(["World"]);
 
     await contains(".o-autocomplete input").click();
     await contains(queryLast(".o-autocomplete--dropdown-item")).click();
     expect(".o-autocomplete input").toHaveValue("Hello");
-    expect(["Hello"]).toVerifySteps();
+    expect.verifySteps(["Hello"]);
 });
 
 test("autocomplete with resetOnSelect='true'", async () => {
@@ -110,11 +124,10 @@ test("autocomplete with resetOnSelect='true'", async () => {
 
     await contains(".o-autocomplete input").edit("Blip", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     await contains(queryLast(".o-autocomplete--dropdown-item")).click();
     expect(".test_value").toHaveText("Hello");
     expect(".o-autocomplete input").toHaveValue("");
-    expect(["Hello"]).toVerifySteps();
+    expect.verifySteps(["Hello"]);
 });
 
 test("open dropdown on input", async () => {
@@ -135,11 +148,10 @@ test("open dropdown on input", async () => {
     expect(".o-autocomplete .dropdown-menu").toHaveCount(0);
     await contains(".o-autocomplete input").fill("a", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(1);
 });
 
-test("close dropdown on escape keydown", async () => {
+test("cancel result on escape keydown", async () => {
     class Parent extends Component {
         static components = { AutoComplete };
         static template = xml`
@@ -147,6 +159,7 @@ test("close dropdown on escape keydown", async () => {
                 value="'Hello'"
                 sources="[{ options: [{ label: 'World' }, { label: 'Hello' }] }]"
                 onSelect="() => {}"
+                autoSelect="true"
             />
         `;
         static props = {};
@@ -154,14 +167,16 @@ test("close dropdown on escape keydown", async () => {
 
     await mountWithCleanup(Parent);
     expect(".o-autocomplete .dropdown-menu").toHaveCount(0);
+    expect(".o-autocomplete input").toHaveValue("Hello");
 
     await contains(".o-autocomplete input").click();
+    await contains(".o-autocomplete input").edit("H", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(1);
 
     await contains(".o-autocomplete input").press("Escape");
     expect(".o-autocomplete .dropdown-menu").toHaveCount(0);
+    expect(".o-autocomplete input").toHaveValue("Hello");
 });
 
 test("select input text on first focus", async () => {
@@ -176,11 +191,10 @@ test("select input text on first focus", async () => {
     await mountWithCleanup(Parent);
     await contains(".o-autocomplete input").click();
     await runAllTimers();
-    await animationFrame();
     expect(getSelection().toString()).toBe("Bar");
 });
 
-test("scroll outside should close dropdown", async () => {
+test("scroll outside should cancel result", async () => {
     class Parent extends Component {
         static components = { AutoComplete };
         static template = xml`
@@ -190,6 +204,7 @@ test("scroll outside should close dropdown", async () => {
                         value="'Hello'"
                         sources="[{ options: [{ label: 'World' }, { label: 'Hello' }] }]"
                         onSelect="() => {}"
+                        autoSelect="true"
                     />
                 </div>
             </div>
@@ -199,15 +214,16 @@ test("scroll outside should close dropdown", async () => {
 
     await mountWithCleanup(Parent);
     expect(".o-autocomplete .dropdown-menu").toHaveCount(0);
+    expect(".o-autocomplete input").toHaveValue("Hello");
 
     await contains(".o-autocomplete input").click();
+    await contains(".o-autocomplete input").edit("H", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(1);
 
     await contains(".autocomplete_container").scroll({ top: 10 });
-    await animationFrame();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(0);
+    expect(".o-autocomplete input").toHaveValue("Hello");
 });
 
 test("scroll inside should keep dropdown open", async () => {
@@ -232,15 +248,41 @@ test("scroll inside should keep dropdown open", async () => {
 
     await contains(".o-autocomplete input").click();
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(1);
 
     await contains(".o-autocomplete .dropdown-menu").scroll({ top: 10 });
-    await animationFrame();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(1);
 });
 
-test("losing focus should close dropdown", async () => {
+test("losing focus should cancel result", async () => {
+    class Parent extends Component {
+        static components = { AutoComplete };
+        static template = xml`
+            <AutoComplete
+                value="'Hello'"
+                sources="[{ options: [{ label: 'World' }, { label: 'Hello' }] }]"
+                onSelect="() => {}"
+                autoSelect="true"
+            />
+        `;
+        static props = {};
+    }
+
+    await mountWithCleanup(Parent);
+    expect(".o-autocomplete .dropdown-menu").toHaveCount(0);
+    expect(".o-autocomplete input").toHaveValue("Hello");
+
+    await contains(".o-autocomplete input").click();
+    await contains(".o-autocomplete input").edit("H", { confirm: false });
+    await runAllTimers();
+    expect(".o-autocomplete .dropdown-menu").toHaveCount(1);
+
+    await contains(document.body).click();
+    expect(".o-autocomplete .dropdown-menu").toHaveCount(0);
+    expect(".o-autocomplete input").toHaveValue("Hello");
+});
+
+test("click out after clearing input", async () => {
     class Parent extends Component {
         static components = { AutoComplete };
         static template = xml`
@@ -255,14 +297,16 @@ test("losing focus should close dropdown", async () => {
 
     await mountWithCleanup(Parent);
     expect(".o-autocomplete .dropdown-menu").toHaveCount(0);
+    expect(".o-autocomplete input").toHaveValue("Hello");
 
     await contains(".o-autocomplete input").click();
+    await contains(".o-autocomplete input").clear({ confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(1);
 
     await contains(document.body).click();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(0);
+    expect(".o-autocomplete input").toHaveValue("");
 });
 
 test("open twice should not display previous results", async () => {
@@ -293,7 +337,6 @@ test("open twice should not display previous results", async () => {
 
     await contains(".o-autocomplete input").click();
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(1);
     expect(".o-autocomplete--dropdown-item").toHaveCount(1);
     expect(".o-autocomplete--dropdown-item .fa-spin").toHaveCount(1); // loading
@@ -306,12 +349,10 @@ test("open twice should not display previous results", async () => {
     def = new Deferred();
     await contains(".o-autocomplete input").fill("A", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete--dropdown-item").toHaveCount(1);
     expect(".o-autocomplete--dropdown-item .fa-spin").toHaveCount(1); // loading
     def.resolve();
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete--dropdown-item").toHaveCount(2);
     expect(".fa-spin").toHaveCount(0);
 
@@ -322,7 +363,6 @@ test("open twice should not display previous results", async () => {
     def = new Deferred();
     await contains(".o-autocomplete input").click();
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(1);
     expect(".o-autocomplete--dropdown-item").toHaveCount(1);
     expect(".o-autocomplete--dropdown-item .fa-spin").toHaveCount(1); // loading
@@ -347,7 +387,6 @@ test("press enter on autocomplete with empty source", async () => {
     // click inside the input and press "enter", because why not
     await contains(".o-autocomplete input").click();
     await runAllTimers();
-    await animationFrame();
     await contains(".o-autocomplete input").press("Enter");
 
     expect(".o-autocomplete input").toHaveCount(1);
@@ -380,13 +419,11 @@ test("press enter on autocomplete with empty source (2)", async () => {
 
     await contains(".o-autocomplete input").edit("test", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(1);
     expect(".o-autocomplete .dropdown-menu .o-autocomplete--dropdown-item").toHaveCount(3);
 
     await contains(".o-autocomplete input").edit("t", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(0);
 
     await contains(".o-autocomplete input").press("Enter");
@@ -440,7 +477,6 @@ test.tags("desktop")("autocomplete in edition keep edited value before select op
     await mountWithCleanup(Parent);
     await contains(".o-autocomplete input").edit("Yolo", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete input").toHaveValue("Yolo");
 
     // We want to simulate an external value edition (like a delayed onChange)
@@ -450,7 +486,6 @@ test.tags("desktop")("autocomplete in edition keep edited value before select op
     // Leave inEdition mode when selecting an option
     await contains(".o-autocomplete input").click();
     await runAllTimers();
-    await animationFrame();
     await contains(queryFirst(".o-autocomplete--dropdown-item")).click();
     expect(".o-autocomplete input").toHaveValue("My Selection");
 
@@ -483,7 +518,6 @@ test.tags("desktop")("autocomplete in edition keep edited value before blur", as
     await mountWithCleanup(Parent);
     await contains(".o-autocomplete input").edit("", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete input").toHaveValue("");
 
     // We want to simulate an external value edition (like a delayed onChange)
@@ -531,7 +565,7 @@ test("correct sequence of blur, focus and select", async () => {
         onSelect(option, params) {
             queryOne(".o-autocomplete input").value = option.label;
             expect.step("select " + option.label);
-            expect(params.triggeredOnBlur).not.toBeTruthy();
+            expect(params.triggeredOnBlur).not.toBe(true);
         }
         onBlur() {
             expect.step("blur");
@@ -541,20 +575,72 @@ test("correct sequence of blur, focus and select", async () => {
     expect(".o-autocomplete input").toHaveCount(1);
     await contains(".o-autocomplete input").click();
 
+    // Navigate suggestions using arrow keys
+    let dropdownItemIds = queryAllAttributes(".dropdown-item", "id");
+    expect(dropdownItemIds).toEqual(["autocomplete_0_0", "autocomplete_0_1"]);
+    expect(queryAllAttributes(".dropdown-item", "role")).toEqual(["option", "option"]);
+    expect(queryAllAttributes(".dropdown-item", "aria-selected")).toEqual(["true", "false"]);
+    expect(".o-autocomplete--input").toHaveAttribute("aria-activedescendant", dropdownItemIds[0]);
+
+    await contains(".o-autocomplete--input").press("ArrowDown");
+
+    dropdownItemIds = queryAllAttributes(".dropdown-item", "id");
+    expect(dropdownItemIds).toEqual(["autocomplete_0_0", "autocomplete_0_1"]);
+    expect(queryAllAttributes(".dropdown-item", "role")).toEqual(["option", "option"]);
+    expect(queryAllAttributes(".dropdown-item", "aria-selected")).toEqual(["false", "true"]);
+    expect(".o-autocomplete--input").toHaveAttribute("aria-activedescendant", dropdownItemIds[1]);
+
     // Start typing hello and click on the result
     await contains(".o-autocomplete input").edit("h", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(".o-autocomplete .dropdown-menu").toHaveCount(1);
     await contains(queryLast(".o-autocomplete--dropdown-item")).click();
-    expect(["change", "select Hello"]).toVerifySteps();
+    expect.verifySteps(["change", "select Hello"]);
     expect(".o-autocomplete input").toBeFocused();
 
     // Clear input and focus out
     await contains(".o-autocomplete input").edit("", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     await contains(document.body).click();
-    expect(["blur", "change"]).toVerifySteps();
+    expect.verifySteps(["blur", "change"]);
     expect(".o-autocomplete .dropdown-menu").toHaveCount(0);
+});
+
+test("autocomplete always closes on click away [REQUIRE FOCUS]", async () => {
+    class Parent extends Component {
+        static template = xml`
+            <AutoComplete
+                value="state.value"
+                sources="sources"
+                onSelect.bind="onSelect"
+                autoSelect="true"
+            />
+        `;
+        static props = ["*"];
+        static components = { AutoComplete };
+        setup() {
+            this.state = useState({
+                value: "",
+            });
+        }
+        get sources() {
+            return [
+                {
+                    options: [{ label: "World" }, { label: "Hello" }],
+                },
+            ];
+        }
+        onSelect(option) {
+            queryOne(".o-autocomplete--input").value = option.label;
+        }
+    }
+    await mountWithCleanup(Parent);
+    expect(".o-autocomplete input").toHaveCount(1);
+    await contains(".o-autocomplete input").click();
+    expect(".o-autocomplete--dropdown-item").toHaveCount(2);
+    pointerDown(queryLast(".o-autocomplete--dropdown-item"));
+    pointerUp(document.body);
+    expect(".o-autocomplete--dropdown-item").toHaveCount(2);
+    await contains(document.body).click();
+    expect(".o-autocomplete--dropdown-item").toHaveCount(0);
 });

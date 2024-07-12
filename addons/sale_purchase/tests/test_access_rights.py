@@ -10,8 +10,8 @@ from odoo.tests import tagged
 class TestAccessRights(TestCommonSalePurchaseNoChart):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
         # Create a users
         group_sale_user = cls.env.ref('sales_team.group_sale_salesman')
@@ -42,7 +42,7 @@ class TestAccessRights(TestCommonSalePurchaseNoChart):
             'product_id': self.service_purchase_1.id,
             'product_uom_qty': 4,
             'order_id': sale_order.id,
-            'tax_id': False,
+            'tax_ids': False,
         })
 
         # confirming SO will create the PO even if you don't have the rights

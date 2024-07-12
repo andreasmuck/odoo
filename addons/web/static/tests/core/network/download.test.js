@@ -8,15 +8,15 @@ import { ConnectionLostError, RPCError } from "@web/core/network/rpc";
 describe.current.tags("headless");
 
 test("handles connection error when behind a server", async () => {
-    const restoreFetch = mockFetch(() => new Response("", { status: 502 }));
-    after(restoreFetch);
+    mockFetch(() => new Response("", { status: 502 }));
+
     const error = new ConnectionLostError("/some_url");
     await expect(download({ data: {}, url: "/some_url" })).rejects.toThrow(error);
 });
 
 test("handles connection error when network unavailable", async () => {
-    const restoreFetch = mockFetch(() => Promise.reject());
-    after(restoreFetch);
+    mockFetch(() => Promise.reject());
+
     const error = new ConnectionLostError("/some_url");
     await expect(download({ data: {}, url: "/some_url" })).rejects.toThrow(error);
 });
@@ -32,11 +32,7 @@ test("handles business error from server", async () => {
         message: "Odoo Server Error",
     };
 
-    const restoreFetch = mockFetch(() => {
-        const blob = new Blob([JSON.stringify(serverError)], { type: "text/html" });
-        return new Response(blob, { status: 200 });
-    });
-    after(restoreFetch);
+    mockFetch(() => new Blob([JSON.stringify(serverError)], { type: "text/html" }));
 
     let error = null;
     try {
@@ -47,18 +43,14 @@ test("handles business error from server", async () => {
     } catch (e) {
         error = e;
     }
-    expect(error).toSatisfy((error) => error instanceof RPCError);
+    expect(error).toBeInstanceOf(RPCError);
     expect(error.data).toEqual(serverError.data);
 });
 
 test("handles arbitrary error", async () => {
     const serverError = /* xml */ `<html><body><div>HTML error message</div></body></html>`;
 
-    const restoreFetch = mockFetch(() => {
-        const blob = new Blob([JSON.stringify(serverError)], { type: "text/html" });
-        return new Response(blob, { status: 200 });
-    });
-    after(restoreFetch);
+    mockFetch(() => new Blob([JSON.stringify(serverError)], { type: "text/html" }));
 
     let error = null;
     try {
@@ -70,7 +62,7 @@ test("handles arbitrary error", async () => {
         error = e;
     }
 
-    expect(error).toSatisfy((error) => error instanceof RPCError);
+    expect(error).toBeInstanceOf(RPCError);
     expect(error.message).toBe("Arbitrary Uncaught Python Exception");
     expect(error.data.debug.trim()).toBe("200\nHTML error message");
 });
@@ -80,18 +72,15 @@ test("handles success download", async () => {
     // This test relies on a implementation detail of the lowest layer of download
     // That is, a link will be created with the download attribute
 
-    const restoreFetch = mockFetch((_, { body }) => {
-        expect(body).toSatisfy((body) => body instanceof FormData);
-        expect(body instanceof FormData).toBeTruthy();
+    mockFetch((_, { body }) => {
+        expect(body).toBeInstanceOf(FormData);
         expect(body.get("someKey")).toBe("someValue");
-        expect(body.has("token")).toBeTruthy();
-        expect(body.has("csrf_token")).toBeTruthy();
+        expect(body.has("token")).toBe(true);
+        expect(body.has("csrf_token")).toBe(true);
         expect.step("fetching file");
 
-        const blob = new Blob(["some plain text file"], { type: "text/plain" });
-        return new Response(blob, { status: 200 });
+        return new Blob(["some plain text file"], { type: "text/plain" });
     });
-    after(restoreFetch);
 
     const deferred = new Deferred();
 
@@ -101,7 +90,7 @@ test("handles success download", async () => {
         if (target.tagName === "A" && "download" in target.attributes) {
             ev.preventDefault();
 
-            expect(target.href).toSatisfy((href) => href.startsWith("blob:"));
+            expect(target.href).toMatch(/^blob:/);
             expect.step("file downloaded");
             document.removeEventListener("click", downloadOnClick);
             deferred.resolve();
@@ -114,5 +103,5 @@ test("handles success download", async () => {
     expect("a[download]").toHaveCount(0); // link will be added by download
     download({ data: { someKey: "someValue" }, url: "/some_url" });
     await deferred;
-    expect(["fetching file", "file downloaded"]).toVerifySteps();
+    expect.verifySteps(["fetching file", "file downloaded"]);
 });

@@ -18,6 +18,7 @@ class TestPoSStock(TestPoSCommon):
         self.product3 = self.create_product('Product 3', self.categ_basic, 30.0, 15.0)
         self.product4 = self.create_product('Product 4', self.categ_anglo, 10.0, 5.0)
         self.product4.type = 'consu'
+        self.product4.is_storable = False
         # start inventory with 10 items for each product
         self.adjust_inventory([self.product1, self.product2, self.product3], [10, 10, 10])
 
@@ -267,3 +268,11 @@ class TestPoSStock(TestPoSCommon):
         self.pos_session.action_pos_session_validate()
         expense_account_move_line = self.env['account.move.line'].search([('account_id', '=', self.expense_account.id)])
         self.assertEqual(expense_account_move_line.balance, 0.0, "Expense account should be 0.0")
+
+    def test_stock_user_without_pos_permissions_can_create_product(self):
+        stock_manager = odoo.tests.common.new_test_user(
+            self.env, 'temp_stock_manager', 'stock.group_stock_manager',
+        )
+        self.env['product.product'].with_user(stock_manager).create({
+            'name': 'temp', 'is_storable': True, 'available_in_pos': False,
+        })

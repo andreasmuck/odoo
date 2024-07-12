@@ -8,6 +8,8 @@ from collections import defaultdict
 from odoo import api, fields, models, _
 from odoo.addons.base.models.res_partner import _tz_get
 from odoo.exceptions import UserError
+from odoo.tools.misc import clean_context
+from odoo.tools import split_every
 
 _logger = logging.getLogger(__name__)
 
@@ -95,7 +97,8 @@ class Attendee(models.Model):
         """ Hook to be able to override the invitation email sending process.
          Notably inside appointment to use a different mail template from the appointment type. """
         self._send_mail_to_attendees(
-            self.env.ref('calendar.calendar_template_meeting_invitation', raise_if_not_found=False)
+            self.env.ref('calendar.calendar_template_meeting_invitation', raise_if_not_found=False),
+            force_send=True,
         )
 
     def _send_mail_to_attendees(self, mail_template, force_send=False):
@@ -103,6 +106,12 @@ class Attendee(models.Model):
             :param mail_template: a mail.template record
             :param force_send: if set to True, the mail(s) will be sent immediately (instead of the next queue processing)
         """
+        if force_send:
+            force_send_limit = int(self.env['ir.config_parameter'].sudo().get_param('mail.mail_force_send_limit', 100))
+        notified_attendees = self
+        for event, attendees in self.grouped('event_id').items():
+            if event._skip_send_mail_status_update():
+                notified_attendees -= attendees
         if isinstance(mail_template, str):
             raise ValueError('Template should be a template record, not an XML ID anymore.')
         if self.env['ir.config_parameter'].sudo().get_param('calendar.block_mail') or self._context.get("no_mail_to_attendees"):
@@ -112,19 +121,40 @@ class Attendee(models.Model):
             return False
 
         # get ics file for all meetings
-        ics_files = self.mapped('event_id')._get_ics_file()
+        ics_files = notified_attendees.event_id._get_ics_file()
 
-        for attendee in self:
+        # If the mail template has attachments, prepare copies for each attendee (to be added to each attendee's mail)
+        if mail_template.attachment_ids:
+
+            # Setting res_model to ensure attachments are linked to the msg (otherwise only internal users are allowed link attachments)
+            attachments_values = [a.copy_data({'res_id': 0, 'res_model': 'mail.compose.message'})[0] for a in mail_template.attachment_ids]
+            attachments_values *= len(self)
+            attendee_attachment_ids = self.env['ir.attachment'].create(attachments_values).ids
+
+            # Map attendees to their respective attachments
+            template_attachment_count = len(mail_template.attachment_ids)
+            attendee_id_attachment_id_map = dict(zip(self.ids, split_every(template_attachment_count, attendee_attachment_ids, list)))
+
+        mail_messages = self.env['mail.message']
+        for attendee in notified_attendees:
             if attendee.email and attendee._should_notify_attendee():
                 event_id = attendee.event_id.id
                 ics_file = ics_files.get(event_id)
 
-                attachment_ids = mail_template.attachment_ids.ids
+                # Add template attachments copies to the attendee's email, if available
+                attachment_ids = attendee_id_attachment_id_map[attendee.id] if mail_template.attachment_ids else []
+
                 if ics_file:
-                    attachment_ids += self.env['ir.attachment'].create({
+                    context = {
+                        **clean_context(self.env.context),
+                        'no_document': True,  # An ICS file must not create a document
+                    }
+                    attachment_ids += self.env['ir.attachment'].with_context(context).create({
                         'datas': base64.b64encode(ics_file),
                         'description': 'invitation.ics',
                         'mimetype': 'text/calendar',
+                        'res_id': 0,
+                        'res_model': 'mail.compose.message',
                         'name': 'invitation.ics',
                     }).ids
 
@@ -136,7 +166,7 @@ class Attendee(models.Model):
                     'subject',
                     attendee.ids,
                     compute_lang=True)[attendee.id]
-                attendee.event_id.with_context(no_document=True).sudo().message_notify(
+                mail_messages += attendee.event_id.with_context(no_document=True).sudo().message_notify(
                     email_from=attendee.event_id.user_id.email_formatted or self.env.user.email_formatted,
                     author_id=attendee.event_id.user_id.partner_id.id or self.env.user.partner_id.id,
                     body=body,
@@ -144,8 +174,11 @@ class Attendee(models.Model):
                     partner_ids=attendee.partner_id.ids,
                     email_layout_xmlid='mail.mail_notification_light',
                     attachment_ids=attachment_ids,
-                    force_send=force_send,
+                    force_send=False,
                 )
+        # batch sending at the end
+        if force_send and len(notified_attendees) < force_send_limit:
+            mail_messages.sudo().mail_ids.send_after_commit()
 
     def _should_notify_attendee(self):
         """ Utility method that determines if the attendee should be notified.

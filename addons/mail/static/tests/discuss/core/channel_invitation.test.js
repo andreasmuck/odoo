@@ -1,4 +1,3 @@
-import { describe, test } from "@odoo/hoot";
 import {
     click,
     contains,
@@ -7,9 +6,9 @@ import {
     openDiscuss,
     start,
     startServer,
-} from "../../mail_test_helpers";
-import { Command, serverState } from "@web/../tests/web_test_helpers";
-import { withUser } from "@web/../tests/_framework/mock_server/mock_server";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, test } from "@odoo/hoot";
+import { Command, getService, serverState, withUser } from "@web/../tests/web_test_helpers";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -158,13 +157,13 @@ test("unnamed group chat should display correct name just after being invited", 
             channel_type: "group",
         },
     ]);
-    const env = await start();
+    await start();
     await openDiscuss();
     await contains(".o-mail-DiscussSidebarChannel", { text: "General" });
     await contains(".o-mail-DiscussSidebarChannel", { count: 0, text: "Jane and Mitchell Admin" });
     const currentPartnerId = serverState.partnerId;
     await withUser(userId, async () => {
-        await env.services.orm.call("discuss.channel", "add_members", [[channelId]], {
+        await getService("orm").call("discuss.channel", "add_members", [[channelId]], {
             partner_ids: [currentPartnerId],
         });
     });

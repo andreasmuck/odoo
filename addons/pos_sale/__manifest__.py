@@ -20,6 +20,7 @@ This module adds a custom Sales Team for the Point of Sale. This enables you to 
         'views/point_of_sale_report.xml',
         'views/sale_order_views.xml',
         'views/pos_order_views.xml',
+        'views/product_views.xml',
         'views/sales_team_views.xml',
         'views/res_config_settings_views.xml',
         'views/stock_template.xml',
@@ -32,11 +33,11 @@ This module adds a custom Sales Team for the Point of Sale. This enables you to 
         ],
         'web.assets_tests': [
             'pos_sale/static/tests/tours/**/*',
-            'pos_sale/static/tests/helpers/**/*',
         ],
         'point_of_sale.assets_qunit_tests': [
             "pos_sale/static/tests/unit/pos_app_tests.js",
         ],
     },
+    'post_init_hook': '_pos_sale_post_init',
     'license': 'LGPL-3',
 }

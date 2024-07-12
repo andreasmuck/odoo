@@ -9,7 +9,7 @@ import { OdooCorePlugin } from "@spreadsheet/plugins";
  * @typedef {Object} Chart
  * @property {Object} fieldMatching
  *
- * @typedef {import("@spreadsheet/global_filters/plugins/global_filters_core_plugin").FieldMatching} FieldMatching
+ * @typedef {import("@spreadsheet").FieldMatching} FieldMatching
  */
 
 export class OdooChartCorePlugin extends OdooCorePlugin {
@@ -109,7 +109,7 @@ export class OdooChartCorePlugin extends OdooCorePlugin {
      */
     getOdooChartDisplayName(chartId) {
         return `(#${this.getOdooChartIds().indexOf(chartId) + 1}) ${
-            this.getters.getChart(chartId).title
+            this.getters.getChart(chartId).title.text
         }`;
     }
 

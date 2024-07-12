@@ -1,12 +1,17 @@
-import { MockServer, serverState } from "@web/../tests/web_test_helpers";
+import {
+    authenticate,
+    getKwArgs,
+    logout,
+    makeKwArgs,
+    MockServer,
+    MockServerError,
+    models,
+    serverState,
+    unmakeKwArgs,
+} from "@web/../tests/web_test_helpers";
 import { serializeDateTime } from "@web/core/l10n/dates";
 import { registry } from "@web/core/registry";
-import {
-    Kwargs,
-    MockServerError,
-    isKwargs,
-} from "@web/../tests/_framework/mock_server/mock_server_utils";
-import { authenticate, logout } from "@web/../tests/_framework/mock_server/mock_server";
+import { session } from "@web/session";
 
 export const DISCUSS_ACTION_ID = 104;
 
@@ -17,37 +22,8 @@ export const DISCUSS_ACTION_ID = 104;
 
 const { DateTime } = luxon;
 
-/**
- * @param {Array} param arguments of method
- * @param  {...string} argNames ordered names of positional arguments
- * @returns {Object} kwargs normalized params
- */
-export const parseModelParams = (params, ...argNames) => {
-    const params2 = [...params];
-    const last = params2[params2.length - 1];
-    let args;
-    let kwargs = Kwargs({});
-    if (isKwargs(last)) {
-        kwargs = last;
-        params2.pop();
-        args = [...params2];
-    } else {
-        args = [...params2];
-    }
-    if (args.length > argNames.length) {
-        throw "more positional args than there are defined arg names";
-    }
-    for (let i = 0; i < args.length; i++) {
-        if (argNames[i] in kwargs) {
-            continue;
-        }
-        kwargs[argNames[i]] = args[i];
-    }
-    return kwargs;
-};
-
 /** @param {import("./mock_model").MailGuest} guest */
-const authenticateGuest = (guest) => {
+export const authenticateGuest = (guest) => {
     const { env } = MockServer;
     /** @type {import("mock_models").ResUsers} */
     const ResUsers = env["res.users"];
@@ -58,6 +34,7 @@ const authenticateGuest = (guest) => {
     env.cookie.set("dgid", guest.id);
     authenticate(publicUser.login, publicUser.password);
     env.uid = serverState.publicUserId;
+    session.user_id = false;
 };
 
 /**
@@ -72,7 +49,9 @@ export async function withGuest(guestId, fn) {
     const MailGuest = env["mail.guest"];
     const currentUser = env.user;
     const [targetGuest] = MailGuest._filter([["id", "=", guestId]], { active_test: false });
+    const OLD_SESSION_USER_ID = session.user_id;
     authenticateGuest(targetGuest);
+    session.user_id = false;
     let result;
     try {
         result = await fn();
@@ -83,6 +62,7 @@ export async function withGuest(guestId, fn) {
             logout();
             env.cookie.delete("dgid");
         }
+        session.user_id = OLD_SESSION_USER_ID;
     }
     return result;
 }
@@ -145,7 +125,9 @@ async function mail_attachment_upload(request) {
     if (body.get("voice")) {
         DiscussVoiceMetadata.create({ attachment_id: attachmentId });
     }
-    return IrAttachment._attachment_format([attachmentId])[0];
+    return {
+        data: new mailDataHelpers.Store(IrAttachment.browse(attachmentId)).get_result(),
+    };
 }
 
 registerRoute("/mail/attachment/delete", mail_attachment_delete);
@@ -186,7 +168,7 @@ async function load_attachments(request) {
         .sort()
         .slice(0, limit)
         .map(({ id }) => id);
-    return IrAttachment._attachment_format(attachmentIds);
+    return new mailDataHelpers.Store(IrAttachment.browse(attachmentIds)).get_result();
 }
 
 registerRoute("/mail/rtc/channel/join_call", channel_call_join);
@@ -204,25 +186,24 @@ async function channel_call_join(request) {
     const sessionId = DiscussChannelRtcSession.create({
         channel_member_id: memberOfCurrentUser.id,
         channel_id, // on the server, this is a related field from channel_member_id and not explicitly set
-        guest_id: memberOfCurrentUser.guest_id[0],
-        partner_id: memberOfCurrentUser.partner_id[0],
+        guest_id: memberOfCurrentUser.guest_id,
+        partner_id: memberOfCurrentUser.partner_id,
     });
     const channelMembers = DiscussChannelMember._filter([["channel_id", "=", channel_id]]);
     const rtcSessions = DiscussChannelRtcSession._filter([
         ["channel_member_id", "in", channelMembers.map((channelMember) => channelMember.id)],
     ]);
-    return {
+    const store = new mailDataHelpers.Store("Thread", {
+        id: channel_id,
+        model: "discuss.channel",
+        rtcSessions: [["ADD", rtcSessions.map((rtcSession) => ({ id: rtcSession.id }))]],
+    });
+    store.add("Rtc", {
         iceServers: false,
-        rtcSessions: [
-            [
-                "ADD",
-                rtcSessions.map((rtcSession) =>
-                    DiscussChannelRtcSession._mail_rtc_session_format(rtcSession.id)
-                ),
-            ],
-        ],
-        sessionId: sessionId,
-    };
+        selfSession: { id: sessionId },
+    });
+    store.add(rtcSessions.map((rtcSession) => rtcSession.id));
+    return store.get_result();
 }
 
 registerRoute("/mail/rtc/channel/leave_call", channel_call_leave);
@@ -247,22 +228,22 @@ async function channel_call_leave(request) {
         ["channel_member_id", "in", channelMembers.map((channelMember) => channelMember.id)],
     ]);
     const notifications = [];
-    const channelInfo = DiscussChannelRtcSession._mail_rtc_session_format_by_channel(
-        rtcSessions.map((rtcSession) => rtcSession.id)
-    );
-    for (const [channelId, sessionsData] of Object.entries(channelInfo)) {
+    const sessionsByChannelId = {};
+    for (const session of rtcSessions) {
+        const [member] = DiscussChannelMember._filter([["id", "=", session.channel_member_id]]);
+        if (!sessionsByChannelId[member.channel_id]) {
+            sessionsByChannelId[member.channel_id] = [];
+        }
+        sessionsByChannelId[member.channel_id].push(session);
+    }
+    for (const [channelId, sessions] of Object.entries(sessionsByChannelId)) {
         const channel = DiscussChannel.search_read([["id", "=", parseInt(channelId)]])[0];
-        const notificationRtcSessions = sessionsData.map((sessionsDataPoint) => {
-            return { id: sessionsDataPoint.id };
+        const store = new mailDataHelpers.Store("Thread", {
+            id: Number(channelId), // JS object keys are strings, but the type from the server is number
+            model: "discuss.channel",
+            rtcSessions: [["DELETE", sessions.map((session) => ({ id: session.id }))]],
         });
-        notifications.push([
-            channel,
-            "discuss.channel/rtc_sessions_update",
-            {
-                id: Number(channelId), // JS object keys are strings, but the type from the server is number
-                rtcSessions: [["DELETE", notificationRtcSessions]],
-            },
-        ]);
+        notifications.push([channel, "mail.record/insert", store.get_result()]);
     }
     for (const rtcSession of rtcSessions) {
         const target = rtcSession.guest_id
@@ -297,7 +278,11 @@ async function discuss_channel_info(request) {
     const DiscussChannel = this.env["discuss.channel"];
 
     const { channel_id } = await parseRequestParams(request);
-    return DiscussChannel._channel_info([channel_id])[0];
+    const channel = DiscussChannel.search([["id", "=", channel_id]]);
+    if (!channel.length) {
+        return;
+    }
+    return new mailDataHelpers.Store(channel).get_result();
 }
 
 registerRoute("/discuss/channel/members", discuss_channel_members);
@@ -307,7 +292,7 @@ async function discuss_channel_members(request) {
     const DiscussChannel = this.env["discuss.channel"];
 
     const { channel_id, known_member_ids } = await parseRequestParams(request);
-    return DiscussChannel.load_more_members([channel_id], known_member_ids);
+    return DiscussChannel._load_more_members([channel_id], known_member_ids);
 }
 
 registerRoute("/discuss/channel/messages", discuss_channel_messages);
@@ -330,12 +315,18 @@ async function discuss_channel_messages(request) {
         ["message_type", "!=", "user_notification"],
     ];
     const res = MailMessage._message_fetch(domain, search_term, before, after, around, limit);
+    const { messages } = res;
+    delete res.messages;
     if (!around) {
-        MailMessage.set_message_done(res.messages.map((message) => message.id));
+        MailMessage.set_message_done(messages.map((message) => message.id));
     }
     return {
         ...res,
-        messages: MailMessage.message_format(res.messages.map((message) => message.id)),
+        data: new mailDataHelpers.Store(
+            MailMessage.browse(messages.map((message) => message.id)),
+            makeKwArgs({ for_current_user: true })
+        ).get_result(),
+        messages: messages.map((message) => ({ id: message.id })),
     };
 }
 
@@ -363,7 +354,7 @@ async function discuss_channel_mute(request) {
     }
     DiscussChannelMember.write([member.id], { mute_until_dt });
     const channel_data = {
-        id: member.channel_id[0],
+        id: member.channel_id,
         model: "discuss.channel",
         mute_until_dt,
     };
@@ -404,17 +395,43 @@ async function discuss_channel_pins(request) {
         ["res_id", "=", channel_id],
         ["pinned_at", "!=", false],
     ]);
-    return MailMessage.message_format(messageIds);
+    return new mailDataHelpers.Store(
+        messageIds,
+        makeKwArgs({ for_current_user: true })
+    ).get_result();
 }
 
-registerRoute("/discuss/channel/set_last_seen_message", discuss_channel_mark_as_seen);
+registerRoute("/discuss/channel/mark_as_read", discuss_channel_mark_as_read);
 /** @type {RouteCallback} */
-async function discuss_channel_mark_as_seen(request) {
+async function discuss_channel_mark_as_read(request) {
     /** @type {import("mock_models").DiscussChannel} */
-    const DiscussChannel = this.env["discuss.channel"];
+    const DiscussChannelMember = this.env["discuss.channel.member"];
+    const { channel_id, last_message_id, sync } = await parseRequestParams(request);
+    const [partner, guest] = this.env["res.partner"]._get_current_persona();
+    const [memberId] = this.env["discuss.channel.member"].search([
+        ["channel_id", "=", channel_id],
+        partner ? ["partner_id", "=", partner.id] : ["guest_id", "=", guest.id],
+    ]);
+    if (!memberId) {
+        return; // ignore if the member left in the meantime
+    }
+    return DiscussChannelMember._mark_as_read([memberId], last_message_id, sync);
+}
 
-    const { channel_id, last_message_id } = await parseRequestParams(request);
-    return DiscussChannel._channel_seen([channel_id], last_message_id);
+registerRoute("/discuss/channel/mark_as_unread", discuss_channel_mark_as_unread);
+/** @type {RouteCallback} */
+async function discuss_channel_mark_as_unread(request) {
+    const { channel_id, message_id } = await parseRequestParams(request);
+    const [partner, guest] = this.env["res.partner"]._get_current_persona();
+    const [memberId] = this.env["discuss.channel.member"].search([
+        ["channel_id", "=", channel_id],
+        partner ? ["partner_id", "=", partner.id] : ["guest_id", "=", guest.id],
+    ]);
+    return this.env["discuss.channel.member"]._set_new_message_separator(
+        [memberId],
+        message_id,
+        true
+    );
 }
 
 registerRoute("/discuss/gif/favorites", get_favorites);
@@ -431,10 +448,12 @@ async function discuss_history_messages(request) {
     /** @type {import("mock_models").MailNotification} */
     const MailNotification = this.env["mail.notification"];
 
-    const { after, before, limit = 30, search_term } = await parseRequestParams(request);
+    const { after, around, before, limit = 30, search_term } = await parseRequestParams(request);
     const domain = [["needaction", "=", false]];
-    const res = MailMessage._message_fetch(domain, search_term, before, after, false, limit);
-    const messagesWithNotification = res.messages.filter((message) => {
+    const res = MailMessage._message_fetch(domain, search_term, before, after, around, limit);
+    const { messages } = res;
+    delete res.messages;
+    const messagesWithNotification = messages.filter((message) => {
         const notifs = MailNotification.search_read([
             ["mail_message_id", "=", message.id],
             ["is_read", "=", true],
@@ -442,10 +461,13 @@ async function discuss_history_messages(request) {
         ]);
         return notifs.length > 0;
     });
-
     return {
         ...res,
-        messages: MailMessage.message_format(messagesWithNotification.map((message) => message.id)),
+        data: new mailDataHelpers.Store(
+            MailMessage.browse(messagesWithNotification.map((message) => message.id)),
+            makeKwArgs({ for_current_user: true })
+        ).get_result(),
+        messages: messages.map((message) => ({ id: message.id })),
     };
 }
 
@@ -458,11 +480,15 @@ async function discuss_inbox_messages(request) {
     const { after, around, before, limit = 30, search_term } = await parseRequestParams(request);
     const domain = [["needaction", "=", true]];
     const res = MailMessage._message_fetch(domain, search_term, before, after, around, limit);
+    const { messages } = res;
+    delete res.messages;
     return {
         ...res,
-        messages: MailMessage._message_format_personalize(
-            res.messages.map((message) => message.id)
-        ),
+        data: new mailDataHelpers.Store(
+            MailMessage.browse(messages.map((message) => message.id)),
+            makeKwArgs({ for_current_user: true, add_followers: true })
+        ).get_result(),
+        messages: messages.map((message) => ({ id: message.id })),
     };
 }
 
@@ -477,7 +503,6 @@ async function mail_link_preview(request) {
     const MailMessage = this.env["mail.message"];
 
     const { message_id } = await parseRequestParams(request);
-    const linkPreviews = [];
     const [message] = MailMessage.search_read([["id", "=", message_id]]);
     if (message.body.includes("https://make-link-preview.com")) {
         const linkPreviewId = MailLinkPreview.create({
@@ -487,11 +512,11 @@ async function mail_link_preview(request) {
             og_type: "article",
             source_url: "https://make-link-preview.com",
         });
-        const [linkPreview] = MailLinkPreview.search_read([["id", "=", linkPreviewId]]);
-        linkPreviews.push(MailLinkPreview._link_preview_format(linkPreview));
-        BusBus._sendone(MailMessage._bus_notification_target(message_id), "mail.record/insert", {
-            LinkPreview: linkPreviews,
-        });
+        BusBus._sendone(
+            MailMessage._bus_notification_target(message_id),
+            "mail.record/insert",
+            new mailDataHelpers.Store(MailLinkPreview.browse(linkPreviewId)).get_result()
+        );
     }
 }
 
@@ -527,10 +552,43 @@ registerRoute("/mail/message/post", mail_message_post);
 export async function mail_message_post(request) {
     /** @type {import("mock_models").DiscussChannel} */
     const DiscussChannel = this.env["discuss.channel"];
+    /** @type {import("mock_models").MailMessage} */
+    const MailMessage = this.env["mail.message"];
     /** @type {import("mock_models").MailThread} */
     const MailThread = this.env["mail.thread"];
+    /** @type {import("mock_models").ResPartner} */
+    const ResPartner = this.env["res.partner"];
 
-    const { context, post_data, thread_id, thread_model } = await parseRequestParams(request);
+    const {
+        context,
+        post_data,
+        thread_id,
+        thread_model,
+        partner_emails,
+        partner_additional_values,
+        canned_response_ids,
+    } = await parseRequestParams(request);
+    if (canned_response_ids) {
+        for (const cannedResponseId of canned_response_ids) {
+            this.env["mail.canned.response"].write([cannedResponseId], {
+                last_used: serializeDateTime(DateTime.now()),
+            });
+        }
+    }
+    if (partner_emails) {
+        post_data.partner_ids = post_data.partner_ids || [];
+        for (const email of partner_emails) {
+            const partner = ResPartner._filter([["email", "=", email]]);
+            if (partner.length !== 0) {
+                post_data.partner_ids.push(partner[0].id);
+            } else {
+                const partner_id = ResPartner.create(
+                    Object.assign({ email }, partner_additional_values[email] || {})
+                );
+                post_data.partner_ids.push(partner_id);
+            }
+        }
+    }
     const finalData = {};
     for (const allowedField of [
         "attachment_ids",
@@ -539,23 +597,26 @@ export async function mail_message_post(request) {
         "partner_ids",
         "subtype_xmlid",
         "parent_id",
-        "partner_emails",
-        "partner_additional_values",
     ]) {
         if (post_data[allowedField] !== undefined) {
             finalData[allowedField] = post_data[allowedField];
         }
     }
-    const kwargs = Kwargs({ ...finalData, context });
+    const kwargs = makeKwArgs({ ...finalData, context });
+    let messageId;
     if (thread_model === "discuss.channel") {
-        return DiscussChannel.message_post(thread_id, kwargs);
+        messageId = DiscussChannel.message_post(thread_id, kwargs);
+    } else {
+        const model = this.env[thread_model];
+        messageId = MailThread.message_post.call(model, [thread_id], {
+            ...kwargs,
+            model: thread_model,
+        });
     }
-    const model = this.env[thread_model];
-    return MailThread.message_post.call(
-        model,
-        [thread_id],
-        Kwargs({ ...kwargs, model: thread_model })
-    );
+    return new mailDataHelpers.Store(
+        MailMessage.browse(messageId),
+        makeKwArgs({ for_current_user: true })
+    ).get_result();
 }
 
 registerRoute("/mail/message/reaction", mail_message_add_reaction);
@@ -584,14 +645,27 @@ async function mail_message_update_content(request) {
 
     const { attachment_ids, body, message_id } = await parseRequestParams(request);
     MailMessage.write([message_id], { body, attachment_ids });
-    BusBus._sendone(MailMessage._bus_notification_target(message_id), "mail.record/insert", {
-        Message: {
-            id: message_id,
-            body,
-            attachments: IrAttachment._attachment_format(attachment_ids),
-        },
+    if (body === "" && attachment_ids.length === 0) {
+        MailMessage.write([message_id], { pinned_at: false });
+        MailMessage._cleanup_side_records([message_id]);
+    }
+    const [message] = MailMessage.search_read([["id", "=", message_id]]);
+    const broadcast_store = new mailDataHelpers.Store(IrAttachment.browse(attachment_ids));
+    broadcast_store.add("Message", {
+        id: message_id,
+        body,
+        attachments: attachment_ids.map((id) => ({ id })),
+        pinned_at: message.pinned_at,
     });
-    return MailMessage.message_format([message_id])[0];
+    BusBus._sendone(
+        MailMessage._bus_notification_target(message_id),
+        "mail.record/insert",
+        broadcast_store.get_result()
+    );
+    return new mailDataHelpers.Store(
+        MailMessage.browse(message_id),
+        makeKwArgs({ for_current_user: true })
+    ).get_result();
 }
 
 registerRoute("/discuss/channel/:cid/partner/:pid/avatar_128", partnerAvatar128);
@@ -685,20 +759,29 @@ async function discuss_starred_messages(request) {
     const { after, before, limit = 30, search_term } = await parseRequestParams(request);
     const domain = [["starred_partner_ids", "in", [this.env.user.partner_id]]];
     const res = MailMessage._message_fetch(domain, search_term, before, after, false, limit);
+    const { messages } = res;
+    delete res.messages;
     return {
         ...res,
-        messages: MailMessage.message_format(res.messages.map((message) => message.id)),
+        data: new mailDataHelpers.Store(
+            MailMessage.browse(messages.map((message) => message.id)),
+            makeKwArgs({ for_current_user: true })
+        ).get_result(),
+        messages: messages.map((message) => ({ id: message.id })),
     };
 }
 
 registerRoute("/mail/thread/data", mail_thread_data);
 /** @type {RouteCallback} */
-async function mail_thread_data(request) {
+export async function mail_thread_data(request) {
     /** @type {import("mock_models").MailThread} */
     const MailThread = this.env["mail.thread"];
 
     const { request_list, thread_model, thread_id } = await parseRequestParams(request);
-    return MailThread._get_mail_thread_data.call(this.env[thread_model], thread_id, request_list);
+    const records = this.env[thread_model].search([["id", "=", thread_id]]);
+    const store = new mailDataHelpers.Store();
+    MailThread._thread_to_store.call(this.env[thread_model], [...records], store, request_list);
+    return store.get_result();
 }
 
 registerRoute("/mail/thread/messages", mail_thread_messages);
@@ -715,23 +798,29 @@ async function mail_thread_messages(request) {
         ["message_type", "!=", "user_notification"],
     ];
     const res = MailMessage._message_fetch(domain, search_term, before, after, around, limit);
-    MailMessage.set_message_done(res.messages.map((message) => message.id));
+    const { messages } = res;
+    delete res.messages;
+    MailMessage.set_message_done(messages.map((message) => message.id));
     return {
         ...res,
-        messages: MailMessage.message_format(res.messages.map((message) => message.id)),
+        data: new mailDataHelpers.Store(
+            MailMessage.browse(messages.map((message) => message.id)),
+            makeKwArgs({ for_current_user: true })
+        ).get_result(),
+        messages: messages.map((message) => ({ id: message.id })),
     };
 }
 
 registerRoute("/mail/action", mail_action);
 /** @type {RouteCallback} */
 async function mail_action(request) {
-    return mailDataHelpers.processRequest.call(this, request);
+    return (await mailDataHelpers.processRequest.call(this, request)).get_result();
 }
 
 registerRoute("/mail/data", mail_data);
 /** @type {RouteCallback} */
 async function mail_data(request) {
-    return mailDataHelpers.processRequest.call(this, request);
+    return (await mailDataHelpers.processRequest.call(this, request)).get_result();
 }
 
 /** @type {RouteCallback} */
@@ -751,14 +840,12 @@ async function processRequest(request) {
     /** @type {import("mock_models").ResUsers} */
     const ResUsers = this.env["res.users"];
 
-    const res = {};
+    const store = new mailDataHelpers.Store();
     const args = await parseRequestParams(request);
     if ("init_messaging" in args) {
-        const initMessaging =
-            MailGuest._get_guest_from_context() && ResUsers._is_public(this.env.uid)
-                ? MailGuest._init_messaging(args.context)
-                : ResUsers._init_messaging([this.env.uid], args.context);
-        addToRes(res, initMessaging);
+        if (!MailGuest._get_guest_from_context() || !ResUsers._is_public(this.env.uid)) {
+            ResUsers._init_messaging([this.env.uid], store, args.context);
+        }
         const guest = ResUsers._is_public(this.env.uid) && MailGuest._get_guest_from_context();
         const members = DiscussChannelMember._filter([
             guest ? ["guest_id", "=", guest.id] : ["partner_id", "=", this.env.user.partner_id],
@@ -771,9 +858,7 @@ async function processRequest(request) {
         if (channelTypes) {
             channelsDomain.push(["channel_type", "in", channelTypes]);
         }
-        addToRes(res, {
-            Thread: DiscussChannel._channel_info(DiscussChannel.search(channelsDomain)),
-        });
+        store.add(DiscussChannel.search(channelsDomain));
     }
     if (args.failures && this.env.user?.partner_id) {
         const partner = ResPartner._filter([["id", "=", this.env.user.partner_id]], {
@@ -795,44 +880,41 @@ async function processRequest(request) {
             return notifications.length > 0;
         });
         messages.length = Math.min(messages.length, 100);
-        addToRes(res, {
-            Message: MailMessage._message_notification_format(
-                messages.map((message) => message.id)
-            ),
-        });
+        MailMessage._message_notifications_to_store(
+            messages.map((message) => message.id),
+            store
+        );
     }
     if (args.systray_get_activities && this.env.user?.partner_id) {
+        const bus_last_id = this.env["bus.bus"].lastBusNotificationId;
         const groups = ResUsers._get_activity_groups();
-        addToRes(res, {
-            Store: {
-                activityCounter: groups.reduce(
-                    (counter, group) => counter + (group.total_count || 0),
-                    0
-                ),
-                activityGroups: groups,
-            },
+        store.add({
+            activityCounter: groups.reduce(
+                (counter, group) => counter + (group.total_count || 0),
+                0
+            ),
+            activity_counter_bus_id: bus_last_id,
+            activityGroups: groups,
         });
     }
     if (args.channels_as_member) {
         const channels = DiscussChannel._get_channels_as_member();
-        addToRes(res, {
-            Message: channels
-                .map((channel) => {
-                    const channelMessages = MailMessage._filter([
-                        ["model", "=", "discuss.channel"],
-                        ["res_id", "=", channel.id],
-                    ]);
-                    const lastMessage = channelMessages.reduce((lastMessage, message) => {
-                        if (message.id > lastMessage.id) {
-                            return message;
-                        }
-                        return lastMessage;
-                    }, channelMessages[0]);
-                    return lastMessage ? MailMessage.message_format([lastMessage.id])[0] : false;
-                })
-                .filter((lastMessage) => lastMessage),
-            Thread: DiscussChannel._channel_info(channels.map((channel) => channel.id)),
-        });
+        store.add(
+            MailMessage.browse(
+                channels
+                    .map(
+                        (channel) =>
+                            MailMessage._filter([
+                                ["model", "=", "discuss.channel"],
+                                ["res_id", "=", channel.id],
+                            ]).sort((a, b) => b.id - a.id)[0]
+                    )
+                    .filter((lastMessage) => lastMessage)
+                    .map((message) => message.id)
+            ),
+            makeKwArgs({ for_current_user: true })
+        );
+        store.add(channels.map((channel) => channel.id));
     }
     if (args.canned_responses) {
         const domain = [
@@ -840,36 +922,139 @@ async function processRequest(request) {
             ["create_uid", "=", this.env.user.id],
             ["group_ids", "in", this.env.user.groups_id.map((group) => group.id)],
         ];
-        addToRes(res, {
-            CannedResponse: this.env["mail.canned.response"].search_read(domain, {
-                fields: ["source", "substitution"],
-            }),
-        });
+        store.add(
+            "CannedResponse",
+            this.env["mail.canned.response"].search_read(domain, ["source", "substitution"])
+        );
     }
-    return res;
+    return store;
 }
 
-function addToRes(res, data) {
-    for (const [key, val] of Object.entries(data)) {
-        if (Array.isArray(val)) {
-            if (!res[key]) {
-                res[key] = val;
-            } else {
-                res[key].push(...val);
-            }
-        } else if (typeof val === "object" && val !== null) {
-            if (!res[key]) {
-                res[key] = val;
-            } else {
-                Object.assign(res[key], val);
-            }
-        } else {
-            throw new Error("Unsupported return type");
+const ids_by_model = {
+    Persona: ["type", "id"],
+    Rtc: [],
+    Store: [],
+    Thread: ["model", "id"],
+};
+
+class Store {
+    constructor(data, values, kwargs) {
+        this.data = new Map();
+        if (data) {
+            this.add(...arguments);
         }
+    }
+
+    add(data, values, kwargs) {
+        if (!data) {
+            return this;
+        }
+        kwargs = unmakeKwArgs(getKwArgs(arguments, "data", "values"));
+        delete kwargs.data;
+        values = kwargs.values;
+        delete kwargs.values;
+        let model_name;
+        if (data instanceof models.Model) {
+            if (values) {
+                throw new Error(`expected empty values with recordset ${data}: ${values}`);
+            }
+            MockServer.env[data._name]._to_store(
+                data.map((idOrRecord) =>
+                    typeof idOrRecord === "number" ? idOrRecord : idOrRecord.id
+                ),
+                this,
+                makeKwArgs(kwargs)
+            );
+            return this;
+        } else if (typeof data === "object") {
+            if (values) {
+                throw new Error(`expected empty values with dict ${data}: ${values}`);
+            }
+            if (Object.keys(kwargs).length) {
+                throw new Error(`expected empty kwargs with dict ${data}: ${kwargs}`);
+            }
+            model_name = "Store";
+            values = data;
+        } else {
+            if (Object.keys(kwargs).length) {
+                throw new Error(`expected empty kwargs with model name ${data}: ${kwargs}`);
+            }
+            model_name = data;
+        }
+        if (typeof model_name !== "string") {
+            throw new Error(`expected string for model name: ${model_name}: ${values}`);
+        }
+        const ids = ids_by_model[model_name] || ["id"];
+        // handle singleton model: update single record in place
+        if (!ids.length) {
+            if (typeof values !== "object") {
+                throw new Error(`expected dict for singleton ${model_name}: ${values}`);
+            }
+            let record = this.data.get(model_name);
+            if (!record) {
+                record = {};
+                this.data.set(model_name, record);
+            }
+            Object.assign(record, values);
+            return this;
+        }
+        // handle model with ids: add or update existing records based on ids
+        if (!Array.isArray(values)) {
+            if (!values) {
+                return this;
+            }
+            values = [values];
+        }
+        if (!values.length) {
+            return this;
+        }
+        let records = this.data.get(model_name);
+        if (!records) {
+            records = new Map();
+            this.data.set(model_name, records);
+        }
+        for (const vals of values) {
+            if (typeof vals !== "object") {
+                throw new Error(`expected dict for ${model_name}: ${vals}`);
+            }
+            for (const i of ids) {
+                if (!vals[i]) {
+                    throw new Error(`missing id ${i} in ${model_name}: ${vals}`);
+                }
+            }
+            const index = ids.map((i) => vals[i]).join(" AND ");
+            let record = records.get(index);
+            if (!record) {
+                record = {};
+                records.set(index, record);
+            }
+            Object.assign(record, vals);
+        }
+        return this;
+    }
+
+    get_result() {
+        const res = {};
+        for (const [model_name, records] of this.data) {
+            const ids = ids_by_model[model_name] || ["id"];
+            if (!ids.length) {
+                // singleton
+                res[model_name] = { ...records };
+            } else {
+                res[model_name] = [...records.values()].map((record) => ({ ...record }));
+            }
+        }
+        return res;
+    }
+
+    toJSON() {
+        throw Error(
+            "Converting Store to JSON is not supported, you might want to call 'get_result()' instead."
+        );
     }
 }
 
 export const mailDataHelpers = {
-    addToRes,
     processRequest,
+    Store,
 };

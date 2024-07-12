@@ -269,6 +269,20 @@ test("performRPC: search_count with archived records", async () => {
     expect(result).toBe(2);
 });
 
+test("performRPC: read_group, no group", async function (assert) {
+    await makeMockServer();
+    const result = await ormRequest({
+        model: "bar",
+        method: "read_group",
+        kwargs: {
+            fields: ["foo:count"],
+            domain: [["foo", "=", -10]],
+            groupby: [],
+        },
+    });
+    expect(result).toEqual([{ __count: 0, foo: false, __domain: [["foo", "=", -10]] }]);
+});
+
 test("performRPC: read_group, group by char", async () => {
     await makeMockServer();
     const result = await ormRequest({
@@ -498,6 +512,66 @@ test("performRPC: read_group, group by date", async () => {
         { from: "2016-01-01", to: "2017-01-01" },
         { from: "2019-01-01", to: "2020-01-01" },
     ]);
+});
+
+test("performRPC: read_group, group by date with number granularity", async () => {
+    await makeMockServer();
+
+    const allGranularity = [
+        {
+            granularity: "day_of_week",
+            result: [1, 3, 4],
+            count: [2, 2, 2],
+        },
+        {
+            granularity: "day_of_month",
+            result: [11, 14, 15, 26, 30],
+            count: [1, 1, 2, 1, 1],
+        },
+        {
+            granularity: "day_of_year",
+            result: [102, 300, 349, 350, 364],
+            count: [1, 1, 1, 2, 1],
+        },
+        {
+            granularity: "iso_week_number",
+            result: [1, 15, 43, 50],
+            count: [1, 1, 1, 3],
+        },
+        {
+            granularity: "month_number",
+            result: [4, 10, 12],
+            count: [1, 1, 4],
+        },
+        {
+            granularity: "quarter_number",
+            result: [2, 4],
+            count: [1, 5],
+        },
+        {
+            granularity: "year_number",
+            result: [2016, 2019],
+            count: [5, 1],
+        },
+    ];
+
+    for (const { granularity, result, count } of allGranularity) {
+        const response = await ormRequest({
+            model: "bar",
+            method: "read_group",
+            kwargs: {
+                fields: ["foo"],
+                domain: [],
+                groupby: [`date:${granularity}`],
+            },
+        });
+
+        expect(response.map((x) => x[`date:${granularity}`])).toEqual(result);
+        expect(response.map((x) => x.date_count)).toEqual(count);
+        expect(response.map((x) => x.__domain)).toEqual(
+            result.map((r) => [[`date.${granularity}`, "=", r]])
+        );
+    }
 });
 
 test("performRPC: read_group, group by datetime", async () => {
@@ -742,6 +816,81 @@ test("performRPC: read_group, group by datetime", async () => {
     ]);
 });
 
+test("performRPC: read_group, group by datetime with number granularity", async () => {
+    await makeMockServer();
+
+    const allGranularity = [
+        {
+            granularity: "second_number",
+            result: [56],
+            count: [6],
+        },
+        {
+            granularity: "minute_number",
+            result: [34],
+            count: [6],
+        },
+        {
+            granularity: "hour_number",
+            result: [13],
+            count: [6],
+        },
+        {
+            granularity: "day_of_week",
+            result: [1, 3, 4],
+            count: [2, 2, 2],
+        },
+        {
+            granularity: "day_of_month",
+            result: [11, 14, 15, 26, 30],
+            count: [1, 1, 2, 1, 1],
+        },
+        {
+            granularity: "day_of_year",
+            result: [102, 300, 349, 350, 364],
+            count: [1, 1, 1, 2, 1],
+        },
+        {
+            granularity: "iso_week_number",
+            result: [1, 15, 43, 50],
+            count: [1, 1, 1, 3],
+        },
+        {
+            granularity: "month_number",
+            result: [4, 10, 12],
+            count: [1, 1, 4],
+        },
+        {
+            granularity: "quarter_number",
+            result: [2, 4],
+            count: [1, 5],
+        },
+        {
+            granularity: "year_number",
+            result: [2016, 2019],
+            count: [5, 1],
+        },
+    ];
+
+    for (const { granularity, result, count } of allGranularity) {
+        const response = await ormRequest({
+            model: "bar",
+            method: "read_group",
+            kwargs: {
+                fields: ["foo"],
+                domain: [],
+                groupby: [`datetime:${granularity}`],
+            },
+        });
+
+        expect(response.map((x) => x[`datetime:${granularity}`])).toEqual(result);
+        expect(response.map((x) => x.datetime_count)).toEqual(count);
+        expect(response.map((x) => x.__domain)).toEqual(
+            result.map((r) => [[`datetime.${granularity}`, "=", r]])
+        );
+    }
+});
+
 test("performRPC: read_group, group by m2m", async () => {
     await makeMockServer();
 
@@ -771,6 +920,45 @@ test("performRPC: read_group, group by m2m", async () => {
             __domain: [["partner_ids", "=", false]],
             partner_ids_count: 3,
         },
+    ]);
+});
+
+test("performRPC: read_group, order by date with granularity", async () => {
+    await makeMockServer();
+    let result = await ormRequest({
+        model: "bar",
+        method: "read_group",
+        kwargs: {
+            fields: ["foo"],
+            domain: [],
+            groupby: ["date:day"],
+            orderby: "date:day ASC",
+        },
+    });
+    expect(result.map((x) => x["date:day"])).toEqual([
+        "2016-04-11",
+        "2016-10-26",
+        "2016-12-14",
+        "2016-12-15",
+        "2019-12-30",
+    ]);
+
+    result = await ormRequest({
+        model: "bar",
+        method: "read_group",
+        kwargs: {
+            fields: ["foo"],
+            domain: [],
+            groupby: ["date:day"],
+            orderby: "date:day DESC",
+        },
+    });
+    expect(result.map((x) => x["date:day"])).toEqual([
+        "2019-12-30",
+        "2016-12-15",
+        "2016-12-14",
+        "2016-10-26",
+        "2016-04-11",
     ]);
 });
 
@@ -993,6 +1181,7 @@ test("performRPC: read_group with array_agg", async () => {
     ).resolves.toEqual([
         {
             __count: 6,
+            __domain: [],
             aggregateLabel: aggregateValue,
         },
     ]);
@@ -1009,6 +1198,7 @@ test("performRPC: read_group with array_agg", async () => {
     ).resolves.toEqual([
         {
             __count: 6,
+            __domain: [],
             partner_id: aggregateValue,
         },
     ]);
@@ -1030,6 +1220,7 @@ test("performRPC: read_group with array_agg on id", async () => {
     ).resolves.toEqual([
         {
             __count: 6,
+            __domain: [],
             aggregateLabel: [1, 2, 3, 4, 5, 6],
         },
     ]);
@@ -1046,6 +1237,7 @@ test("performRPC: read_group with array_agg on id", async () => {
     ).resolves.toEqual([
         {
             __count: 3,
+            __domain: [["id", "in", [2, 3, 5]]],
             id: [2, 3, 5],
         },
     ]);
@@ -1069,6 +1261,7 @@ test("performRPC: read_group with array_agg on an integer field", async () => {
     ).resolves.toEqual([
         {
             __count: 6,
+            __domain: [],
             aggregateLabel: aggregateValue,
         },
     ]);
@@ -1085,6 +1278,7 @@ test("performRPC: read_group with array_agg on an integer field", async () => {
     ).resolves.toEqual([
         {
             __count: 6,
+            __domain: [],
             foo: aggregateValue,
         },
     ]);
@@ -1106,6 +1300,7 @@ test("performRPC: read_group with count_distinct", async () => {
     ).resolves.toEqual([
         {
             __count: 6,
+            __domain: [],
             aggregateLabel: 2,
         },
     ]);
@@ -1122,6 +1317,7 @@ test("performRPC: read_group with count_distinct", async () => {
     ).resolves.toEqual([
         {
             __count: 6,
+            __domain: [],
             partner_id: 2,
         },
     ]);
@@ -1138,6 +1334,7 @@ test("performRPC: read_group with count_distinct", async () => {
     ).resolves.toEqual([
         {
             __count: 0,
+            __domain: [[0, "=", 1]],
             partner_id: 0,
         },
     ]);
@@ -1154,6 +1351,7 @@ test("performRPC: read_group with count_distinct", async () => {
     ).resolves.toEqual([
         {
             __count: 6,
+            __domain: [],
             partner_ref: 2,
         },
     ]);

@@ -308,13 +308,6 @@ class Slide(models.Model):
         for slide in self:
             slide.questions_count = len(slide.question_ids)
 
-    def _has_additional_resources(self, resource_type=None):
-        """Sudo required for public user to know if the course has additional
-        resources that they will be able to access once a member."""
-        self.ensure_one()
-        domain = [('resource_type', '=', resource_type)] if resource_type else []
-        return bool(self.sudo().slide_resource_ids.filtered_domain(domain))
-
     @api.depends('website_message_ids.res_id', 'website_message_ids.model', 'website_message_ids.message_type')
     def _compute_comments_count(self):
         for slide in self:
@@ -1401,3 +1394,9 @@ class Slide(models.Model):
             data['course'] = _('Course: %s', slide.channel_id.name)
             data['course_url'] = slide.channel_id.website_url
         return results_data
+
+    def open_website_url(self):
+        """ Overridden to use a relative URL instead of an absolute when website_id is False. """
+        if self.website_id:
+            return super().open_website_url()
+        return self.env['website'].get_client_action(f'/slides/slide/{slug(self)}')

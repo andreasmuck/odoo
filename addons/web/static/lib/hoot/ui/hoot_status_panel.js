@@ -16,7 +16,16 @@ import { HootTestPath } from "./hoot_test_path";
 // Global
 //-----------------------------------------------------------------------------
 
-const { Object, Math, clearInterval, document, performance, setInterval } = globalThis;
+const {
+    Object: { values: $values },
+    Math: { ceil: $ceil, floor: $floor, max: $max, min: $min, random: $random },
+    clearInterval,
+    document,
+    performance,
+    setInterval,
+} = globalThis;
+/** @type {Performance["now"]} */
+const $now = performance.now.bind(performance);
 
 //-----------------------------------------------------------------------------
 // Internal
@@ -26,7 +35,7 @@ const { Object, Math, clearInterval, document, performance, setInterval } = glob
  * @param {number} min
  * @param {number} max
  */
-const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+const randInt = (min, max) => $floor($random() * (max - min + 1)) + min;
 
 /**
  * @param {string} content
@@ -62,7 +71,7 @@ const updateTitle = (failed) => {
     if (title.startsWith(toAdd)) {
         return;
     }
-    for (const prefix of Object.values(TITLE_PREFIX)) {
+    for (const prefix of $values(TITLE_PREFIX)) {
         if (title.startsWith(prefix)) {
             title = title.slice(prefix.length);
             break;
@@ -99,9 +108,7 @@ export class HootStatusPanel extends Component {
                         class="animate-spin w-4 h-4 border-2 border-pass border-t-transparent rounded-full"
                         role="status"
                         title="Running"
-                    >
-                        <span class="visually-hidden">Running</span>
-                    </div>
+                    />
                 </t>
                 <t t-else="">
                     <span class="hidden md:block">
@@ -176,7 +183,7 @@ export class HootStatusPanel extends Component {
                     <i t-attf-class="fa fa-sort-numeric-{{ uiState.sortResults or 'desc' }} transition" />
                 </button>
                 <t t-if="uiState.totalResults gt uiState.resultsPerPage">
-                    <t t-set="lastPage" t-value="Math.floor(uiState.totalResults / uiState.resultsPerPage)" />
+                    <t t-set="lastPage" t-value="getLastPage()" />
                     <div class="flex gap-1 animate-slide-left">
                         <button
                             class="px-1 transition-color"
@@ -210,9 +217,9 @@ export class HootStatusPanel extends Component {
         const startTimer = () => {
             stopTimer();
 
-            currentTestStart = performance.now();
+            currentTestStart = $now();
             intervalId = setInterval(() => {
-                this.state.timer = Math.floor(performance.now() - currentTestStart);
+                this.state.timer = $floor($now() - currentTestStart);
             }, 1000);
         };
 
@@ -239,11 +246,11 @@ export class HootStatusPanel extends Component {
         let currentTestStart;
         let intervalId = 0;
 
-        runner.__beforeAll(() => {
+        runner.beforeAll(() => {
             this.state.debug = runner.debug;
         });
 
-        runner.__afterAll(() => {
+        runner.afterAll(() => {
             if (!runner.config.headless) {
                 stopTimer();
             }
@@ -260,8 +267,8 @@ export class HootStatusPanel extends Component {
         });
 
         if (!runner.config.headless) {
-            runner.__beforeEach(startTimer);
-            runner.__afterPostTest(stopTimer);
+            runner.beforeEach(startTimer);
+            runner.afterPostTest(stopTimer);
         }
 
         useEffect(
@@ -289,15 +296,17 @@ export class HootStatusPanel extends Component {
         }
     }
 
+    getLastPage() {
+        const { resultsPerPage, totalResults } = this.uiState;
+        return $max($floor((totalResults - 1) / resultsPerPage), 0);
+    }
+
     nextPage() {
-        this.uiState.resultsPage = Math.min(
-            this.uiState.resultsPage + 1,
-            Math.floor(this.uiState.totalResults / this.uiState.resultsPerPage)
-        );
+        this.uiState.resultsPage = $min(this.uiState.resultsPage + 1, this.getLastPage());
     }
 
     previousPage() {
-        this.uiState.resultsPage = Math.max(this.uiState.resultsPage - 1, 0);
+        this.uiState.resultsPage = $max(this.uiState.resultsPage - 1, 0);
     }
 
     sortResults() {
@@ -325,7 +334,7 @@ export class HootStatusPanel extends Component {
 
         while (this.progressBarIndex < done.length) {
             const test = done[this.progressBarIndex];
-            const x = Math.floor(this.progressBarIndex * cellSize);
+            const x = $floor(this.progressBarIndex * cellSize);
             switch (test.status) {
                 case Test.ABORTED:
                     ctx.fillStyle = colors.abort;
@@ -340,7 +349,7 @@ export class HootStatusPanel extends Component {
                     ctx.fillStyle = colors.skip;
                     break;
             }
-            ctx.fillRect(x, 0, Math.ceil(cellSize), height);
+            ctx.fillRect(x, 0, $ceil(cellSize), height);
             this.progressBarIndex++;
         }
     }

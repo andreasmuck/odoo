@@ -27,24 +27,21 @@ patch(registry.category("web_tour.tours").get("crm_tour"), {
                 trigger: ".o_button_generate_leads",
                 content: markup(_t("Looking for more opportunities?<br>Try the <b>Lead Generation</b> tool.")),
                 position: "bottom",
-                run: function (actions) {
-                    actions.auto('.o_button_generate_leads');
-                },
+                run: "click .o_button_generate_leads",
             },
             {
                 trigger: ".modal-body .o_industry",
                 content: _t("Which Industry do you want to target?"),
                 position: "right",
+                run: "click",
             },
             {
                 trigger: ".modal-footer button[name=action_submit]",
                 content: _t("Now, just let the magic happen!"),
                 position: "bottom",
-                run: function (actions) {
-                    actions.auto(".modal-footer button[special=cancel]");
-                },
+                run: "click .modal-footer button[special=cancel]",
             }
         );
-        return originalSteps
+        return originalSteps;
     },
 });

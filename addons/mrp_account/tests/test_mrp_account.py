@@ -4,6 +4,7 @@
 from odoo.addons.mrp.tests.common import TestMrpCommon
 from odoo.addons.stock_account.tests.test_account_move import TestAccountMoveStockCommon
 from odoo.tests import Form, tagged
+from odoo.tests.common import new_test_user
 
 
 class TestMrpAccount(TestMrpCommon):
@@ -45,26 +46,26 @@ class TestMrpAccount(TestMrpCommon):
             ]})
         cls.dining_table = cls.env['product.product'].create({
             'name': 'Table (MTO)',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'serial',
         })
         cls.product_table_sheet = cls.env['product.product'].create({
             'name': 'Table Top',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'serial',
         })
         cls.product_table_leg = cls.env['product.product'].create({
             'name': 'Table Leg',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'lot',
         })
         cls.product_bolt = cls.env['product.product'].create({
             'name': 'Bolt',
-            'type': 'product',
+            'is_storable': True,
         })
         cls.product_screw = cls.env['product.product'].create({
             'name': 'Screw',
-            'type': 'product',
+            'is_storable': True,
         })
 
         cls.mrp_workcenter = cls.env['mrp.workcenter'].create({
@@ -134,7 +135,7 @@ class TestMrpAccount(TestMrpCommon):
         cls.product_bolt.categ_id = cls.categ_standard.id
         cls.product_screw.categ_id = cls.categ_standard.id
         cls.env['stock.move'].search([('product_id', 'in', [cls.product_bolt.id, cls.product_screw.id])])._do_unreserve()
-        (cls.product_bolt + cls.product_screw).write({'type': 'product'})
+        (cls.product_bolt + cls.product_screw).write({'is_storable': True})
         cls.dining_table.tracking = 'none'
 
     def test_00_production_order_with_accounting(self):
@@ -188,6 +189,14 @@ class TestMrpAccount(TestMrpCommon):
         # 1 table head at 20 + 4 table leg at 15 + 4 bolt at 10 + 10 screw at 10 + 1*20 (extra cost)
         self.assertEqual(move_value, 141, 'Thing should have the correct price')
 
+    def test_stock_user_without_account_permissions_can_create_bom(self):
+        mrp_manager = new_test_user(
+            self.env, 'temp_mrp_manager', 'mrp.group_mrp_manager,product.group_product_variant',
+        )
+
+        bom_form = Form(self.env['mrp.bom'].with_user(mrp_manager))
+        bom_form.product_id = self.dining_table
+
 
 @tagged("post_install", "-at_install")
 class TestMrpAccountMove(TestAccountMoveStockCommon):
@@ -205,7 +214,7 @@ class TestMrpAccountMove(TestAccountMoveStockCommon):
         cls.product_B = cls.env["product.product"].create(
             {
                 "name": "Product B",
-                "type": "product",
+                "is_storable": True,
                 "default_code": "prda",
                 "categ_id": cls.auto_categ.id,
                 "taxes_id": [(5, 0, 0)],

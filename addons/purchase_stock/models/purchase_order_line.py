@@ -34,7 +34,7 @@ class PurchaseOrderLine(models.Model):
     def _compute_qty_received_method(self):
         super(PurchaseOrderLine, self)._compute_qty_received_method()
         for line in self.filtered(lambda l: not l.display_type):
-            if line.product_id.type in ['consu', 'product']:
+            if line.product_id.type == 'consu':
                 line.qty_received_method = 'stock_moves'
 
     def _get_po_line_moves(self):
@@ -44,7 +44,7 @@ class PurchaseOrderLine(models.Model):
             moves = moves.filtered(lambda r: fields.Date.context_today(r, r.date) <= self._context['accrual_entry_date'])
         return moves
 
-    @api.depends('move_ids.state', 'move_ids.product_uom_qty', 'move_ids.product_uom')
+    @api.depends('move_ids.state', 'move_ids.product_uom', 'move_ids.quantity')
     def _compute_qty_received(self):
         from_stock_lines = self.filtered(lambda order_line: order_line.qty_received_method == 'stock_moves')
         super(PurchaseOrderLine, self - from_stock_lines)._compute_qty_received()
@@ -77,7 +77,7 @@ class PurchaseOrderLine(models.Model):
             warehouse = line.order_id.picking_type_id.warehouse_id
             line.forecasted_issue = False
             if line.product_id:
-                virtual_available = line.product_id.with_context(warehouse=warehouse.id, to_date=line.date_planned).virtual_available
+                virtual_available = line.product_id.with_context(warehouse_id=warehouse.id, to_date=line.date_planned).virtual_available
                 if line.state == 'draft':
                     virtual_available += line.product_uom_qty
                 if virtual_available < 0:
@@ -124,7 +124,7 @@ class PurchaseOrderLine(models.Model):
         }
         warehouse = self.order_id.picking_type_id.warehouse_id
         if warehouse:
-            action['context']['warehouse'] = warehouse.id
+            action['context']['warehouse_id'] = warehouse.id
         return action
 
     def unlink(self):
@@ -159,22 +159,28 @@ class PurchaseOrderLine(models.Model):
 
     def _create_or_update_picking(self):
         for line in self:
-            if line.product_id and line.product_id.type in ('product', 'consu'):
+            if line.product_id and line.product_id.type == 'consu':
+                rounding = line.product_uom.rounding
                 # Prevent decreasing below received quantity
-                if float_compare(line.product_qty, line.qty_received, line.product_uom.rounding) < 0:
+                if float_compare(line.product_qty, line.qty_received, precision_rounding=rounding) < 0:
                     raise UserError(_('You cannot decrease the ordered quantity below the received quantity.\n'
                                       'Create a return first.'))
 
-                if float_compare(line.product_qty, line.qty_invoiced, line.product_uom.rounding) == -1:
+                if float_compare(line.product_qty, line.qty_invoiced, precision_rounding=rounding) < 0 and line.account_move_line_ids:
                     # If the quantity is now below the invoiced quantity, create an activity on the vendor bill
                     # inviting the user to create a refund.
-                    line.invoice_lines[0].move_id.activity_schedule(
+                    line.account_move_line_ids[0].move_id.activity_schedule(
                         'mail.mail_activity_data_warning',
                         note=_('The quantities on your purchase order indicate less than billed. You should ask for a refund.'))
 
                 # If the user increased quantity of existing line or created a new line
-                pickings = line.order_id.picking_ids.filtered(lambda x: x.state not in ('done', 'cancel') and x.location_dest_id.usage in ('internal', 'transit', 'customer'))
-                picking = pickings and pickings[0] or False
+                # Give priority to the pickings related to the line
+                line_pickings = line.move_ids.picking_id.filtered(lambda p: p.state not in ('done', 'cancel') and p.location_dest_id.usage in ('internal', 'transit', 'customer'))
+                if line_pickings:
+                    picking = line_pickings[0]
+                else:
+                    pickings = line.order_id.picking_ids.filtered(lambda x: x.state not in ('done', 'cancel') and x.location_dest_id.usage in ('internal', 'transit', 'customer'))
+                    picking = pickings and pickings[0] or False
                 if not picking:
                     if not line.product_qty > line.qty_received:
                         continue
@@ -189,9 +195,9 @@ class PurchaseOrderLine(models.Model):
         order = self.order_id
         price_unit = self.price_unit
         price_unit_prec = self.env['decimal.precision'].precision_get('Product Price')
-        if self.taxes_id:
+        if self.tax_ids:
             qty = self.product_qty or 1
-            price_unit = self.taxes_id.with_context(round=False).compute_all(
+            price_unit = self.tax_ids.with_context(round=False).compute_all(
                 price_unit, currency=self.order_id.currency_id, quantity=qty, product=self.product_id, partner=self.order_id.partner_id
             )['total_void']
             price_unit = price_unit / qty
@@ -202,13 +208,18 @@ class PurchaseOrderLine(models.Model):
                 price_unit, order.company_id.currency_id, self.company_id, self.date_order or fields.Date.today(), round=False)
         return float_round(price_unit, precision_digits=price_unit_prec)
 
+    def _get_move_dests_initial_demand(self, move_dests):
+        return self.product_id.uom_id._compute_quantity(
+            sum(move_dests.filtered(lambda m: m.state != 'cancel' and m.location_dest_id.usage != 'supplier').mapped('product_qty')),
+            self.product_uom, rounding_method='HALF-UP')
+
     def _prepare_stock_moves(self, picking):
         """ Prepare the stock moves data for one order line. This function returns a list of
         dictionary ready to be used in stock.move's create()
         """
         self.ensure_one()
         res = []
-        if self.product_id.type not in ['product', 'consu']:
+        if self.product_id.type != 'consu':
             return res
 
         price_unit = self._get_stock_move_price_unit()
@@ -221,9 +232,7 @@ class PurchaseOrderLine(models.Model):
             qty_to_attach = 0
             qty_to_push = self.product_qty - qty
         else:
-            move_dests_initial_demand = self.product_id.uom_id._compute_quantity(
-                sum(move_dests.filtered(lambda m: m.state != 'cancel' and m.location_dest_id.usage != 'supplier').mapped('product_qty')),
-                self.product_uom, rounding_method='HALF-UP')
+            move_dests_initial_demand = self._get_move_dests_initial_demand(move_dests)
             qty_to_attach = move_dests_initial_demand - qty
             qty_to_push = self.product_qty - move_dests_initial_demand
 
@@ -252,9 +261,9 @@ class PurchaseOrderLine(models.Model):
     def _check_orderpoint_picking_type(self):
         warehouse_loc = self.order_id.picking_type_id.warehouse_id.view_location_id
         dest_loc = self.move_dest_ids.location_id or self.orderpoint_id.location_id
-        if warehouse_loc and dest_loc and dest_loc.warehouse_id and not warehouse_loc.parent_path in dest_loc[0].parent_path:
-            raise UserError(_('For the product %s, the warehouse of the operation type (%s) is inconsistent with the location (%s) of the reordering rule (%s). Change the operation type or cancel the request for quotation.',
-                              self.product_id.display_name, self.order_id.picking_type_id.display_name, self.orderpoint_id.location_id.display_name, self.orderpoint_id.display_name))
+        if warehouse_loc and dest_loc and dest_loc.warehouse_id and warehouse_loc.parent_path not in dest_loc[0].parent_path:
+            raise UserError(_('The warehouse of operation type (%(operation_type)s) is inconsistent with location (%(location)s) of reordering rule (%(reordering_rule)s) for product %(product)s. Change the operation type or cancel the request for quotation.',
+                              product=self.product_id.display_name, operation_type=self.order_id.picking_type_id.display_name, location=self.orderpoint_id.location_id.display_name, reordering_rule=self.orderpoint_id.display_name))
 
     def _prepare_stock_move_vals(self, picking, price_unit, product_uom_qty, product_uom):
         self.ensure_one()

@@ -9,11 +9,11 @@ registry.category("web_tour.tours").add('tests_shared_js_python', {
     {
         content: "Click",
         trigger: 'button',
+        run: "click",
     },
     {
         content: "Wait",
         trigger: 'button.text-success',
         timeout: 3000,
-        run: () => {},
     },
 ]});

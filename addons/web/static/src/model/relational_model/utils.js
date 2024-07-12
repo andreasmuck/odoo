@@ -14,6 +14,7 @@ import { omit } from "@web/core/utils/objects";
 import { effect } from "@web/core/utils/reactive";
 import { batched } from "@web/core/utils/timing";
 import { orderByToString } from "@web/search/utils/order_by";
+import { rpc } from "@web/core/network/rpc";
 
 /**
  * @param {boolean || string} value boolean or string encoding a python expression
@@ -615,22 +616,38 @@ function getValueFromGroupData(field, rawValue, range) {
  * expected by the server for a write.
  * For instance, for a many2one: { id: 3, display_name: "Marc" } => 3.
  */
-export function fromUnityToServerValues(values, fields, activeFields, { withReadonly } = {}) {
+export function fromUnityToServerValues(
+    values,
+    fields,
+    activeFields,
+    { withReadonly, context } = {}
+) {
     const { CREATE, UPDATE } = x2ManyCommands;
     const serverValues = {};
     for (const fieldName in values) {
         let value = values[fieldName];
         const field = fields[fieldName];
-        if (!withReadonly && field.readonly) {
-            continue;
+        const activeField = activeFields[fieldName];
+        if (!withReadonly) {
+            if (field.readonly) {
+                continue;
+            }
+            try {
+                if (evaluateExpr(activeField.readonly, context)) {
+                    continue;
+                }
+            } catch {
+                // if the readonly expression depends on other fields, we can't evaluate it as we
+                // didn't read the record, so we simply ignore it
+            }
         }
         switch (fields[fieldName].type) {
             case "one2many":
             case "many2many":
                 value = value.map((c) => {
                     if (c[0] === CREATE || c[0] === UPDATE) {
-                        const _fields = activeFields[fieldName].related.fields;
-                        const _activeFields = activeFields[fieldName].related.activeFields;
+                        const _fields = activeField.related.fields;
+                        const _activeFields = activeField.related.activeFields;
                         return [
                             c[0],
                             c[1],
@@ -712,4 +729,114 @@ export function useRecordObserver(callback) {
             return fct();
         }
     });
+}
+
+/**
+ * Resequence records based on provided parameters.
+ *
+ * @param {Object} params
+ * @param {Array} params.records - The list of records to resequence.
+ * @param {string} params.resModel - The model to be used for resequencing.
+ * @param {Object} params.orm
+ * @param {string} params.fieldName - The field used to handle the sequence.
+ * @param {number} params.movedId - The id of the record being moved.
+ * @param {number} [params.targetId] - The id of the target position, the record will be resequenced
+ *                                     after the target. If undefined, the record will be resequenced
+ *                                     as the first record.
+ * @param {Boolean} [params.asc] - Resequence in ascending or descending order
+ * @param {Function} [params.getSequence] - Function to get the sequence of a record.
+ * @param {Function} [params.getResId] - Function to get the resID of the record.
+ * @param {Object} [params.context]
+ * @returns {Promise<any>} - The list of the resequenced fieldName
+ */
+export async function resequence({
+    records,
+    resModel,
+    orm,
+    fieldName,
+    movedId,
+    targetId,
+    asc = true,
+    getSequence = (record) => record[fieldName],
+    getResId = (record) => record.id,
+    context,
+}) {
+    // Find indices
+    const fromIndex = records.findIndex((d) => d.id === movedId);
+    let toIndex = 0;
+    if (targetId !== null) {
+        const targetIndex = records.findIndex((d) => d.id === targetId);
+        toIndex = fromIndex > targetIndex ? targetIndex + 1 : targetIndex;
+    }
+
+    // Determine which records/groups need to be modified
+    const firstIndex = Math.min(fromIndex, toIndex);
+    const lastIndex = Math.max(fromIndex, toIndex) + 1;
+    let reorderAll = records.some((record) => getSequence(record) === undefined);
+    if (!reorderAll) {
+        let lastSequence = (asc ? -1 : 1) * Infinity;
+        for (let index = 0; index < records.length; index++) {
+            const sequence = getSequence(records[index]);
+            if (
+                ((index < firstIndex || index >= lastIndex) &&
+                    ((asc && lastSequence >= sequence) || (!asc && lastSequence <= sequence))) ||
+                (index >= firstIndex && index < lastIndex && lastSequence === sequence)
+            ) {
+                reorderAll = true;
+            }
+            lastSequence = sequence;
+        }
+    }
+
+    // Save the original list in case of error
+    const originalOrder = [...records];
+    // Perform the resequence in the list of records/groups
+    const record = records[fromIndex];
+    if (fromIndex !== toIndex) {
+        records.splice(fromIndex, 1);
+        records.splice(toIndex, 0, record);
+    }
+
+    // Creates the list of records/groups to modify
+    let toReorder = records;
+    if (!reorderAll) {
+        toReorder = toReorder.slice(firstIndex, lastIndex).filter((r) => r.id !== movedId);
+        if (fromIndex < toIndex) {
+            toReorder.push(record);
+        } else {
+            toReorder.unshift(record);
+        }
+    }
+    if (!asc) {
+        toReorder.reverse();
+    }
+
+    const resIds = toReorder.map((d) => getResId(d)).filter((id) => id && !isNaN(id));
+    const sequences = toReorder.map(getSequence);
+    const offset = sequences.length && Math.min(...sequences);
+
+    // Try to write new sequences on the affected records/groups
+    const params = {
+        model: resModel,
+        ids: resIds,
+        context: context,
+        field: fieldName,
+    };
+    if (offset) {
+        params.offset = offset;
+    }
+    try {
+        const wasResequenced = await rpc("/web/dataset/resequence", params);
+        if (!wasResequenced) {
+            return;
+        }
+    } catch (error) {
+        // If the server fails to resequence, rollback the original list
+        records.splice(0, records.length, ...originalOrder);
+        throw error;
+    }
+
+    // Read the actual values set by the server and update the records/groups
+    const kwargs = { context };
+    return orm.read(resModel, resIds, [fieldName], kwargs);
 }

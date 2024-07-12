@@ -19,7 +19,7 @@ class AccountMoveLine(models.Model):
                 bom = boms[0]
                 is_line_reversing = self.move_id.move_type == 'out_refund'
                 qty_to_invoice = self.product_uom_id._compute_quantity(self.quantity, self.product_id.uom_id)
-                account_moves = so_line.invoice_lines.move_id.filtered(lambda m: m.state == 'posted' and bool(m.reversed_entry_id) == is_line_reversing)
+                account_moves = so_line.account_move_line_ids.move_id.filtered(lambda m: m.state == 'posted' and bool(m.reversed_entry_id) == is_line_reversing)
                 posted_invoice_lines = account_moves.line_ids.filtered(lambda l: l.display_type == 'cogs' and l.product_id == self.product_id and l.balance > 0)
                 qty_invoiced = sum([x.product_uom_id._compute_quantity(x.quantity, x.product_id.uom_id) for x in posted_invoice_lines])
                 reversal_cogs = posted_invoice_lines.move_id.reversal_move_id.line_ids.filtered(lambda l: l.display_type == 'cogs' and l.product_id == self.product_id and l.balance > 0)
@@ -28,7 +28,7 @@ class AccountMoveLine(models.Model):
                 moves = so_line.move_ids
                 average_price_unit = 0
                 components_qty = so_line._get_bom_component_qty(bom)
-                storable_components = self.env['product.product'].search([('id', 'in', list(components_qty.keys())), ('type', '=', 'product')])
+                storable_components = self.env['product.product'].search([('id', 'in', list(components_qty.keys())), ('is_storable', '=', True)])
                 for product in storable_components:
                     factor = components_qty[product.id]['qty']
                     prod_moves = moves.filtered(lambda m: m.product_id == product)

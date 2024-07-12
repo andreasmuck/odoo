@@ -134,7 +134,7 @@ def _build_url_w_params(url_string, query_params, remove_duplicates=True):
 class CustomerPortal(Controller):
 
     MANDATORY_BILLING_FIELDS = ["name", "phone", "email", "street", "city", "country_id"]
-    OPTIONAL_BILLING_FIELDS = ["zipcode", "state_id", "vat", "company_name"]
+    OPTIONAL_BILLING_FIELDS = ["street2", "zipcode", "state_id", "vat", "company_name"]
 
     _items_per_page = 80
 
@@ -169,7 +169,12 @@ class CustomerPortal(Controller):
 
     @route(['/my/counters'], type='json', auth="user", website=True)
     def counters(self, counters, **kw):
-        return self._prepare_home_portal_values(counters)
+        cache = (request.session.portal_counters or {}).copy()
+        res = self._prepare_home_portal_values(counters)
+        cache.update({k: bool(v) for k, v in res.items() if k.endswith('_count')})
+        if cache != request.session.portal_counters:
+            request.session.portal_counters = cache
+        return res
 
     @route(['/my', '/my/home'], type='http', auth="user", website=True)
     def home(self, **kw):
@@ -276,12 +281,13 @@ class CustomerPortal(Controller):
         values = self._prepare_portal_layout_values()
         values['get_error'] = get_error
         values['open_deactivate_modal'] = True
+        credential = {'login': request.env.user.login, 'password': password, 'type': 'password'}
 
         if validation != request.env.user.login:
             values['errors'] = {'deactivate': 'validation'}
         else:
             try:
-                request.env['res.users']._check_credentials(password, {'interactive': True})
+                request.env['res.users']._check_credentials(credential, {'interactive': True})
                 request.env.user.sudo()._deactivate_portal_user(**post)
                 request.session.logout()
                 return request.redirect('/web/login?message=%s' % urls.url_quote(_('Account deleted!')))
@@ -296,7 +302,7 @@ class CustomerPortal(Controller):
         })
 
     @http.route('/portal/attachment/add', type='http', auth='public', methods=['POST'], website=True)
-    def attachment_add(self, name, file, res_model, res_id, access_token=None, **kwargs):
+    def attachment_add(self, name, file, thread_model, thread_id, access_token=None):
         """Process a file uploaded from the portal chatter and create the
         corresponding `ir.attachment`.
 
@@ -309,13 +315,13 @@ class CustomerPortal(Controller):
         :param file: the file to save
         :type file: werkzeug.FileStorage
 
-        :param res_model: name of the model of the original document.
+        :param thread_model: name of the model of the original document.
             To check access rights only, it will not be saved here.
-        :type res_model: string
+        :type thread_model: string
 
-        :param res_id: id of the original document.
+        :param thread_id: id of the original document.
             To check access rights only, it will not be saved here.
-        :type res_id: int
+        :type thread_id: int
 
         :param access_token: access_token of the original document.
             To check access rights only, it will not be saved here.
@@ -325,18 +331,16 @@ class CustomerPortal(Controller):
         :rtype: dict
         """
         try:
-            self._document_check_access(res_model, int(res_id), access_token=access_token)
+            self._document_check_access(thread_model, int(thread_id), access_token=access_token)
         except (AccessError, MissingError) as e:
             raise UserError(_("The document does not exist or you do not have the rights to access it."))
 
         IrAttachment = request.env['ir.attachment']
-        access_token = False
 
-        # Avoid using sudo or creating access_token when not necessary: internal
-        # users can create attachments, as opposed to public and portal users.
+        # Avoid using sudo when not necessary: internal users can create attachments,
+        # as opposed to public and portal users.
         if not request.env.user._is_internal():
             IrAttachment = IrAttachment.sudo()
-            access_token = IrAttachment._generate_access_token()
 
         # At this point the related message does not exist yet, so we assign
         # those specific res_model and res_is. They will be correctly set
@@ -347,7 +351,7 @@ class CustomerPortal(Controller):
             'datas': base64.b64encode(file.read()),
             'res_model': 'mail.compose.message',
             'res_id': 0,
-            'access_token': access_token,
+            'access_token': IrAttachment._generate_access_token(),
         })
         return request.make_response(
             data=json.dumps(attachment.read(['id', 'name', 'mimetype', 'file_size', 'access_token'])[0]),
@@ -369,7 +373,7 @@ class CustomerPortal(Controller):
         if attachment_sudo.res_model != 'mail.compose.message' or attachment_sudo.res_id != 0:
             raise UserError(_("The attachment %s cannot be removed because it is not in a pending state.", attachment_sudo.name))
 
-        if attachment_sudo.env['mail.message'].search([('attachment_ids', 'in', attachment_sudo.ids)]):
+        if attachment_sudo.env['mail.message'].search_count([('attachment_ids', 'in', attachment_sudo.ids)], limit=1):
             raise UserError(_("The attachment %s cannot be removed because it is linked to a message.", attachment_sudo.name))
 
         return attachment_sudo.unlink()
@@ -509,7 +513,7 @@ class CustomerPortal(Controller):
             'Content-Length': len(report),
         }
         if report_type == 'pdf' and download:
-            filename = "%s.pdf" % (re.sub('\W+', '-', model._get_report_base_filename()))
+            filename = "%s.pdf" % (re.sub(r'\W+', '_', model._get_report_base_filename()))
             headers['Content-Disposition'] = content_disposition(filename)
         return headers
 

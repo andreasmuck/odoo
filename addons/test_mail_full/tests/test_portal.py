@@ -51,7 +51,7 @@ class TestPortalControllers(TestPortal):
 
         fragment = url_parse(response.url).fragment
         params = url_decode(fragment)
-        self.assertEqual(params['cids'], '%s' % self.user_admin.company_id.id)
+        self.assertEqual(response.request._cookies.get('cids'), '%s' % self.user_admin.company_id.id)
         self.assertEqual(params['id'], '%s' % self.record_portal.id)
         self.assertEqual(params['model'], self.record_portal._name)
 
@@ -105,10 +105,9 @@ class TestPortalControllers(TestPortal):
             url=post_url,
             json={
                 'params': {
-                    'csrf_token': http.Request.csrf_token(self),
-                    'message': 'Test',
-                    'res_model': self.record_portal._name,
-                    'res_id': self.record_portal.id,
+                    'thread_model': self.record_portal._name,
+                    'thread_id': self.record_portal.id,
+                    'post_data': {'body': "Test"},
                     'hash': self.record_portal._sign_token(self.partner_2.id),
                     'pid': self.partner_2.id,
                 },
@@ -171,14 +170,12 @@ class TestPortalControllers(TestPortal):
             url=post_url,
             json={
                 'params': {
-                    'csrf_token': http.Request.csrf_token(self),
-                    'hash': self.record_portal._sign_token(self.partner_2.id),
-                    'message': 'Test',
-                    'pid': self.partner_2.id,
-                    'redirect': '/',
-                    'res_model': self.record_portal._name,
-                    'res_id': self.record_portal.id,
+                    'thread_model': self.record_portal._name,
+                    'thread_id': self.record_portal.id,
+                    'post_data': {'body': "Test"},
                     'token': self.record_portal.access_token,
+                    'hash': self.record_portal._sign_token(self.partner_2.id),
+                    'pid': self.partner_2.id,
                 },
             },
         )

@@ -1,8 +1,11 @@
 /** @odoo-module alias=@odoo/hoot-dom default=false */
 
 /**
+ * @typedef {import("./helpers/dom").Dimensions} Dimensions
+ * @typedef {import("./helpers/dom").FormatXmlOptions} FormatXmlOptions
  * @typedef {import("./helpers/dom").Position} Position
  * @typedef {import("./helpers/dom").QueryOptions} QueryOptions
+ * @typedef {import("./helpers/dom").QueryRectOptions} QueryRectOptions
  * @typedef {import("./helpers/dom").QueryTextOptions} QueryTextOptions
  * @typedef {import("./helpers/dom").Target} Target
  *
@@ -15,35 +18,37 @@
  */
 
 export {
+    formatXml,
     getActiveElement,
     getFocusableElements,
     getNextFocusableElement,
     getPreviousFocusableElement,
-    getRect,
     isDisplayed,
     isEditable,
     isEventTarget,
     isFocusable,
     isInDOM,
+    isScrollable,
     isVisible,
     matches,
     observe,
     queryAll,
     queryAllAttributes,
     queryAllProperties,
+    queryAllRects,
     queryAllTexts,
     queryAllValues,
     queryAttribute,
     queryFirst,
     queryLast,
     queryOne,
+    queryRect,
     queryText,
     queryValue,
     registerPseudoClass,
     waitFor,
     waitForNone,
     waitUntil,
-    watchKeys,
 } from "./helpers/dom";
 export {
     check,
@@ -68,4 +73,5 @@ export {
     setInputFiles,
     setInputRange,
     uncheck,
+    unload,
 } from "./helpers/events";

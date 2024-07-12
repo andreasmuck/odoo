@@ -11,7 +11,7 @@ import {
 import { _t } from "@web/core/l10n/translation";
 import { registry } from "@web/core/registry";
 import { ensureArray } from "@web/core/utils/arrays";
-import { archParseBoolean } from "@web/views/utils";
+import { exprToBoolean } from "@web/core/utils/strings";
 import { standardFieldProps } from "../standard_field_props";
 
 /**
@@ -113,22 +113,11 @@ export class DateTimeField extends Component {
                 } else {
                     toUpdate[this.props.name] = this.state.value;
                 }
-                // when startDateField and endDateField are set, and one of them has changed, we keep
-                // the unchanged one to make sure ORM protects both fields from being recomputed by the
-                // server, ORM team will handle this properly on master, then we can remove unchanged values
-                if (!this.startDateField || !this.endDateField) {
-                    // If startDateField or endDateField are not set, delete unchanged fields
-                    for (const fieldName in toUpdate) {
-                        if (areDatesEqual(toUpdate[fieldName], this.props.record.data[fieldName])) {
-                            delete toUpdate[fieldName];
-                        }
-                    }
-                } else {
-                    // If both startDateField and endDateField are set, check if they haven't changed
-                    if (areDatesEqual(toUpdate[this.startDateField], this.props.record.data[this.startDateField]) &&
-                        areDatesEqual(toUpdate[this.endDateField], this.props.record.data[this.endDateField])) {
-                        delete toUpdate[this.startDateField];
-                        delete toUpdate[this.endDateField];
+
+                // If startDateField or endDateField are not set, delete unchanged fields
+                for (const fieldName in toUpdate) {
+                    if (areDatesEqual(toUpdate[fieldName], this.props.record.data[fieldName])) {
+                        delete toUpdate[fieldName];
                     }
                 }
 
@@ -275,13 +264,13 @@ export const dateField = {
             label: _t("Earliest accepted date"),
             name: "min_date",
             type: "string",
-            help: _t(`ISO-formatted date (e.g. "2018-12-31") or "today".`),
+            help: _t(`ISO-formatted date (e.g. "2018-12-31") or "%s".`, "today"),
         },
         {
             label: _t("Latest accepted date"),
             name: "max_date",
             type: "string",
-            help: _t(`ISO-formatted date (e.g. "2018-12-31") or "today".`),
+            help: _t(`ISO-formatted date (e.g. "2018-12-31") or "%s".`, "today"),
         },
         {
             label: _t("Warning for future dates"),
@@ -295,12 +284,12 @@ export const dateField = {
         endDateField: options[END_DATE_FIELD_OPTION],
         maxDate: options.max_date,
         minDate: options.min_date,
-        alwaysRange: archParseBoolean(options.always_range),
+        alwaysRange: exprToBoolean(options.always_range),
         placeholder: attrs.placeholder,
         required: dynamicInfo.required,
         rounding: options.rounding && parseInt(options.rounding, 10),
         startDateField: options[START_DATE_FIELD_OPTION],
-        warnFuture: archParseBoolean(options.warn_future),
+        warnFuture: exprToBoolean(options.warn_future),
     }),
     fieldDependencies: ({ type, attrs, options }) => {
         const deps = [];
@@ -374,6 +363,7 @@ export const dateRangeField = {
         },
     ],
     supportedTypes: ["date", "datetime"],
+    listViewWidth: ({ type }) => (type === "datetime" ? 294 : 180),
 };
 
 registry

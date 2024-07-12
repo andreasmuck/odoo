@@ -70,7 +70,7 @@ export class BomOverviewLine extends Component {
             active_id: this.data.link_id,
         };
         if (this.props.currentWarehouseId) {
-            action.context["warehouse"] = this.props.currentWarehouseId;
+            action.context["warehouse_id"] = this.props.currentWarehouseId;
         }
         return this.actionService.doAction(action);
     }
@@ -79,11 +79,18 @@ export class BomOverviewLine extends Component {
         return this.actionService.doAction({
             name: _t("Attachments"),
             type: "ir.actions.act_window",
-            res_model: "mrp.document",
-            domain: [["id", "in", this.data.attachment_ids]],
+            res_model: "product.document",
+            domain: ['&', ["attached_on_mrp", "=", "bom"], '|',
+                '&',["res_model", "=", "product.product"],["res_id", "in", [this.data.product_id]],
+                '&',["res_model", "=", "product.template"],["res_id", "in", [this.data.product_template_id]]],
             views: [[false, "kanban"], [false, "list"], [false, "form"]],
             view_mode: "kanban,list,form",
             target: "current",
+            context:{
+                'bom_id': true,
+                'default_res_id': this.data.product_id,
+                'default_res_model': "product.product"
+            }
         });
     }
 

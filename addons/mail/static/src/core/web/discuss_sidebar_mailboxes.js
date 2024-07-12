@@ -16,8 +16,8 @@ export class DiscussSidebarMailboxes extends Component {
     static components = { ThreadIcon };
 
     setup() {
+        super.setup();
         this.store = useState(useService("mail.store"));
-        this.threadService = useState(useService("mail.thread"));
     }
 
     /**
@@ -26,7 +26,7 @@ export class DiscussSidebarMailboxes extends Component {
      */
     openThread(ev, thread) {
         markEventHandled(ev, "sidebar.openThread");
-        this.threadService.setDiscussThread(thread);
+        thread.setAsDiscussThread();
     }
 }
 

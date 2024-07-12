@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
 import { parseFloat } from "@web/views/fields/parsers";
@@ -43,13 +41,11 @@ export class CashMovePopup extends Component {
         const translatedType = _t(type);
         const extras = { formattedAmount, translatedType };
         const reason = this.state.reason.trim();
-        await this.pos.data.call("pos.session", "try_cash_in_out", [
-            [this.pos.session.id],
-            type,
-            amount,
-            reason,
-            extras,
-        ]);
+        await this.pos.data.call(
+            "pos.session",
+            "try_cash_in_out",
+            this._prepare_try_cash_in_out_payload(type, amount, reason, extras)
+        );
         await this.pos.logEmployeeMessage(
             `${_t("Cash")} ${translatedType} - ${_t("Amount")}: ${formattedAmount}`,
             "CASH_DRAWER_ACTION"
@@ -82,5 +78,8 @@ export class CashMovePopup extends Component {
         return this.env.utils.isValidFloat(value)
             ? this.env.utils.formatCurrency(parseFloat(value))
             : "";
+    }
+    _prepare_try_cash_in_out_payload(type, amount, reason, extras) {
+        return [[this.pos.session.id], type, amount, reason, extras];
     }
 }

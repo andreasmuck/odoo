@@ -1,5 +1,10 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
+
+# When using quotation marks in translation strings, please use curly quotes (“”)
+# instead of straight quotes (""). On Linux, the keyboard shortcuts are:
+# AltGr + V for the opening curly quotes “
+# AltGr + B for the closing curly quotes ”
+
 import codecs
 import fnmatch
 import functools
@@ -10,7 +15,6 @@ import json
 import locale
 import logging
 import os
-from tokenize import generate_tokens, STRING, NEWLINE, INDENT, DEDENT
 import polib
 import re
 import tarfile
@@ -20,8 +24,9 @@ from collections import defaultdict, namedtuple
 from contextlib import suppress
 from datetime import datetime
 from os.path import join
-
 from pathlib import Path
+from tokenize import generate_tokens, STRING, NEWLINE, INDENT, DEDENT
+
 from babel.messages import extract
 from lxml import etree, html
 from markupsafe import escape, Markup
@@ -29,8 +34,16 @@ from psycopg2.extras import Json
 
 import odoo
 from odoo.exceptions import UserError
-from . import config, pycompat
-from .misc import file_open, file_path, get_iso_codes, SKIPPED_ELEMENT_TYPES
+from . import pycompat
+from .config import config
+from .misc import file_open, file_path, get_iso_codes, OrderedSet, SKIPPED_ELEMENT_TYPES
+
+__all__ = [
+    "_",
+    "_lt",
+    "html_translate",
+    "xml_translate",
+]
 
 _logger = logging.getLogger(__name__)
 
@@ -154,7 +167,7 @@ TRANSLATED_ELEMENTS = {
 TRANSLATED_ATTRS = dict.fromkeys({
     'string', 'add-label', 'help', 'sum', 'avg', 'confirm', 'placeholder', 'alt', 'title', 'aria-label',
     'aria-keyshortcuts', 'aria-placeholder', 'aria-roledescription', 'aria-valuetext',
-    'value_label', 'data-tooltip',
+    'value_label', 'data-tooltip', 'label',
 }, lambda e: True)
 
 def translate_attrib_value(node):
@@ -383,7 +396,7 @@ def html_translate(callback, value):
         root = parse_html("<div>%s</div>" % value)
         result = translate_xml_node(root, callback, parse_html, serialize_html)
         # remove tags <div> and </div> from result
-        value = serialize_html(result)[5:-6]
+        value = serialize_html(result)[5:-6].replace('\xa0', '&nbsp;')
     except ValueError:
         _logger.exception("Cannot translate malformed HTML, using source value instead")
 
@@ -471,7 +484,7 @@ class GettextAlias(object):
 
     def _get_lang(self, frame):
         # try, in order: context.get('lang'), kwargs['context'].get('lang'),
-        # self.env.lang, self.localcontext.get('lang'), request.env.lang
+        # self.env.lang, request.env.lang
         lang = None
         if frame.f_locals.get('context'):
             lang = frame.f_locals['context'].get('lang')
@@ -483,9 +496,6 @@ class GettextAlias(object):
             s = frame.f_locals.get('self')
             if hasattr(s, 'env'):
                 lang = s.env.lang
-            if not lang:
-                if hasattr(s, 'localcontext'):
-                    lang = s.localcontext.get('lang')
             if not lang:
                 try:
                     from odoo.http import request
@@ -842,18 +852,20 @@ class PoFileWriter:
         entry.comment = "module%s: %s" % (plural, ', '.join(modules))
         if comments:
             entry.comment += "\n" + "\n".join(comments)
-
-        code = False
-        for typy, name, res_id in tnrs:
-            if typy == 'code':
-                code = True
-                res_id = 0
-            if isinstance(res_id, int) or res_id.isdigit():
-                # second term of occurrence must be a digit
-                # occurrence line at 0 are discarded when rendered to string
-                entry.occurrences.append((u"%s:%s" % (typy, name), str(res_id)))
+        occurrences = OrderedSet()
+        for type_, *ref in tnrs:
+            if type_ == "code":
+                fpath, lineno = ref
+                name = f"code:{fpath}"
+                # lineno is set to 0 to avoid creating diff in PO files every
+                # time the code is moved around
+                lineno = "0"
             else:
-                entry.occurrences.append((u"%s:%s:%s" % (typy, name, res_id), ''))
+                field_name, xmlid = ref
+                name = f"{type_}:{field_name}:{xmlid}"
+                lineno = None   # no lineno for model/model_terms sources
+            occurrences.add((name, lineno))
+        entry.occurrences = list(occurrences)
         self.po.append(entry)
 
 
@@ -937,7 +949,7 @@ def _extract_translatable_qweb_terms(element, callback):
             # https://www.w3schools.com/html/html5_syntax.asp
             # https://github.com/odoo/owl/blob/master/doc/reference/component.md#composition
             if not el.tag[0].isupper() and 't-component' not in el.attrib and 't-set-slot' not in el.attrib:
-                for att in ('title', 'alt', 'label', 'placeholder', 'aria-label'):
+                for att in TRANSLATED_ATTRS:
                     if att in el.attrib:
                         _push(callback, el.attrib[att], el.sourceline)
             _extract_translatable_qweb_terms(el, callback)
@@ -974,7 +986,7 @@ def extract_formula_terms(formula):
     tokens = generate_tokens(io.StringIO(formula).readline)
     tokens = (token for token in tokens if token.type not in {NEWLINE, INDENT, DEDENT})
     for t1 in tokens:
-        if not t1.string == '_t':
+        if t1.string != '_t':
             continue
         t2 = next(tokens, None)
         if t2 and t2.string == '(':
@@ -1008,7 +1020,14 @@ def extract_spreadsheet_terms(fileobj, keywords, comment_tags, options):
                 if markdown_link:
                     terms.append(markdown_link[1])
         for figure in sheet['figures']:
-            terms.append(figure['data']['title'])
+            title = figure['data']['title']
+            if isinstance(title, str):
+                terms.append(title)
+            elif 'text' in title:
+                terms.append(title['text'])
+            if 'axesDesign' in figure['data']:
+                for axes in figure['data']['axesDesign'].values():
+                    terms.append(axes.get('title', {}).get('text', ''))
             if 'baselineDescr' in figure['data']:
                 terms.append(figure['data']['baselineDescr'])
     pivots = data.get('pivots', {}).values()
@@ -1445,7 +1464,7 @@ class TranslationImporter:
                     # [module_name, imd_name, module_name, imd_name, ...]
                     params = []
                     for xmlid in sub_xmlids:
-                        params.extend(xmlid.split('.'))
+                        params.extend(xmlid.split('.', maxsplit=1))
                     cr.execute(f'''
                         SELECT m.id, imd.module || '.' || imd.name, m."{field_name}", imd.noupdate
                         FROM "{model_table}" m, "ir_model_data" imd
@@ -1509,7 +1528,7 @@ class TranslationImporter:
                     # [xmlid, translations, xmlid, translations, ...]
                     params = []
                     for xmlid, translations in sub_field_dictionary:
-                        params.extend([*xmlid.split('.'), Json(translations)])
+                        params.extend([*xmlid.split('.', maxsplit=1), Json(translations)])
                     if not force_overwrite:
                         value_query = f"""CASE WHEN {overwrite} IS TRUE AND imd.noupdate IS FALSE
                         THEN m."{field_name}" || t.value
@@ -1607,20 +1626,16 @@ def load_language(cr, lang):
 
 def get_po_paths(module_name: str, lang: str):
     lang_base = lang.split('_')[0]
-    if lang_base == 'es' and lang != 'es_ES':
-        # force es_419 as fallback language for the spanish variations
-        if lang == 'es_419':
-            langs = ['es_419']
-        else:
-            langs = ['es_419', lang]
-    else:
-        langs = [lang_base, lang]
-
+    # Load the base as a fallback in case a translation is missing:
+    po_names = [lang_base, lang]
+    # Exception for Spanish locales: they have two bases, es and es_419:
+    if lang_base == 'es' and lang not in ('es_ES', 'es_419'):
+        po_names.insert(1, 'es_419')
     po_paths = [
         path
-        for lang_ in langs
+        for filename in po_names
         for dir_ in ('i18n', 'i18n_extra')
-        if (path := join(module_name, dir_, lang_ + '.po'))
+        if (path := join(module_name, dir_, filename + '.po'))
     ]
     for path in po_paths:
         with suppress(FileNotFoundError):
@@ -1705,6 +1720,7 @@ def _get_translation_upgrade_queries(cr, field):
     cleanup_queries = []
 
     if field.translate is True:
+        emtpy_src = """'{"en_US": ""}'::jsonb"""
         query = f"""
             WITH t AS (
                 SELECT it.res_id as res_id, jsonb_object_agg(it.lang, it.value) AS value, bool_or(imd.noupdate) AS noupdate
@@ -1715,7 +1731,8 @@ def _get_translation_upgrade_queries(cr, field):
               GROUP BY it.res_id
             )
             UPDATE {Model._table} m
-               SET "{field.name}" = CASE WHEN t.noupdate IS FALSE THEN t.value || m."{field.name}"
+               SET "{field.name}" = CASE WHEN m."{field.name}" IS NULL THEN {emtpy_src} || t.value
+                                         WHEN t.noupdate IS FALSE THEN t.value || m."{field.name}"
                                          ELSE m."{field.name}" || t.value
                                      END
               FROM t

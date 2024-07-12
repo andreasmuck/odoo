@@ -94,19 +94,6 @@ class TestCommonTimesheet(TransactionCase):
             'employee_type': 'freelance',
         })
 
-    def assert_get_view_timesheet_encode_uom(self, expected):
-        companies = self.env['res.company'].create([
-            {'name': 'foo', 'timesheet_encode_uom_id': self.env.ref('uom.product_uom_hour').id},
-            {'name': 'bar', 'timesheet_encode_uom_id': self.env.ref('uom.product_uom_day').id},
-        ])
-        for view_xml_id, xpath_expr, expected_labels in expected:
-            for company, expected_label in zip(companies, expected_labels):
-                view = self.env.ref(view_xml_id)
-                view = self.env[view.model].with_company(company).get_view(view.id, view.type)
-                tree = etree.fromstring(view['arch'])
-                field_node = tree.xpath(xpath_expr)[0]
-                self.assertEqual(field_node.get('string'), expected_label)
-
 
 class TestTimesheet(TestCommonTimesheet):
 
@@ -296,15 +283,11 @@ class TestTimesheet(TestCommonTimesheet):
         self.assertEqual(len(task_child.timesheet_ids), 1, "The timesheet still should be linked to task_child")
         self.assertEqual(len(task_grandchild.timesheet_ids), 1, "The timesheet still should be linked to task_grandchild")
 
-        # It is forbidden to unset the project of a task with timesheet...
+        # It is forbidden to unset the project of a task with timesheet
         with self.assertRaises(UserError):
             self.task1.write({
                 'project_id': False
             })
-        # ...except if one of its ascendant has one.
-        task_child.write({
-            'project_id': False
-        })
 
     def test_recompute_amount_for_multiple_timesheets(self):
         """ Check that amount is recomputed correctly when setting unit_amount for multiple timesheets at once. """
@@ -502,7 +485,7 @@ class TestTimesheet(TestCommonTimesheet):
             {
                 'name': 'Subtask 2',
                 'project_id': self.project_customer.id,
-                'child_ids': [Command.create({'name': 'Subsubtask'})],
+                'child_ids': [Command.create({'name': 'Subsubtask', 'project_id': self.project_customer.id})],
             },
         ])
         subsubtask = subtask_2.child_ids
@@ -579,15 +562,6 @@ class TestTimesheet(TestCommonTimesheet):
 
         with self.assertRaises(UserError):
             timesheet.employee_id = self.empl_employee2
-
-    def test_get_view_timesheet_encode_uom(self):
-        """ Test the label of timesheet time spent fields according to the company encoding timesheet uom """
-        self.assert_get_view_timesheet_encode_uom([
-            ('hr_timesheet.hr_timesheet_line_form', '//field[@name="unit_amount"]', ['Hours Spent', 'Days Spent']),
-            ('hr_timesheet.project_invoice_form', '//field[@name="allocated_hours"]', [None, 'Allocated Days']),
-            ('hr_timesheet.view_task_form2_inherited', '//field[@name="unit_amount"]', ['Hours Spent', 'Days Spent']),
-            ('hr_timesheet.timesheets_analysis_report_pivot_employee', '//field[@name="unit_amount"]', [None, 'Days Spent']),
-        ])
 
     def test_create_timesheet_with_companyless_analytic_account(self):
         """ This test ensures that a timesheet can be created on an analytic account whose company_id is set to False"""
@@ -669,12 +643,10 @@ class TestTimesheet(TestCommonTimesheet):
             self.task1.project_id = False
 
         self.task1.parent_id = self.task2
-        self.task1.project_id = False
-
         self.task1.project_id = self.project_customer
 
         with self.assertRaises(UserError):
-            self.task1.write({'project_id': False, 'parent_id': False})
+            self.task1.project_id = False
 
     def test_percentage_of_allocated_hours(self):
         """ Test the percentage of allocated hours on a task. """
@@ -720,3 +692,18 @@ class TestTimesheet(TestCommonTimesheet):
             'partner_id': self.partner.id,
         })
         self.assertEqual(project_2.analytic_account_id.plan_id.id, 2)
+
+    def test_timesheet_update_user_on_employee(self):
+        timesheet = self.env['account.analytic.line'].create({
+            'project_id': self.project_customer.id,
+            'task_id': self.task1.id,
+            'name': 'my first timesheet',
+            'employee_id': self.empl_employee.id,
+        })
+        self.assertEqual(timesheet.user_id, self.empl_employee.user_id)
+        new_user = self.env['res.users'].create({
+            'name': 'Test user',
+            'login': 'test',
+        })
+        self.empl_employee.user_id = new_user
+        self.assertEqual(timesheet.user_id, new_user)

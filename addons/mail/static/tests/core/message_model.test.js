@@ -1,24 +1,23 @@
+import { defineMailModels, start } from "@mail/../tests/mail_test_helpers";
 import { describe, expect, test } from "@odoo/hoot";
-import { defineMailModels, start } from "../mail_test_helpers";
+import { getService, serverState } from "@web/../tests/web_test_helpers";
 
-import { serializeDateTime, deserializeDateTime } from "@web/core/l10n/dates";
-import { serverState } from "@web/../tests/web_test_helpers";
+import { deserializeDateTime, serializeDateTime } from "@web/core/l10n/dates";
 
 describe.current.tags("desktop");
 defineMailModels();
 
 test("Message model properties", async () => {
-    const env = await start();
-    env.services["mail.store"].Store.insert({
+    await start();
+    getService("mail.store").Store.insert({
         self: { id: serverState.partnerId, type: "partner" },
     });
-    env.services["mail.store"].Thread.insert({
+    getService("mail.store").Thread.insert({
         id: serverState.partnerId,
         model: "res.partner",
         name: "general",
     });
-    /** @type {import("models").Message} */
-    const message = env.services["mail.store"].Message.insert({
+    const message = getService("mail.store").Message.insert({
         attachments: [
             {
                 filename: "test.txt",
@@ -31,23 +30,17 @@ test("Message model properties", async () => {
         body: "<p>Test</p>",
         date: deserializeDateTime("2019-05-05 10:00:00"),
         id: 4000,
-        needaction_partner_ids: [serverState.partnerId],
-        starredPersonas: { id: serverState.partnerId, type: "partner" },
+        starred: true,
         model: "res.partner",
         thread: { id: serverState.partnerId, model: "res.partner" },
         res_id: serverState.partnerId,
     });
-    expect(message).toBeTruthy();
-    expect(message.isNeedaction).toBeTruthy();
     expect(message.body).toBe("<p>Test</p>");
     expect(serializeDateTime(message.date)).toBe("2019-05-05 10:00:00");
     expect(message.id).toBe(4000);
-    expect(message.attachments).toBeTruthy();
     expect(message.attachments[0].name).toBe("test.txt");
-    expect(message.thread).toBeTruthy();
     expect(message.thread.id).toBe(serverState.partnerId);
     expect(message.thread.name).toBe("general");
-    expect(message.author).toBeTruthy();
     expect(message.author.id).toBe(5);
     expect(message.author.displayName).toBe("Demo");
 });

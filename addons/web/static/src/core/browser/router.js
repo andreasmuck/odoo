@@ -86,7 +86,7 @@ export function parseSearchQuery(search) {
 function pathFromActionState(state) {
     const path = [];
     const { action, model, active_id, resId } = state;
-    if (active_id) {
+    if (active_id && typeof active_id === "number") {
         path.push(active_id);
     }
     if (action) {
@@ -104,7 +104,7 @@ function pathFromActionState(state) {
             path.push(`m-${model}`);
         }
     }
-    if (resId) {
+    if (resId && (typeof resId === "number" || resId === "new")) {
         path.push(resId);
     }
     return path.join("/");
@@ -116,6 +116,7 @@ function pathFromActionState(state) {
  */
 export function stateToUrl(state) {
     let path = "";
+    const pathKeysToOmit = [..._hiddenKeysFromUrl];
     const actionStack = (state.actionStack || [state]).map((a) => ({ ...a }));
     if (actionStack.at(-1)?.action !== "menu") {
         for (const [prevAct, currentAct] of slidingWindow(actionStack, 2).reverse()) {
@@ -137,7 +138,13 @@ export function stateToUrl(state) {
             path = `/${pathSegments.join("/")}`;
         }
     }
-    const search = objectToUrlEncodedString(omit(state, "actionStack", ...PATH_KEYS));
+    if (state.active_id && typeof state.active_id !== "number") {
+        pathKeysToOmit.splice(pathKeysToOmit.indexOf("active_id"), 1);
+    }
+    if (state.resId && typeof state.resId !== "number" && state.resId !== "new") {
+        pathKeysToOmit.splice(pathKeysToOmit.indexOf("resId"), 1);
+    }
+    const search = objectToUrlEncodedString(omit(state, ...pathKeysToOmit));
     return `/odoo${path}${search ? `?${search}` : ""}`;
 }
 
@@ -162,9 +169,7 @@ export function urlToState(urlObj) {
             delete sanitizedHash.view_type;
         }
         Object.assign(state, sanitizedHash);
-        const url = browser.location.origin + stateToUrl(state);
-        // Change the url of the current history entry to the canonical url
-        browser.history.replaceState(browser.history.state, null, url);
+        const url = browser.location.origin + router.stateToUrl(state);
         urlObj.href = url;
     }
 
@@ -223,16 +228,26 @@ let state;
 let pushTimeout;
 let pushArgs;
 let _lockedKeys;
+let _hiddenKeysFromUrl = new Set();
 
 export function startRouter() {
-    state = urlToState(new URL(browser.location));
+    const url = new URL(browser.location);
+    state = router.urlToState(url);
+    // ** url-retrocompatibility **
+    if (browser.location.pathname === "/web") {
+        // Change the url of the current history entry to the canonical url.
+        // This change should be done only at the first load, and not when clicking on old style internal urls.
+        // Or when clicking back/forward on the browser.
+        browser.history.replaceState(browser.history.state, null, url.href);
+    }
     pushTimeout = null;
     pushArgs = {
         replace: false,
         reload: false,
         state: {},
     };
-    _lockedKeys = new Set(["debug"]);
+    _lockedKeys = new Set(["debug", "lang"]);
+    _hiddenKeysFromUrl = new Set([...PATH_KEYS, "actionStack"]);
 }
 
 /**
@@ -243,7 +258,13 @@ export function startRouter() {
  */
 browser.addEventListener("popstate", (ev) => {
     browser.clearTimeout(pushTimeout);
-    state = ev.state?.nextState || {};
+    if (!ev.state) {
+        // We are coming from a click on an anchor.
+        // Add the current state to the history entry so that a future loadstate behaves as expected.
+        browser.history.replaceState({ nextState: state }, "", browser.location.href);
+        return;
+    }
+    state = ev.state?.nextState || router.urlToState(new URL(browser.location));
     // Some client actions want to handle loading their own state. This is a ugly hack to allow not
     // reloading the webclient's state when they manipulate history.
     if (!ev.state?.skipRouteChange && !router.skipLoad) {
@@ -261,21 +282,22 @@ browser.addEventListener("click", (ev) => {
         return;
     }
     const href = ev.target.closest("a")?.getAttribute("href");
-    if (href && href !== "#") {
+    if (href && !href.startsWith("#")) {
         let url;
         try {
-            url = new URL(href, browser.location.origin);
+            // ev.target.href is the full url including current path
+            url = new URL(ev.target.closest("a").href);
         } catch {
             return;
         }
         if (
-            browser.location.origin === url.origin &&
+            browser.location.host === url.host &&
             browser.location.pathname.startsWith("/odoo") &&
-            (["/web", "/odoo"].includes(url.pathname) || url.pathname.startsWith("/odoo/"))
+            (["/web", "/odoo"].includes(url.pathname) || url.pathname.startsWith("/odoo/")) &&
+            ev.target.target !== "_blank"
         ) {
             ev.preventDefault();
-            const state = urlToState(url);
-            router.pushState(state, { replace: true });
+            state = router.urlToState(url);
             new Promise((res) => setTimeout(res, 0)).then(() => routerBus.trigger("ROUTE_CHANGE"));
         }
     }
@@ -288,8 +310,8 @@ function makeDebouncedPush(mode) {
     function doPush() {
         // Calculates new route based on aggregated search and options
         const nextState = computeNextState(pushArgs.state, pushArgs.replace);
-        const url = browser.location.origin + stateToUrl(nextState);
-        if (url !== browser.location.href) {
+        const url = browser.location.origin + router.stateToUrl(nextState);
+        if (url + browser.location.hash !== browser.location.href) {
             // If the route changed: pushes or replaces browser state
             if (mode === "push") {
                 // Because doPush is delayed, the history entry will have the wrong name.
@@ -303,8 +325,11 @@ function makeDebouncedPush(mode) {
             } else {
                 browser.history.replaceState({ nextState }, "", url);
             }
-            state = nextState;
+        } else {
+            // URL didn't change but state might have, update it in place
+            browser.history.replaceState({ nextState }, "", browser.location.href);
         }
+        state = nextState;
         if (pushArgs.reload) {
             browser.location.reload();
         }
@@ -319,7 +344,7 @@ function makeDebouncedPush(mode) {
         pushArgs.title = document.title;
         Object.assign(pushArgs.state, state);
         browser.clearTimeout(pushTimeout);
-        pushTimeout = browser.setTimeout(() => {
+        const push = () => {
             doPush();
             pushTimeout = null;
             pushArgs = {
@@ -327,23 +352,34 @@ function makeDebouncedPush(mode) {
                 reload: false,
                 state: {},
             };
-        });
+        };
+        if (options.sync) {
+            push();
+        } else {
+            pushTimeout = browser.setTimeout(() => {
+                push();
+            });
+        }
     };
 }
-
-startRouter();
 
 export const router = {
     get current() {
         return state;
     },
+    // state <-> url conversions can be patched if needed in a custom webclient.
+    stateToUrl,
+    urlToState,
     // TODO: stop debouncing these and remove the ugly hack to have the correct title for history entries
     pushState: makeDebouncedPush("push"),
     replaceState: makeDebouncedPush("replace"),
     cancelPushes: () => browser.clearTimeout(pushTimeout),
     addLockedKey: (key) => _lockedKeys.add(key),
+    hideKeyFromUrl: (key) => _hiddenKeysFromUrl.add(key),
     skipLoad: false,
 };
+
+startRouter();
 
 export function objectToQuery(obj) {
     const query = {};

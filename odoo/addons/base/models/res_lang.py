@@ -52,7 +52,7 @@ class Lang(models.Model):
     _order = "active desc,name"
     _allow_sudo_commands = False
 
-    _disallowed_datetime_patterns = list(tools.DATETIME_FORMATS_MAP)
+    _disallowed_datetime_patterns = list(tools.misc.DATETIME_FORMATS_MAP)
     _disallowed_datetime_patterns.remove('%y') # this one is in fact allowed, just not good practice
 
     name = fields.Char(required=True)
@@ -161,7 +161,7 @@ class Lang(models.Model):
         # create the language with locale information
         fail = True
         iso_lang = tools.get_iso_codes(lang)
-        for ln in tools.get_locales(lang):
+        for ln in tools.translate.get_locales(lang):
             try:
                 locale.setlocale(locale.LC_ALL, str(ln))
                 fail = False
@@ -193,7 +193,7 @@ class Lang(models.Model):
             # For some locales, nl_langinfo returns a D_FMT/T_FMT that contains
             # unsupported '%-' patterns, e.g. for cs_CZ
             format = format.replace('%-', '%')
-            for pattern, replacement in tools.DATETIME_FORMATS_MAP.items():
+            for pattern, replacement in tools.misc.DATETIME_FORMATS_MAP.items():
                 format = format.replace(pattern, replacement)
             return str(format)
 
@@ -212,7 +212,7 @@ class Lang(models.Model):
         try:
             return self.create(lang_info)
         finally:
-            tools.resetlocale()
+            tools.translate.resetlocale()
 
     @api.model
     def install_lang(self):
@@ -332,6 +332,26 @@ class Lang(models.Model):
             self.env['ir.default'].discard_values('res.partner', 'lang', lang_codes)
 
         res = super(Lang, self).write(vals)
+
+        if vals.get('active'):
+            # If we activate a lang, set it's url_code to the shortest version
+            # if possible
+            for long_lang in self.filtered(lambda lang: '_' in lang.url_code):
+                short_code = long_lang.code.split('_')[0]
+                short_lang = self.with_context(active_test=False).search([
+                    ('url_code', '=', short_code),
+                ], limit=1)  # url_code is unique
+                if (
+                    short_lang
+                    and not short_lang.active
+                    # `code` should always be the long format containing `_` but
+                    # there is a plan to change this in the future for `es_419`.
+                    # This `and` is about not failing if it's the case one day.
+                    and short_lang.code != short_code
+                ):
+                    short_lang.url_code = short_lang.code
+                    long_lang.url_code = short_code
+
         self.env.flush_all()
         self.env.registry.clear_cache()
         return res

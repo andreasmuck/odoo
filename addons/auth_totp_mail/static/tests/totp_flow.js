@@ -6,14 +6,15 @@ import { stepUtils } from "@web_tour/tour_service/tour_utils";
 function openAccountSettingsTab() {
     return [{
         content: 'Go to settings',
-        trigger: '[data-menu-xmlid="base.menu_administration"]'
+        trigger: '[data-menu-xmlid="base.menu_administration"]',
+        run: "click",
     }, {
         content: 'Wait for page',
         trigger: '.o_menu_brand:contains("Settings")',
-        run: () => {}
     }, {
         content: "Open Users menu",
-        trigger: '[data-menu-xmlid="base.menu_users"]'
+        trigger: '[data-menu-xmlid="base.menu_users"]',
+        run: "click",
     }, {
         content: "Open Users view",
         trigger: '[data-menu-xmlid="base.menu_action_res_users"]',
@@ -42,9 +43,11 @@ registry.category("web_tour.tours").add('totp_admin_self_invite', {
     steps: () => [stepUtils.showAppsMenuItem(), ...openAccountSettingsTab(), {
     content: "open the user's form",
     trigger: "td.o_data_cell:contains(admin)",
+    run: "click",
 }, {
     content: "go to Account security Tab",
     trigger: "a.nav-link:contains(Account Security)",
+    run: "click",
 }, {
     content: "check that user cannot invite themselves to use 2FA.",
     trigger: "body",
@@ -57,7 +60,6 @@ registry.category("web_tour.tours").add('totp_admin_self_invite', {
 }, {
     content: "check that user cannot invite themself.",
     trigger: "body.CannotInviteYourself",
-    isCheck: true,
 }]});
 
 registry.category("web_tour.tours").add('totp_admin_invite', {
@@ -66,11 +68,12 @@ registry.category("web_tour.tours").add('totp_admin_invite', {
     steps: () => [stepUtils.showAppsMenuItem(), ...openAccountSettingsTab(), {
     content: "open the user's form",
     trigger: "td.o_data_cell:contains(demo)",
+    run: "click",
 }, {
     content: "go to Account security Tab",
     trigger: "a.nav-link:contains(Account Security)",
+    run: "click",
 }, {
     content: "check that demo user can be invited to use 2FA.",
     trigger: "button:contains(Invite to use 2FA)",
-    isCheck: true,
 }]});

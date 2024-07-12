@@ -24,6 +24,7 @@ from odoo.addons.base_import.models.base_import import ImportValidationError
 from odoo.exceptions import UserError, ValidationError
 from odoo.osv import expression
 from odoo.tools.float_utils import float_round
+from odoo.tools.image import ImageProcess
 
 _logger = logging.getLogger(__name__)
 
@@ -390,7 +391,7 @@ class MassMailing(models.Model):
     def _compute_medium_id(self):
         for mailing in self:
             if mailing.mailing_type == 'mail' and not mailing.medium_id:
-                mailing.medium_id = self.env.ref('utm.utm_medium_email').id
+                mailing.medium_id = self.env['utm.medium']._fetch_or_create_utm_medium('email').id
 
     @api.depends('mailing_model_id')
     def _compute_reply_to_mode(self):
@@ -732,8 +733,11 @@ class MassMailing(models.Model):
 
     def _action_view_documents_filtered(self, view_filter):
         def _fetch_trace_res_ids(trace_domain):
-            result = self.env['mailing.trace'].search_read(
-                domain=trace_domain, fields=['res_id'])
+            trace_domain = expression.AND([
+                trace_domain,
+                [('mass_mailing_id', '=', self.id)],
+            ])
+            result = self.env['mailing.trace'].search_read(domain=trace_domain, fields=['res_id'])
             return [line['res_id'] for line in result]
 
         model_name = self.env['ir.model']._get(self.mailing_model_real).display_name
@@ -1025,6 +1029,19 @@ class MassMailing(models.Model):
         done_res_ids = {record['res_id'] for record in already_mailed}
         return [rid for rid in res_ids if rid not in done_res_ids]
 
+    def _get_unsubscribe_oneclick_url(self, email_to, res_id):
+        url = werkzeug.urls.url_join(
+            self.get_base_url(), 'mailing/%(mailing_id)s/unsubscribe_oneclick?%(params)s' % {
+                'mailing_id': self.id,
+                'params': werkzeug.urls.url_encode({
+                    'document_id': res_id,
+                    'email': email_to,
+                    'hash_token': self._generate_mailing_recipient_token(res_id, email_to),
+                }),
+            }
+        )
+        return url
+
     def _get_unsubscribe_url(self, email_to, res_id):
         url = werkzeug.urls.url_join(
             self.get_base_url(), 'mailing/%(mailing_id)s/unsubscribe?%(params)s' % {
@@ -1123,7 +1140,8 @@ class MassMailing(models.Model):
     @api.model
     def _process_mass_mailing_queue(self):
         mass_mailings = self.search([('state', 'in', ('in_queue', 'sending')), '|', ('schedule_date', '<', fields.Datetime.now()), ('schedule_date', '=', False)])
-        for mass_mailing in mass_mailings:
+        count_total = len(mass_mailings)
+        for count_done, mass_mailing in enumerate(mass_mailings, start=1):
             context_user = mass_mailing.user_id or mass_mailing.write_uid or self.env.user
             mass_mailing = mass_mailing.with_context(
                 **self.env['res.users'].with_user(context_user).context_get()
@@ -1138,6 +1156,7 @@ class MassMailing(models.Model):
                     # send the KPI mail only if it's the first sending
                     'kpi_mail_required': not mass_mailing.sent_date,
                 })
+            self.env['ir.cron']._notify_progress(done=count_done, remaining=count_total - count_done)
 
         if self.env['ir.config_parameter'].sudo().get_param('mass_mailing.mass_mailing_reports'):
             mailings = self.env['mailing.mailing'].search([
@@ -1347,7 +1366,7 @@ class MassMailing(models.Model):
                                 # responsive cropping behavior).
                                 pass
                             else:
-                                image_processor = tools.ImageProcess(image)
+                                image_processor = ImageProcess(image)
                                 image = image_processor.crop_resize(target_width, target_height, 0, 0)
                                 conversion_info.append((base64.b64encode(image.source), node, url))
 
@@ -1443,6 +1462,9 @@ class MassMailing(models.Model):
                 )
 
             return content
+        except UnidentifiedImageError:
+            _logger.warning('This file could not be decoded as an image file.', exc_info=True)
+            raise
         except Exception as e:
             _logger.exception(e)
             raise ImportValidationError(_("Could not retrieve URL: %s", url)) from e

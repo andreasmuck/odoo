@@ -25,7 +25,7 @@ from markupsafe import Markup
 from odoo import release, SUPERUSER_ID, _
 from odoo.http import request
 from odoo.tools import (func, misc, transpile_javascript,
-    is_odoo_module, SourceMapGenerator, profiler)
+    is_odoo_module, SourceMapGenerator, profiler, OrderedSet)
 from odoo.tools.json import scriptsafe
 from odoo.tools.constants import SCRIPT_EXTENSIONS, STYLE_EXTENSIONS
 from odoo.tools.misc import file_open, file_path
@@ -50,8 +50,8 @@ class XMLAssetError(Exception):
 
 class AssetsBundle(object):
     rx_css_import = re.compile("(@import[^;{]+;?)", re.M)
-    rx_preprocess_imports = re.compile("""(@import\s?['"]([^'"]+)['"](;?))""")
-    rx_css_split = re.compile("\/\*\! ([a-f0-9-]+) \*\/")
+    rx_preprocess_imports = re.compile(r"""(@import\s?['"]([^'"]+)['"](;?))""")
+    rx_css_split = re.compile(r"\/\*\! ([a-f0-9-]+) \*\/")
 
     TRACKED_BUNDLES = ['web.assets_web']
 
@@ -238,18 +238,14 @@ class AssetsBundle(object):
             fallback_url_pattern = self.get_asset_url(
                 unique=unique,
                 extension=extension,
+                ignore_params=True,
             )
-
             self.env.cr.execute(query, [SUPERUSER_ID, fallback_url_pattern])
             similar_attachment_ids = [r[0] for r in self.env.cr.fetchall()]
             if similar_attachment_ids:
                 similar = self.env['ir.attachment'].sudo().browse(similar_attachment_ids)
                 _logger.info('Found a similar attachment for %s, copying from %s', url_pattern, similar.url)
-                url = self.get_asset_url(
-                    unique=unique,
-                    extension=extension,
-                    ignore_params=True,
-                )
+                url = url_pattern
                 values = {
                     'name': similar.name,
                     'mimetype': similar.mimetype,
@@ -262,7 +258,7 @@ class AssetsBundle(object):
                 }
                 attachment = self.env['ir.attachment'].with_user(SUPERUSER_ID).create(values)
                 attachment_id = attachment.id
-                self.clean_attachments(extension)
+                self._clean_attachments(extension, url)
 
         return self.env['ir.attachment'].sudo().browse(attachment_id)
 
@@ -337,7 +333,7 @@ class AssetsBundle(object):
 
                     odoo.define("{self.name}.bundle.xml", ["@web/core/templates"], function(require) {{
                         "use strict";
-                        const {{ registerTemplate, registerTemplateExtension }} = require("@web/core/templates");
+                        const {{ checkPrimaryTemplateParents, registerTemplate, registerTemplateExtension }} = require("@web/core/templates");
                         /* {self.name} */
                         {templates}
                     }});
@@ -407,17 +403,31 @@ class AssetsBundle(object):
             string = etree.tostring(element, encoding='unicode')
             return string.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
 
+        names = OrderedSet()
+        primary_parents = OrderedSet()
+        extension_parents = OrderedSet()
         for block in blocks:
             if block["type"] == "templates":
-                for (element, url) in block["templates"]:
+                for (element, url, inherit_from) in block["templates"]:
+                    if inherit_from:
+                        primary_parents.add(inherit_from)
                     name = element.get("t-name")
+                    names.add(name)
                     template = get_template(element)
                     content.append(f'registerTemplate("{name}", `{url}`, `{template}`);')
             else:
                 for inherit_from, elements in block["extensions"].items():
+                    extension_parents.add(inherit_from)
                     for (element, url) in elements:
                         template = get_template(element)
                         content.append(f'registerTemplateExtension("{inherit_from}", `{url}`, `{template}`);')
+
+        missing_names_for_primary = primary_parents - names
+        if missing_names_for_primary:
+            content.append(f'checkPrimaryTemplateParents({json.dumps(list(missing_names_for_primary))});')
+        missing_names_for_extension = extension_parents - names
+        if missing_names_for_extension:
+            content.append(f'console.error("Missing (extension) parent templates: {", ".join(missing_names_for_extension)}");')
 
         return '\n'.join(content)
 
@@ -456,7 +466,11 @@ class AssetsBundle(object):
                     inherit_mode = template_tree.get('t-inherit-mode', 'primary')
                     if inherit_mode not in ['primary', 'extension']:
                         addon = asset.url.split('/')[1]
-                        return asset.generate_error(_("Invalid inherit mode. Module %r and template name %r", addon, template_name))
+                        return asset.generate_error(_(
+                            'Invalid inherit mode. Module "%(module)s" and template name "%(template_name)s"',
+                            module=addon,
+                            template_name=template_name,
+                        ))
                 if inherit_mode == "extension":
                     if block is None or block["type"] != "extensions":
                         block = {"type": "extensions", "extensions": OrderedDict()}
@@ -467,7 +481,7 @@ class AssetsBundle(object):
                     if block is None or block["type"] != "templates":
                         block = {"type": "templates", "templates": []}
                         blocks.append(block)
-                    block["templates"].append((template_tree, asset.url))
+                    block["templates"].append((template_tree, asset.url, inherit_from))
                 else:
                     return asset.generate_error(_("Template name is missing."))
         return blocks

@@ -21,7 +21,8 @@ import { Transition } from "@web/core/transition";
 import { useBus, useService } from "@web/core/utils/hooks";
 import { escape } from "@web/core/utils/strings";
 
-export const PRESENT_THRESHOLD = 2500;
+export const PRESENT_VIEWPORT_THRESHOLD = 3;
+const PRESENT_MESSAGE_THRESHOLD = 10;
 
 /**
  * @typedef {Object} Props
@@ -62,7 +63,10 @@ export class Thread extends Component {
     static template = "mail.Thread";
 
     setup() {
+        super.setup();
         this.escape = escape;
+        this.refByMessageId = new Map();
+        this.registerMessageRef = this.registerMessageRef.bind(this);
         this.store = useState(useService("mail.store"));
         this.state = useState({
             isReplyingTo: false,
@@ -70,7 +74,6 @@ export class Thread extends Component {
             showJumpPresent: false,
         });
         this.lastJumpPresent = this.props.jumpPresent;
-        this.threadService = useState(useService("mail.thread"));
         this.orm = useService("orm");
         /** @type {ReturnType<import('@mail/utils/common/hooks').useMessageHighlight>|null} */
         this.messageHighlight = this.env.messageHighlight
@@ -85,18 +88,20 @@ export class Thread extends Component {
         this.scrollableRef = this.props.scrollRef ?? useRef("messages");
         this.loadOlderState = useVisible(
             "load-older",
-            () => {
+            async () => {
+                await this.messageHighlight?.scrollPromise;
                 if (this.loadOlderState.isVisible) {
-                    this.threadService.fetchMoreMessages(this.props.thread);
+                    toRaw(this.props.thread).fetchMoreMessages();
                 }
             },
             { ready: false }
         );
         this.loadNewerState = useVisible(
             "load-newer",
-            () => {
+            async () => {
+                await this.messageHighlight?.scrollPromise;
                 if (this.loadNewerState.isVisible) {
-                    this.threadService.fetchMoreMessages(this.props.thread, "newer");
+                    toRaw(this.props.thread).fetchMoreMessages("newer");
                 }
             },
             { ready: false }
@@ -118,13 +123,12 @@ export class Thread extends Component {
                     } else {
                         if (this.props.order === "desc") {
                             this.scrollableRef.el.scrollTop = 0;
-                            this.props.thread.scrollTop = 0;
                         } else {
                             this.scrollableRef.el.scrollTop =
                                 this.scrollableRef.el.scrollHeight -
                                 this.scrollableRef.el.clientHeight;
-                            this.props.thread.scrollTop = "bottom";
                         }
+                        this.props.thread.scrollTop = "bottom";
                     }
                     this.lastJumpPresent = this.props.jumpPresent;
                 }
@@ -142,12 +146,27 @@ export class Thread extends Component {
             },
             () => [this.state.mountedAndLoaded]
         );
+        useEffect(
+            () => {
+                const el = this.refByMessageId.get(this.messageHighlight?.highlightedMessageId)?.el;
+                if (el) {
+                    this.messageHighlight.scrollTo(el);
+                }
+            },
+            () => [this.state.mountedAndLoaded, this.messageHighlight?.highlightedMessageId]
+        );
         onMounted(() => {
             if (!this.env.chatter || this.env.chatter?.fetchMessages) {
                 if (this.env.chatter) {
                     this.env.chatter.fetchMessages = false;
                 }
-                this.threadService.fetchNewMessages(this.props.thread);
+                if (this.props.thread.selfMember && this.props.thread.scrollUnread) {
+                    toRaw(this.props.thread).loadAround(
+                        this.props.thread.selfMember.new_message_separator
+                    );
+                } else {
+                    toRaw(this.props.thread).fetchNewMessages();
+                }
             }
         });
         useEffect(
@@ -164,7 +183,7 @@ export class Thread extends Component {
         useBus(this.env.bus, "MAIL:RELOAD-THREAD", ({ detail }) => {
             const { model, id } = this.props.thread;
             if (detail.model === model && detail.id === id) {
-                this.threadService.fetchNewMessages(this.props.thread);
+                toRaw(this.props.thread).fetchNewMessages();
             }
         });
         onWillUpdateProps((nextProps) => {
@@ -175,7 +194,7 @@ export class Thread extends Component {
                 if (this.env.chatter) {
                     this.env.chatter.fetchMessages = false;
                 }
-                this.threadService.fetchNewMessages(nextProps.thread);
+                toRaw(nextProps.thread).fetchNewMessages();
             }
         });
     }
@@ -183,18 +202,21 @@ export class Thread extends Component {
     /**
      * The scroll on a message list is managed in several different ways.
      *
-     * 1. When loading older or newer messages, the messages already on screen
+     * 1. When the user first accesses a thread with unread messages, or when
+     *    the user goes back to a thread with new unread messages, it should
+     *    scroll to the position of the first unread message if there is one.
+     * 2. When loading older or newer messages, the messages already on screen
      *    should visually stay in place. When the extra messages are added at
      *    the bottom (chatter loading older, or channel loading newer) the same
      *    scroll top position should be kept, and when the extra messages are
      *    added at the top (chatter loading newer, or channel loading older),
      *    the extra height from the extra messages should be compensated in the
      *    scroll position.
-     * 2. When the scroll is at the bottom, it should stay at the bottom when
+     * 3. When the scroll is at the bottom, it should stay at the bottom when
      *    there is a change of height: new messages, images loaded, ...
-     * 3. When the user goes back and forth between threads, it should restore
+     * 4. When the user goes back and forth between threads, it should restore
      *    the last scroll position of each thread.
-     * 4. When currently highlighting a message it takes priority to allow the
+     * 5. When currently highlighting a message it takes priority to allow the
      *    highlighted message to be scrolled to.
      */
     setupScroll() {
@@ -209,7 +231,7 @@ export class Thread extends Component {
          */
         let lastSetValue;
         /**
-         * The snapshot mechanism (point 1) should only apply after the messages
+         * The snapshot mechanism (point 2) should only apply after the messages
          * have been loaded and displayed at least once. Technically this is
          * after the first patch following when `mountedAndLoaded` is true. This
          * is what this variable holds.
@@ -217,25 +239,25 @@ export class Thread extends Component {
         let loadedAndPatched = false;
         /**
          * The snapshot of current scrollTop and scrollHeight for the purpose
-         * of keeping messages in place when loading older/newer (point 1).
+         * of keeping messages in place when loading older/newer (point 2).
          */
         let snapshot;
         /**
          * The newest message that is already rendered, useful to detect
          * whether newer messages have been loaded since last render to decide
-         * when to apply the snapshot to keep messages in place (point 1).
+         * when to apply the snapshot to keep messages in place (point 2).
          */
         let newestPersistentMessage;
         /**
          * The oldest message that is already rendered, useful to detect
          * whether older messages have been loaded since last render to decide
-         * when to apply the snapshot to keep messages in place (point 1).
+         * when to apply the snapshot to keep messages in place (point 2).
          */
         let oldestPersistentMessage;
         /**
          * Whether it was possible to load newer messages in the last rendered
          * state, useful to decide when to apply the snapshot to keep messages
-         * in place (point 1).
+         * in place (point 2).
          */
         let loadNewer;
         const reset = () => {
@@ -273,10 +295,19 @@ export class Thread extends Component {
         });
         onWillDestroy(() => stopOnChange());
         const saveScroll = () => {
-            this.props.thread.scrollTop =
-                ref.el.scrollHeight - ref.el.scrollTop - ref.el.clientHeight < 30
-                    ? "bottom"
-                    : ref.el.scrollTop;
+            const thread = toRaw(this.props.thread);
+            const isBottom =
+                this.props.order === "asc"
+                    ? ref.el.scrollHeight - ref.el.scrollTop - ref.el.clientHeight < 30
+                    : ref.el.scrollTop < 30;
+            if (isBottom) {
+                thread.scrollTop = "bottom";
+            } else {
+                thread.scrollTop =
+                    this.props.order === "asc"
+                        ? ref.el.scrollTop
+                        : ref.el.scrollHeight - ref.el.scrollTop - ref.el.clientHeight;
+            }
         };
         const setScroll = (value) => {
             ref.el.scrollTop = value;
@@ -300,7 +331,27 @@ export class Thread extends Component {
                 (this.props.order === "asc" &&
                     newerMessages &&
                     (loadNewer || thread.scrollTop !== "bottom"));
-            if (snapshot && messagesAtTop) {
+            if (thread.selfMember && thread.scrollUnread) {
+                if (thread.firstUnreadMessage) {
+                    const messageEl = this.refByMessageId.get(thread.firstUnreadMessage.id)?.el;
+                    if (!messageEl) {
+                        return;
+                    }
+                    const messageCenter =
+                        messageEl.offsetTop -
+                        this.scrollableRef.el.offsetHeight / 2 +
+                        messageEl.offsetHeight / 2;
+                    setScroll(messageCenter);
+                } else {
+                    const scrollTop =
+                        this.props.order === "asc"
+                            ? this.scrollableRef.el.scrollHeight -
+                              this.scrollableRef.el.clientHeight
+                            : 0;
+                    setScroll(scrollTop);
+                }
+                thread.scrollUnread = false;
+            } else if (snapshot && messagesAtTop) {
                 setScroll(snapshot.scrollTop + ref.el.scrollHeight - snapshot.scrollHeight);
             } else if (snapshot && messagesAtBottom) {
                 setScroll(snapshot.scrollTop);
@@ -308,10 +359,16 @@ export class Thread extends Component {
                 !this.env.messageHighlight?.highlightedMessageId &&
                 thread.scrollTop !== undefined
             ) {
-                const value =
-                    thread.scrollTop === "bottom"
-                        ? ref.el.scrollHeight - ref.el.clientHeight
-                        : thread.scrollTop;
+                let value;
+                if (thread.scrollTop === "bottom") {
+                    value =
+                        this.props.order === "asc" ? ref.el.scrollHeight - ref.el.clientHeight : 0;
+                } else {
+                    value =
+                        this.props.order === "asc"
+                            ? thread.scrollTop
+                            : ref.el.scrollHeight - thread.scrollTop - ref.el.clientHeight;
+                }
                 if (lastSetValue === undefined || Math.abs(lastSetValue - value) > 1) {
                     setScroll(value);
                 }
@@ -354,7 +411,22 @@ export class Thread extends Component {
     }
 
     get PRESENT_THRESHOLD() {
-        return this.state.showJumpPresent ? PRESENT_THRESHOLD - 200 : PRESENT_THRESHOLD;
+        const viewportHeight =
+            (this.scrollableRef.el?.clientHeight ?? 0) * PRESENT_VIEWPORT_THRESHOLD;
+        const messagesHeight = [...this.props.thread.nonEmptyMessages]
+            .reverse()
+            .slice(0, PRESENT_MESSAGE_THRESHOLD)
+            .map((message) => this.refByMessageId.get(message.id))
+            .reduce((totalHeight, message) => totalHeight + (message?.el?.clientHeight ?? 0), 0);
+        const threshold = Math.max(viewportHeight, messagesHeight);
+        return this.state.showJumpPresent ? threshold - 200 : threshold;
+    }
+
+    get newMessageBannerText() {
+        if (this.props.thread.selfMember?.localMessageUnreadCounter > 1) {
+            return _t("%s new messages", this.props.thread.selfMember.localMessageUnreadCounter);
+        }
+        return _t("1 new message");
     }
 
     get preferenceButtonText() {
@@ -371,7 +443,7 @@ export class Thread extends Component {
     }
 
     onClickLoadOlder() {
-        this.threadService.fetchMoreMessages(this.props.thread);
+        this.props.thread.fetchMoreMessages();
     }
 
     async onClickPreferences() {
@@ -380,11 +452,17 @@ export class Thread extends Component {
         this.env.services.action.doAction(actionDescription);
     }
 
+    getMessageClassName(message) {
+        return this.messageHighlight?.highlightedMessageId === message.id
+            ? "o-highlighted bg-view shadow-lg pb-1"
+            : "";
+    }
+
     async jumpToPresent() {
         this.messageHighlight?.clearHighlight();
-        await this.threadService.loadAround(this.props.thread);
+        await this.props.thread.loadAround();
         this.props.thread.loadNewer = false;
-        this.props.thread.scrollTop = this.props.order === "desc" ? 0 : "bottom";
+        this.props.thread.scrollTop = "bottom";
         this.state.showJumpPresent = false;
     }
 
@@ -403,6 +481,21 @@ export class Thread extends Component {
                 this.props.thread
             );
         }
+    }
+
+    async onClickUnreadMessagesBanner() {
+        await this.props.thread.loadAround(this.props.thread.selfMember.localNewMessageSeparator);
+        this.messageHighlight.highlightMessage(
+            this.props.thread.firstUnreadMessage,
+            this.props.thread
+        );
+    }
+
+    registerMessageRef(message, ref) {
+        if (!ref) {
+            this.refByMessageId.delete(message.id);
+        }
+        this.refByMessageId.set(message.id, ref);
     }
 
     isSquashed(msg, prevMsg) {
@@ -428,13 +521,5 @@ export class Thread extends Component {
             return false;
         }
         return msg.datetime.ts - prevMsg.datetime.ts < 60 * 1000;
-    }
-
-    isNewMessageSeparatorVisible(previousMessage) {
-        if (!this.props.thread.selfMember) {
-            return false;
-        }
-        const seenMessage = this.props.thread.selfMember?.seen_message_id;
-        return Boolean((!previousMessage && !seenMessage) || previousMessage?.eq(seenMessage));
     }
 }

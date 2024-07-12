@@ -16,7 +16,7 @@ class PurchaseRequisition(models.Model):
     active = fields.Boolean('Active', default=True)
     reference = fields.Char(string='Reference')
     order_count = fields.Integer(compute='_compute_orders_number', string='Number of Orders')
-    vendor_id = fields.Many2one('res.partner', string='Vendor', domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]")
+    vendor_id = fields.Many2one('res.partner', string='Vendor', check_company=True)
     requisition_type = fields.Selection([
         ('blanket_order', 'Blanket Order'), ('purchase_template', 'Purchase Template')],
          string='Agreement Type', required=True, default='blanket_order')
@@ -272,7 +272,7 @@ class PurchaseRequisitionLine(models.Model):
             'product_uom': self.product_id.uom_po_id.id,
             'product_qty': product_qty,
             'price_unit': price_unit,
-            'taxes_id': [(6, 0, taxes_ids)],
+            'tax_ids': [(6, 0, taxes_ids)],
             'date_planned': date_planned,
             'analytic_distribution': self.analytic_distribution,
         }

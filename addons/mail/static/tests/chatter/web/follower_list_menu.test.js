@@ -1,4 +1,3 @@
-import { describe, expect, test } from "@odoo/hoot";
 import {
     assertSteps,
     click,
@@ -9,11 +8,10 @@ import {
     start,
     startServer,
     step,
-} from "../../mail_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, expect, test } from "@odoo/hoot";
 import { mockService, onRpc, patchWithCleanup, serverState } from "@web/../tests/web_test_helpers";
 import { MailThread } from "../../mock_server/mock_models/mail_thread";
-import { getMockEnv } from "@web/../tests/_framework/env_test_helpers";
-import { actionService } from "@web/webclient/actions/action_service";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -32,11 +30,10 @@ test("base rendering editable", async () => {
     const pyEnv = await startServer();
     const partnerId = pyEnv["res.partner"].create({});
     patchWithCleanup(MailThread.prototype, {
-        _get_mail_thread_data() {
+        _thread_to_store(ids, store) {
             // mimic user with write access
-            const res = super._get_mail_thread_data(...arguments);
-            res["hasWriteAccess"] = true;
-            return res;
+            super._thread_to_store(...arguments);
+            store.add("Thread", { hasWriteAccess: true, id: ids[0], model: this._name });
         },
     });
     await start();
@@ -64,38 +61,32 @@ test('click on "add followers" button', async () => {
         res_model: "res.partner",
     });
     patchWithCleanup(MailThread.prototype, {
-        _get_mail_thread_data() {
+        _thread_to_store(ids, store) {
             // mimic user with write access
-            const res = super._get_mail_thread_data(...arguments);
-            res["hasWriteAccess"] = true;
-            return res;
+            super._thread_to_store(...arguments);
+            store.add("Thread", { hasWriteAccess: true, id: ids[0], model: this._name });
         },
     });
-    mockService("action", () => {
-        const ogService = actionService.start(getMockEnv());
-        return {
-            ...ogService,
-            doAction(action, options) {
-                if (action?.res_model === "mail.wizard.invite") {
-                    step("action:open_view");
-                    expect(action.context.default_res_model).toBe("res.partner");
-                    expect(action.context.default_res_id).toBe(partnerId_1);
-                    expect(action.res_model).toBe("mail.wizard.invite");
-                    expect(action.type).toBe("ir.actions.act_window");
-                    pyEnv["mail.followers"].create({
-                        partner_id: partnerId_3,
-                        email: "bla@bla.bla",
-                        is_active: true,
-                        name: "Wololo",
-                        res_id: partnerId_1,
-                        res_model: "res.partner",
-                    });
-                    options.onClose();
-                    return;
-                }
-                return ogService.doAction.call(this, ...arguments);
-            },
-        };
+    mockService("action", {
+        doAction(action, options) {
+            if (action?.res_model !== "mail.wizard.invite") {
+                return super.doAction(...arguments);
+            }
+            step("action:open_view");
+            expect(action.context.default_res_model).toBe("res.partner");
+            expect(action.context.default_res_id).toBe(partnerId_1);
+            expect(action.res_model).toBe("mail.wizard.invite");
+            expect(action.type).toBe("ir.actions.act_window");
+            pyEnv["mail.followers"].create({
+                partner_id: partnerId_3,
+                email: "bla@bla.bla",
+                is_active: true,
+                name: "Wololo",
+                res_id: partnerId_1,
+                res_model: "res.partner",
+            });
+            options.onClose();
+        },
     });
     await start();
     await openFormView("res.partner", partnerId_1);
@@ -128,18 +119,15 @@ test("click on remove follower", async () => {
         res_model: "res.partner",
     });
     patchWithCleanup(MailThread.prototype, {
-        _get_mail_thread_data() {
+        _thread_to_store(ids, store) {
             // mimic user with write access
-            const res = super._get_mail_thread_data(...arguments);
-            res["hasWriteAccess"] = true;
-            return res;
+            super._thread_to_store(...arguments);
+            store.add("Thread", { hasWriteAccess: true, id: ids[0], model: this._name });
         },
     });
-    onRpc((route, args) => {
-        if (route === "/web/dataset/call_kw/res.partner/message_unsubscribe") {
-            step("message_unsubscribe");
-            expect(args.args).toEqual([[partnerId_1], [partnerId_2]]);
-        }
+    onRpc("res.partner", "message_unsubscribe", ({ args, method }) => {
+        step(method);
+        expect(args).toEqual([[partnerId_1], [partnerId_2]]);
     });
     await start();
     await openFormView("res.partner", partnerId_1);
@@ -172,11 +160,10 @@ test('Hide "Add follower" and subtypes edition/removal buttons except own user o
         },
     ]);
     patchWithCleanup(MailThread.prototype, {
-        _get_mail_thread_data() {
-            // mimic user with no write access
-            const res = super._get_mail_thread_data(...arguments);
-            res["hasWriteAccess"] = false;
-            return res;
+        _thread_to_store(ids, store) {
+            // mimic user without write access
+            super._thread_to_store(...arguments);
+            store.add("Thread", { hasWriteAccess: false, id: ids[0], model: this._name });
         },
     });
     await start();
@@ -311,11 +298,10 @@ test('Show "Add follower" and subtypes edition/removal buttons on all followers 
         },
     ]);
     patchWithCleanup(MailThread.prototype, {
-        _get_mail_thread_data() {
+        _thread_to_store(ids, store) {
             // mimic user with write access
-            const res = super._get_mail_thread_data(...arguments);
-            res["hasWriteAccess"] = true;
-            return res;
+            super._thread_to_store(...arguments);
+            store.add("Thread", { hasWriteAccess: true, id: ids[0], model: this._name });
         },
     });
     await start();
@@ -334,11 +320,10 @@ test('Show "No Followers" dropdown-item if there are no followers and user does 
     const pyEnv = await startServer();
     const partnerId = pyEnv["res.partner"].create({});
     patchWithCleanup(MailThread.prototype, {
-        _get_mail_thread_data() {
+        _thread_to_store(ids, store) {
             // mimic user without write access
-            const res = super._get_mail_thread_data(...arguments);
-            res["hasWriteAccess"] = false;
-            return res;
+            super._thread_to_store(...arguments);
+            store.add("Thread", { hasWriteAccess: false, id: ids[0], model: this._name });
         },
     });
     await start();

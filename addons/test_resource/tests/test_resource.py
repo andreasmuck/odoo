@@ -651,16 +651,16 @@ class TestResMixin(TestResourceCommon):
     def test_adjust_calendar_timezone_before(self):
         # Calendar:
         # Every day 8-16
-        self.jean.tz = 'Japan'
+        self.jean.tz = 'Asia/Tokyo'
         self.calendar_jean.tz = 'Europe/Brussels'
 
         result = self.jean._adjust_to_calendar(
-            datetime_tz(2020, 4, 1, 0, 0, 0, tzinfo='Japan'),
-            datetime_tz(2020, 4, 1, 23, 59, 59, tzinfo='Japan'),
+            datetime_tz(2020, 4, 1, 0, 0, 0, tzinfo='Asia/Tokyo'),
+            datetime_tz(2020, 4, 1, 23, 59, 59, tzinfo='Asia/Tokyo'),
         )
         self.assertEqual(result[self.jean], (
-            datetime_tz(2020, 4, 1, 8, 0, 0, tzinfo='Japan'),
-            datetime_tz(2020, 4, 1, 16, 0, 0, tzinfo='Japan'),
+            datetime_tz(2020, 4, 1, 8, 0, 0, tzinfo='Asia/Tokyo'),
+            datetime_tz(2020, 4, 1, 16, 0, 0, tzinfo='Asia/Tokyo'),
         ), "It should have found a starting time the 1st")
 
     def test_adjust_calendar_timezone_after(self):
@@ -711,7 +711,7 @@ class TestResMixin(TestResourceCommon):
             datetime_tz(2018, 4, 6, 16, 0, 0, tzinfo=self.john.tz),
         )[self.jean.id]
         # still showing as 5 days because of rounding, but we see only 39 hours
-        self.assertEqual(data, {'days': 4.875, 'hours': 39})
+        self.assertEqual(data, {'days': 4.88, 'hours': 39})
 
         # Looking at John's calendar
 
@@ -721,7 +721,7 @@ class TestResMixin(TestResourceCommon):
             datetime_tz(2018, 4, 2, 0, 0, 0, tzinfo=self.jean.tz),
             datetime_tz(2018, 4, 6, 23, 0, 0, tzinfo=self.jean.tz),
         )[self.john.id]
-        self.assertEqual(data, {'days': 1.4375, 'hours': 13})
+        self.assertEqual(data, {'days': 1.42, 'hours': 13})
 
         # Viewing it as Patel
         # Views from 2018/04/01 11:00:00 to 2018/04/06 10:00:00
@@ -729,7 +729,7 @@ class TestResMixin(TestResourceCommon):
             datetime_tz(2018, 4, 2, 0, 0, 0, tzinfo=self.patel.tz),
             datetime_tz(2018, 4, 6, 23, 0, 0, tzinfo=self.patel.tz),
         )[self.john.id]
-        self.assertEqual(data, {'days': 1.1875, 'hours': 10})
+        self.assertEqual(data, {'days': 1.17, 'hours': 10})
 
         # Viewing it as John
         data = self.john._get_work_days_data_batch(
@@ -875,7 +875,7 @@ class TestResMixin(TestResourceCommon):
             datetime_tz(2018, 4, 9, 0, 0, 0, tzinfo=self.john.tz),
             datetime_tz(2018, 4, 13, 23, 59, 59, tzinfo=self.john.tz),
         )[self.john.id]
-        self.assertEqual(data, {'days': 0.9375, 'hours': 10})
+        self.assertEqual(data, {'days': 0.96, 'hours': 10})
 
         # half days
         leave = self.env['resource.calendar.leaves'].create({
@@ -1386,3 +1386,18 @@ class TestResource(TestResourceCommon):
         """
         self.env.company.resource_calendar_id = self.two_weeks_resource
         self.env['res.company'].create({'name': 'New Company'})
+
+    def test_empty_working_hours_for_two_weeks_resource(self):
+        resource = self._define_calendar_2_weeks(
+            'Two weeks resource',
+            [],
+            'Europe/Brussels'
+        )
+        resource_attendance = self.env['resource.calendar.attendance'].create({
+            'name': 'test',
+            'calendar_id': self.calendar_jean.id,
+            'hour_from': 0,
+            'hour_to': 0
+        })
+        resource_hour = resource._get_hours_per_day(resource_attendance)
+        self.assertEqual(resource_hour, 0.0)

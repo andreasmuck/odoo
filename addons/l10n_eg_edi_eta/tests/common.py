@@ -9,25 +9,22 @@ from odoo.addons.account_edi.tests.common import AccountEdiTestCommon
 class TestEGEdiCommon(AccountEdiTestCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref='eg', edi_format_ref='l10n_eg_edi_eta.edi_eg_eta'):
-        super().setUpClass(chart_template_ref=chart_template_ref, edi_format_ref=edi_format_ref)
+    @AccountEdiTestCommon.setup_edi_format('l10n_eg_edi_eta.edi_eg_eta')
+    @AccountEdiTestCommon.setup_country('eg')
+    def setUpClass(cls):
+        super().setUpClass()
 
         cls.frozen_today = datetime(year=2022, month=3, day=15, hour=0, minute=0, second=0, tzinfo=timezone('utc'))
 
-        cls.currency_aed_id = cls.env.ref('base.AED')
-        cls.currency_aed_id.write({'active': True})
-        cls.env['res.currency.rate'].search([]).unlink()
-        cls.env['res.currency.rate'].create({'currency_id': cls.currency_aed_id.id,
-                                            'rate': 0.198117095128, 'name': '2022-03-15'})
+        cls.currency_aed_id = cls.setup_other_currency('AED', rates=[('2022-03-15', 0.198117095128)])
 
         # Allow to see the full result of AssertionError.
         cls.maxDiff = None
 
         cls.company_data['company'].write({
-            'country_id': cls.env.ref('base.eg').id,
             'l10n_eg_client_identifier': 'ahuh1pojnbakKK',
             'l10n_eg_client_secret': '1ashiqwhejmasn197',
-            'vat': 'EG1103143170L',
+            'vat': '123-456-789',
         })
 
         # ==== Business ====
@@ -52,7 +49,7 @@ class TestEGEdiCommon(AccountEdiTestCommon):
         })
         cls.partner_c = cls.env['res.partner'].create({
             'name': 'عميل 1',
-            'vat': 'EG11231212',
+            'vat': '123-456-789',
             'country_id': cls.env.ref('base.eg').id,
             'city': 'Iswan',
             'state_id': cls.env.ref('base.state_eg_c').id,
@@ -68,7 +65,7 @@ class TestEGEdiCommon(AccountEdiTestCommon):
         })
         cls.company_branch = cls.env['res.partner'].create({
             'name': 'branch partner',
-            'vat': '918KKL1',
+            'vat': '456-789-123',
             'country_id': cls.env.ref('base.eg').id,
             'city': 'Iswan',
             'state_id': cls.env.ref('base.state_eg_c').id,

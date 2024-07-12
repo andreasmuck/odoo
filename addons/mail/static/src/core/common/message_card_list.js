@@ -13,7 +13,6 @@ import { useService } from "@web/core/utils/hooks";
  * @property {function} [loadMore]
  * @property {string} mode
  * @property {function} [onClickJump]
- * @property {function} [onClickUnpin]
  * @property {function} [onLoadMoreVisible]
  * @property {boolean} [showEmpty]
  * @property {import("@mail/core/common/thread_model").Thread} thread
@@ -28,7 +27,6 @@ export class MessageCardList extends Component {
         "loadMore?",
         "mode",
         "onClickJump?",
-        "onClickUnpin?",
         "onLoadMoreVisible?",
         "showEmpty?",
         "thread",
@@ -36,6 +34,7 @@ export class MessageCardList extends Component {
     static template = "mail.MessageCardList";
 
     setup() {
+        super.setup();
         this.ui = useState(useService("ui"));
         useSubEnv({ messageCard: true });
         useVisible("load-more", (isVisible) => {

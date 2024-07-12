@@ -10,7 +10,7 @@ from odoo.exceptions import UserError
 class HrLeave(models.Model):
     _inherit = 'hr.leave'
 
-    l10n_fr_date_to_changed = fields.Boolean()
+    l10n_fr_date_to_changed = fields.Boolean(export_string_translation=False)
 
     def _l10n_fr_leave_applies(self):
         # The french l10n is meant to be computed only in very specific cases:
@@ -31,7 +31,7 @@ class HrLeave(models.Model):
         # The following computation doesn't work for resource calendars in
         # which the employee works zero hours.
         if not (self.resource_calendar_id.attendance_ids):
-            raise UserError(_("An employee cannot take a paid time off in a period they work no hours."))
+            raise UserError(_("An employee can't take paid time off in a period without any work hours."))
 
         if self.request_unit_half and self.request_date_from_period == 'am':
             # In normal workflows request_unit_half implies that date_from and date_to are the same
@@ -89,6 +89,11 @@ class HrLeave(models.Model):
         For example take an employee working mon-wed in a company where the regular calendar is mon-fri.
         If the employee were to take a time off ending on wednesday, the legal duration would count until friday.
         """
-        if self._l10n_fr_leave_applies():
-            return super()._get_durations(resource_calendar=(resource_calendar or self.company_id.resource_calendar_id))
+        if not resource_calendar:
+            fr_leaves = self.filtered(lambda leave: leave._l10n_fr_leave_applies())
+            duration_by_leave_id = super(HrLeave, self - fr_leaves)._get_durations(resource_calendar=resource_calendar)
+            fr_leaves_by_company = fr_leaves.grouped('company_id')
+            for company, leaves in fr_leaves_by_company.items():
+                duration_by_leave_id.update(leaves._get_durations(resource_calendar=company.resource_calendar_id))
+            return duration_by_leave_id
         return super()._get_durations(resource_calendar=resource_calendar)

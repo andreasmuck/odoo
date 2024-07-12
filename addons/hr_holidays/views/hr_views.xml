@@ -4,9 +4,10 @@
    <record id="hr_employee_action_from_department" model="ir.actions.act_window">
        <field name="name">Absent Employees</field>
        <field name="res_model">hr.employee</field>
-       <field name="view_mode">kanban,tree,form</field>
+       <field name="view_mode">tree,kanban,form</field>
        <field name="context">{
-           'search_default_is_absent': 1,
+           'search_default_on_timeoff': 1,
+           'searchpanel_default_department_id': active_id,
            'search_default_department_id': active_id,
            'default_department_id': active_id}
        </field>
@@ -63,9 +64,11 @@
                 </xpath>
 
                 <xpath expr="//div[hasclass('o_kanban_manage_reports')]" position="inside">
-                    <a role="menuitem" class="dropdown-item" name="%(hr_leave_action_action_department)d" type="action" groups="hr_holidays.group_hr_holidays_user">
-                        Time Off
-                    </a>
+                    <div role="menuitem">
+                        <a class="dropdown-item" name="%(hr_leave_action_action_department)d" type="action" groups="hr_holidays.group_hr_holidays_user">
+                            Time Off
+                        </a>
+                    </div>
                 </xpath>
             </data>
         </field>

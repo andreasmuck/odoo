@@ -226,7 +226,7 @@ class TestOldRules(TestStockCommon):
         final_location = partner_demo_customer.property_stock_customer
         product_a = self.env['product.product'].create({
             'name': 'ProductA',
-            'type': 'product',
+            'is_storable': True,
         })
 
         self.env['stock.quant']._update_available_quantity(product_a, warehouse.wh_output_stock_loc_id, 4.0)
@@ -406,7 +406,7 @@ class TestOldRules(TestStockCommon):
         procurement_group0 = self.env['procurement.group'].create({})
         product1 = self.env['product.product'].create({
             'name': 'test_procurement_group_merge',
-            'type': 'product',
+            'is_storable': True,
         })
         pick_ship_route = self.warehouse_2_steps.delivery_route_id
         ship_rule = pick_ship_route.rule_ids.filtered(lambda rule: '2S: Output → Customers' in rule.name)
@@ -471,7 +471,7 @@ class TestOldRules(TestStockCommon):
         # Create a product and add 10 units in stock
         product_a = self.env['product.product'].create({
             'name': 'ProductA',
-            'type': 'product',
+            'is_storable': True,
         })
         self.env['stock.quant']._update_available_quantity(product_a, self.warehouse_2_steps.lot_stock_id, 10.0)
         warehouse = self.warehouse_2_steps
@@ -551,7 +551,7 @@ class TestOldRules(TestStockCommon):
         warehouse = self.warehouse_3_steps
         self.product = self.env['product.product'].create({
             'name': 'Test product',
-            'type': 'product',
+            'is_storable': True,
         })
 
         ship_move = self.env['stock.move'].create({
@@ -587,3 +587,63 @@ class TestOldRules(TestStockCommon):
         report = self.env['report.stock.report_reception']
         report_values = report._get_report_values(docids=[receipt.id])
         self.assertEqual(len(report_values['sources_to_lines']), 1, "There should only be 1 line (pick move)")
+
+    def test_pick_ship_1(self):
+        """ Enable the pick ship route, force a procurement group on the
+        pick. When a second move is added, make sure the `partner_id` and
+        `origin` fields are erased.
+        """
+        pick_ship_route = self.warehouse_2_steps.delivery_route_id
+        # create a procurement group and set in on the pick stock rule
+        procurement_group0 = self.env['procurement.group'].create({})
+        pick_rule = pick_ship_route.rule_ids.filtered(lambda rule: 'Stock → Output' in rule.name)
+        push_rule = pick_ship_route.rule_ids - pick_rule
+        pick_rule.write({
+            'group_propagation_option': 'fixed',
+            'group_id': procurement_group0.id,
+        })
+
+        ship_location = pick_rule.location_dest_id
+        customer_location = push_rule.location_dest_id
+        partners = self.env['res.partner'].search([], limit=2)
+        partner0 = partners[0]
+        partner1 = partners[1]
+        procurement_group1 = self.env['procurement.group'].create({'partner_id': partner0.id})
+        procurement_group2 = self.env['procurement.group'].create({'partner_id': partner1.id})
+
+        move1 = self.env['stock.move'].create({
+            'name': 'first out move',
+            'procure_method': 'make_to_order',
+            'location_id': ship_location.id,
+            'location_dest_id': customer_location.id,
+            'product_id': self.productA.id,
+            'product_uom': self.uom_unit.id,
+            'product_uom_qty': 1.0,
+            'warehouse_id': self.warehouse_2_steps.id,
+            'group_id': procurement_group1.id,
+            'origin': 'origin1',
+        })
+
+        move2 = self.env['stock.move'].create({
+            'name': 'second out move',
+            'procure_method': 'make_to_order',
+            'location_id': ship_location.id,
+            'location_dest_id': customer_location.id,
+            'product_id': self.productA.id,
+            'product_uom': self.uom_unit.id,
+            'product_uom_qty': 1.0,
+            'warehouse_id': self.warehouse_2_steps.id,
+            'group_id': procurement_group2.id,
+            'origin': 'origin2',
+        })
+
+        # first out move, the "pick" picking should have a partner and an origin
+        move1._action_confirm()
+        picking_pick = move1.move_orig_ids.picking_id
+        self.assertEqual(picking_pick.partner_id.id, procurement_group1.partner_id.id)
+        self.assertEqual(picking_pick.origin, move1.group_id.name)
+
+        # second out move, the "pick" picking should have lost its partner and origin
+        move2._action_confirm()
+        self.assertEqual(picking_pick.partner_id.id, False)
+        self.assertEqual(picking_pick.origin, False)

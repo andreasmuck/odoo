@@ -9,6 +9,7 @@ import {
 } from "@odoo/owl";
 
 import { browser } from "@web/core/browser/browser";
+import { makeDraggableHook } from "@web/core/utils/draggable_hook_builder_owl";
 import { useService } from "@web/core/utils/hooks";
 
 export function useLazyExternalListener(target, eventName, handler, eventParams) {
@@ -68,35 +69,81 @@ export function onExternalClick(refName, cb) {
     });
 }
 
-export function useHover(refName, callback = () => {}) {
-    const ref = useRef(refName);
+/**
+ * @param {string | string[]} refNames
+ * @param {(boolean) => void} callback
+ * @returns {({ isHover: boolean })}
+ */
+export function useHover(refNames, callback = () => {}) {
+    refNames = Array.isArray(refNames) ? refNames : [refNames];
+    const targets = [];
+    for (const refName of refNames) {
+        const withDirectParent = refName.endsWith("*");
+        targets.push({
+            ref: refName.endsWith("*")
+                ? useRef(refName.substring(0, refName.length - 1))
+                : useRef(refName),
+            withDirectParent,
+        });
+    }
     const state = useState({ isHover: false });
     function onHover(hovered) {
         state.isHover = hovered;
         callback(hovered);
     }
-    useLazyExternalListener(
-        () => ref.el,
-        "mouseenter",
-        (ev) => {
-            if (ref.el.contains(ev.relatedTarget)) {
-                return;
-            }
-            onHover(true);
-        },
-        true
-    );
-    useLazyExternalListener(
-        () => ref.el,
-        "mouseleave",
-        (ev) => {
-            if (ref.el.contains(ev.relatedTarget)) {
-                return;
-            }
-            onHover(false);
-        },
-        true
-    );
+    for (const target of targets) {
+        useLazyExternalListener(
+            () => target.ref.el,
+            "mouseenter",
+            (ev) => {
+                if (state.isHover) {
+                    return;
+                }
+                for (const target of targets) {
+                    if (!target.ref.el) {
+                        continue;
+                    }
+                    if (target.ref.el.contains(ev.target)) {
+                        onHover(true);
+                        return;
+                    }
+                    if (
+                        target.withDirectParent &&
+                        target.ref.el.parentElement.contains(ev.target)
+                    ) {
+                        onHover(true);
+                        return;
+                    }
+                }
+            },
+            true
+        );
+        useLazyExternalListener(
+            () => target.ref.el,
+            "mouseleave",
+            (ev) => {
+                if (!state.isHover) {
+                    return;
+                }
+                for (const target of targets) {
+                    if (!target.ref.el) {
+                        continue;
+                    }
+                    if (target.ref.el.contains(ev.relatedTarget)) {
+                        return;
+                    }
+                    if (
+                        target.withDirectParent &&
+                        target.ref.el.parentElement.contains(ev.relatedTarget)
+                    ) {
+                        return;
+                    }
+                }
+                onHover(false);
+            },
+            true
+        );
+    }
     return state;
 }
 
@@ -164,7 +211,6 @@ export function useVisible(refName, cb, { ready = true } = {}) {
  */
 export function useMessageHighlight(duration = 2000) {
     let timeout;
-    const threadService = useService("mail.thread");
     const state = useState({
         clearHighlight() {
             if (this.highlightedMessageId) {
@@ -181,7 +227,7 @@ export function useMessageHighlight(duration = 2000) {
             if (thread.notEq(message.thread)) {
                 return;
             }
-            await threadService.loadAround(thread, message.id);
+            await thread.loadAround(message.id);
             const lastHighlightedMessageId = state.highlightedMessageId;
             this.clearHighlight();
             if (lastHighlightedMessageId === message.id) {
@@ -191,6 +237,25 @@ export function useMessageHighlight(duration = 2000) {
             thread.scrollTop = undefined;
             state.highlightedMessageId = message.id;
             timeout = browser.setTimeout(() => this.clearHighlight(), duration);
+        },
+        scrollPromise: null,
+        /**
+         * Scroll the element into view and expose a promise that will resolved
+         * once the scroll is done.
+         *
+         * @param {Element} el
+         */
+        scrollTo(el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+            state.scrollPromise = new Promise((resolve) => {
+                if ("scrollend" in window) {
+                    document.addEventListener("scrollend", resolve, { once: true, capture: true });
+                } else {
+                    // To remove when safari will support the "scrollend" event.
+                    setTimeout(resolve, 250);
+                }
+            });
+            return state.scrollPromise;
         },
         highlightedMessageId: null,
     });
@@ -367,3 +432,24 @@ export function useDiscussSystray() {
         },
     };
 }
+
+export const useMovable = makeDraggableHook({
+    name: "useMovable",
+    onWillStartDrag({ ctx, addCleanup, addStyle, getRect }) {
+        const { height } = getRect(ctx.current.element);
+        ctx.current.container = document.createElement("div");
+        addStyle(ctx.current.container, {
+            position: "fixed",
+            top: 0,
+            bottom: `${height}px`,
+            left: 0,
+            right: 0,
+        });
+        ctx.current.element.after(ctx.current.container);
+        addCleanup(() => ctx.current.container.remove());
+    },
+    onDrop({ ctx, getRect }) {
+        const { top, left } = getRect(ctx.current.element);
+        return { top, left };
+    },
+});

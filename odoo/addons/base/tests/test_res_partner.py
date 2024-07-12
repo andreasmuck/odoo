@@ -615,6 +615,26 @@ class TestPartnerAddressCompany(TransactionCase):
         res_bhide = test_partner_bhide.with_context(show_address=1, address_inline=1).display_name
         self.assertEqual(res_bhide, "Atmaram Bhide", "name should contain only name if address is not available, without extra commas")
 
+    def test_accessibility_of_company_partner_from_branch(self):
+        """ Check accessibility of company partner from branch. """
+        company = self.env['res.company'].create({'name': 'company'})
+        branch = self.env['res.company'].create({
+            'name': 'branch',
+            'parent_id': company.id
+        })
+        partner = self.env['res.partner'].create({
+            'name': 'partner',
+            'company_id': company.id
+        })
+        user = self.env['res.users'].create({
+            'name': 'user',
+            'login': 'user',
+            'company_id': branch.id,
+            'company_ids': [branch.id]
+        })
+        record = self.env['res.partner'].with_user(user).search([('id', '=', partner.id)])
+        self.assertEqual(record.id, partner.id)
+
 
 @tagged('res_partner', 'post_install', '-at_install')
 class TestPartnerForm(TransactionCase):
@@ -669,6 +689,7 @@ class TestPartnerForm(TransactionCase):
             child.name = "Second Child"
             self.assertEqual(child.lang, 'fr_FR', "Child contact's lang should be the same as its parent.")
         partner = partner_form.save()
+        self.assertEqual(partner.child_ids.mapped('lang'), ['de_DE', 'fr_FR'])
 
         # check final values (kept from form input)
         self.assertEqual(partner.lang, 'fr_FR')
@@ -707,8 +728,11 @@ class TestPartnerRecursion(TransactionCase):
         self.p3 = res_partner.create({'name': 'Elmtree Grand-Child 1.1', 'parent_id': self.p2.id})
 
     def test_100_res_partner_recursion(self):
-        self.assertTrue(self.p3._check_recursion())
-        self.assertTrue((self.p1 + self.p2 + self.p3)._check_recursion())
+        self.assertFalse(self.p3._has_cycle())
+        self.assertFalse((self.p1 + self.p2 + self.p3)._has_cycle())
+
+        # special case: empty recordsets don't lead to cycles
+        self.assertFalse(self.env['res.partner']._has_cycle())
 
     # split 101, 102, 103 tests to force SQL rollback between them
 
@@ -730,6 +754,11 @@ class TestPartnerRecursion(TransactionCase):
         with self.assertRaises(ValidationError):
             self.p2.write({'child_ids': [Command.update(self.p3.id, {'parent_id': p3b.id}),
                                          Command.update(p3b.id, {'parent_id': self.p3.id})]})
+
+    def test_105_res_partner_recursion(self):
+        with self.assertRaises(ValidationError):
+            # p3 -> p2 -> p1 -> p2
+            (self.p3 + self.p1).parent_id = self.p2
 
     def test_110_res_partner_recursion_multi_update(self):
         """ multi-write on several partners in same hierarchy must not trigger a false cycle detection """

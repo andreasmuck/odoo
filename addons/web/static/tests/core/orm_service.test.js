@@ -1,17 +1,20 @@
 import { after, describe, expect, test } from "@odoo/hoot";
 import { on } from "@odoo/hoot-dom";
 import { Component, xml } from "@odoo/owl";
+import { getService, makeMockEnv, mountWithCleanup, onRpc } from "@web/../tests/web_test_helpers";
 
-import { makeMockEnv, mountWithCleanup, onRpc } from "@web/../tests/web_test_helpers";
 import { rpcBus } from "@web/core/network/rpc";
 import { useService } from "@web/core/utils/hooks";
+import { pick } from "@web/core/utils/objects";
 
 describe.current.tags("headless");
 
+const getRelevantParams = (params) => pick(params, "args", "kwargs", "method", "model");
+
 test("add user context to a simple read request", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [[3], ["id", "descr"]],
             kwargs: {
                 context: {
@@ -30,13 +33,13 @@ test("add user context to a simple read request", async () => {
     const { services } = await makeMockEnv();
     await services.orm.read("res.partner", [3], ["id", "descr"]);
 
-    expect(["/web/dataset/call_kw/res.partner/read"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/res.partner/read"]);
 });
 
 test("context is combined with user context in read request", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [[3], ["id", "descr"]],
             kwargs: {
                 context: {
@@ -60,13 +63,13 @@ test("context is combined with user context in read request", async () => {
         },
     });
 
-    expect(["/web/dataset/call_kw/res.partner/read"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/res.partner/read"]);
 });
 
 test("basic method call of model", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [],
             kwargs: {
                 context: {
@@ -86,13 +89,13 @@ test("basic method call of model", async () => {
     const { services } = await makeMockEnv();
     await services.orm.call("res.partner", "test", [], { context: { a: 1 } });
 
-    expect(["/web/dataset/call_kw/res.partner/test"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/res.partner/test"]);
 });
 
 test("create method: one record", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [[{ color: "red" }]],
             kwargs: {
                 context: {
@@ -111,13 +114,13 @@ test("create method: one record", async () => {
     const { services } = await makeMockEnv();
     await services.orm.create("res.partner", [{ color: "red" }]);
 
-    expect(["/web/dataset/call_kw/res.partner/create"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/res.partner/create"]);
 });
 
 test("create method: several records", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [[{ color: "red" }, { color: "green" }]],
             kwargs: {
                 context: {
@@ -136,13 +139,13 @@ test("create method: several records", async () => {
     const { services } = await makeMockEnv();
     await services.orm.create("res.partner", [{ color: "red" }, { color: "green" }]);
 
-    expect(["/web/dataset/call_kw/res.partner/create"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/res.partner/create"]);
 });
 
 test("read method", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [
                 [2, 5],
                 ["name", "amount"],
@@ -169,13 +172,13 @@ test("read method", async () => {
         context: { abc: 3 },
     });
 
-    expect(["/web/dataset/call_kw/sale.order/read"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/sale.order/read"]);
 });
 
 test("unlink method", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [[43]],
             kwargs: {
                 context: {
@@ -194,13 +197,13 @@ test("unlink method", async () => {
     const { services } = await makeMockEnv();
     await services.orm.unlink("res.partner", [43]);
 
-    expect(["/web/dataset/call_kw/res.partner/unlink"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/res.partner/unlink"]);
 });
 
 test("write method", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [[43, 14], { active: false }],
             kwargs: {
                 context: {
@@ -219,13 +222,13 @@ test("write method", async () => {
     const { services } = await makeMockEnv();
     await services.orm.write("res.partner", [43, 14], { active: false });
 
-    expect(["/web/dataset/call_kw/res.partner/write"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/res.partner/write"]);
 });
 
 test("webReadGroup method", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [],
             kwargs: {
                 domain: [["user_id", "=", 2]],
@@ -254,13 +257,13 @@ test("webReadGroup method", async () => {
         { offset: 1 }
     );
 
-    expect(["/web/dataset/call_kw/sale.order/web_read_group"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/sale.order/web_read_group"]);
 });
 
 test("readGroup method", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [],
             kwargs: {
                 domain: [["user_id", "=", 2]],
@@ -289,13 +292,13 @@ test("readGroup method", async () => {
         { offset: 1 }
     );
 
-    expect(["/web/dataset/call_kw/sale.order/read_group"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/sale.order/read_group"]);
 });
 
 test("test readGroup method removes duplicate values from groupby", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params.kwargs.groupby).toEqual(["date_order:month"], {
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params).kwargs.groupby).toEqual(["date_order:month"], {
             message: "Duplicate values should be removed from groupby",
         });
         return false;
@@ -310,13 +313,13 @@ test("test readGroup method removes duplicate values from groupby", async () => 
         { offset: 1 }
     );
 
-    expect(["/web/dataset/call_kw/sale.order/read_group"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/sale.order/read_group"]);
 });
 
 test("search_read method", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [],
             kwargs: {
                 context: {
@@ -337,13 +340,13 @@ test("search_read method", async () => {
     const { services } = await makeMockEnv();
     await services.orm.searchRead("sale.order", [["user_id", "=", 2]], ["amount_total"]);
 
-    expect(["/web/dataset/call_kw/sale.order/search_read"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/sale.order/search_read"]);
 });
 
 test("search_count method", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [[["user_id", "=", 2]]],
             kwargs: {
                 context: {
@@ -362,13 +365,13 @@ test("search_count method", async () => {
     const { services } = await makeMockEnv();
     await services.orm.searchCount("sale.order", [["user_id", "=", 2]]);
 
-    expect(["/web/dataset/call_kw/sale.order/search_count"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/sale.order/search_count"]);
 });
 
 test("webRead method", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [[2, 5]],
             kwargs: {
                 specification: { name: {}, amount: {} },
@@ -392,13 +395,13 @@ test("webRead method", async () => {
         context: { abc: 3 },
     });
 
-    expect(["/web/dataset/call_kw/sale.order/web_read"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/sale.order/web_read"]);
 });
 
 test("webSearchRead method", async () => {
-    onRpc(async (route, params) => {
-        expect.step(route);
-        expect(params).toEqual({
+    onRpc(async (params) => {
+        expect.step(params.route);
+        expect(getRelevantParams(params)).toEqual({
             args: [],
             kwargs: {
                 context: {
@@ -421,11 +424,11 @@ test("webSearchRead method", async () => {
         specification: { amount_total: {} },
     });
 
-    expect(["/web/dataset/call_kw/sale.order/web_search_read"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/sale.order/web_search_read"]);
 });
 
 test("orm is specialized for component", async () => {
-    const env = await makeMockEnv();
+    await makeMockEnv();
 
     class MyComponent extends Component {
         static props = {};
@@ -435,14 +438,14 @@ test("orm is specialized for component", async () => {
         }
     }
 
-    const component = await mountWithCleanup(MyComponent, { env });
+    const component = await mountWithCleanup(MyComponent);
 
-    expect(component.orm).not.toBe(env.services.orm);
+    expect(component.orm).not.toBe(getService("orm"));
 });
 
 test("silent mode", async () => {
-    onRpc((route) => {
-        expect.step(route);
+    onRpc((params) => {
+        expect.step(params.route);
         return false;
     });
 
@@ -460,7 +463,7 @@ test("silent mode", async () => {
     await services.orm.silent.read("res.partner", [1], []);
     await services.orm.read("res.partner", [1], []);
 
-    expect([
+    expect.verifySteps([
         "/web/dataset/call_kw/res.partner/partner_method",
         "response",
         "/web/dataset/call_kw/res.partner/partner_method",
@@ -473,7 +476,7 @@ test("silent mode", async () => {
         "response (silent)",
         "/web/dataset/call_kw/res.partner/read",
         "response",
-    ]).toVerifySteps();
+    ]);
 });
 
 test("validate some obviously wrong calls", async () => {
@@ -490,22 +493,22 @@ test("validate some obviously wrong calls", async () => {
 });
 
 test("optimize read and unlink if no ids", async () => {
-    onRpc((route) => {
-        expect.step(route);
+    onRpc((params) => {
+        expect.step(params.route);
         return false;
     });
 
     const { services } = await makeMockEnv();
 
     await services.orm.read("res.partner", [1], []);
-    expect(["/web/dataset/call_kw/res.partner/read"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/res.partner/read"]);
 
     await services.orm.read("res.partner", [], []);
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     await services.orm.unlink("res.partner", [1], {});
-    expect(["/web/dataset/call_kw/res.partner/unlink"]).toVerifySteps();
+    expect.verifySteps(["/web/dataset/call_kw/res.partner/unlink"]);
 
     await services.orm.unlink("res.partner", [], {});
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 });

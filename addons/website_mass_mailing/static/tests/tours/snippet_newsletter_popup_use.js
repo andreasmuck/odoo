@@ -31,11 +31,12 @@ registry.category("web_tour.tours").add('snippet_newsletter_popup_use', {
         content: "Check the modal is now opened and enter text in the subscribe input",
         trigger: '.o_newsletter_popup .modal input',
         in_modal: false,
-        run: 'text hello@world.com',
+        run: "edit hello@world.com",
     },
     {
         content: "Subscribe",
         trigger: '.modal-dialog .btn-primary',
+        run: "click",
     },
     {
         content: "Check the modal is now closed",

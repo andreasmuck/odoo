@@ -60,13 +60,13 @@ class AccountAnalyticLine(models.Model):
         compute='_compute_project_id', store=True, readonly=False)
     user_id = fields.Many2one(compute='_compute_user_id', store=True, readonly=False)
     employee_id = fields.Many2one('hr.employee', "Employee", domain=_domain_employee_id, context={'active_test': False},
-        help="Define an 'hourly cost' on the employee to track the cost of their time.")
-    job_title = fields.Char(related='employee_id.job_title')
+        index=True, help="Define an 'hourly cost' on the employee to track the cost of their time.")
+    job_title = fields.Char(related='employee_id.job_title', export_string_translation=False)
     department_id = fields.Many2one('hr.department', "Department", compute='_compute_department_id', store=True, compute_sudo=True)
     manager_id = fields.Many2one('hr.employee', "Manager", related='employee_id.parent_id', store=True)
-    encoding_uom_id = fields.Many2one('uom.uom', compute='_compute_encoding_uom_id')
+    encoding_uom_id = fields.Many2one('uom.uom', compute='_compute_encoding_uom_id', export_string_translation=False)
     partner_id = fields.Many2one(compute='_compute_partner_id', store=True, readonly=False)
-    readonly_timesheet = fields.Boolean(string="Readonly Timesheet", compute="_compute_readonly_timesheet", compute_sudo=True)
+    readonly_timesheet = fields.Boolean(compute="_compute_readonly_timesheet", compute_sudo=True, export_string_translation=False)
     milestone_id = fields.Many2one('project.milestone', related='task_id.milestone_id')
 
     @api.depends('project_id', 'task_id')
@@ -85,9 +85,14 @@ class AccountAnalyticLine(models.Model):
         return False
 
     def _compute_readonly_timesheet(self):
-        readonly_timesheets = self.filtered(lambda timesheet: timesheet._is_readonly())
-        readonly_timesheets.readonly_timesheet = True
-        (self - readonly_timesheets).readonly_timesheet = False
+        # Since the mrp_module gives write access to portal user on timesheet, we check that the user is an internal one before giving the write access.
+        # It is not supposed to be needed, since portal user are not supposed to have access to the views using this field, but better be safe than sorry
+        if not self.env.user.has_group('base.group_user'):
+            self.readonly_timesheet = True
+        else:
+            readonly_timesheets = self.filtered(lambda timesheet: timesheet._is_readonly())
+            readonly_timesheets.readonly_timesheet = True
+            (self - readonly_timesheets).readonly_timesheet = False
 
     def _compute_encoding_uom_id(self):
         for analytic_line in self:
@@ -118,7 +123,7 @@ class AccountAnalyticLine(models.Model):
         if self.project_id != self.task_id.project_id:
             self.task_id = False
 
-    @api.depends('employee_id')
+    @api.depends('employee_id.user_id')
     def _compute_user_id(self):
         for line in self:
             line.user_id = line.employee_id.user_id if line.employee_id else self._default_user()
@@ -248,13 +253,6 @@ class AccountAnalyticLine(models.Model):
         return result
 
     @api.model
-    def _get_view_cache_key(self, view_id=None, view_type='form', **options):
-        """The override of _get_view changing the time field labels according to the company timesheet encoding UOM
-        makes the view cache dependent on the company timesheet encoding uom"""
-        key = super()._get_view_cache_key(view_id, view_type, **options)
-        return key + (self.env.company.timesheet_encode_uom_id,)
-
-    @api.model
     def get_views(self, views, options=None):
         res = super().get_views(views, options)
         if options and options.get('toolbar'):
@@ -274,11 +272,10 @@ class AccountAnalyticLine(models.Model):
 
     @api.model
     def _get_view(self, view_id=None, view_type='form', **options):
-        """ Set the correct label for `unit_amount`, depending on company UoM """
+        """ Set the correct label for `unit_amount`, for timesheet record"""
         arch, view = super()._get_view(view_id, view_type, **options)
         # Use of sudo as the portal user doesn't have access to uom
         arch = self.sudo()._apply_timesheet_label(arch, view_type=view_type)
-        arch = self._apply_time_label(arch, related_model=self._name)
         return arch, view
 
     @api.model
@@ -289,19 +286,7 @@ class AccountAnalyticLine(models.Model):
         # custom inheretied view stored in database. Even if normally, no xpath can be done on
         # 'string' attribute.
         for node in doc.xpath("//field[@name='unit_amount'][@widget='timesheet_uom'][not(@string)]"):
-            node.set('string', _('%s Spent', re.sub(r'[\(\)]', '', encoding_uom.name or '')))
-        return doc
-
-    @api.model
-    def _apply_time_label(self, view_node, related_model):
-        doc = view_node
-        Model = self.env[related_model]
-        # Just fetch the name of the uom in `timesheet_encode_uom_id` of the current company
-        encoding_uom_name = self.env.company.timesheet_encode_uom_id.with_context(prefetch_fields=False).sudo().name
-        for node in doc.xpath("//field[@widget='timesheet_uom'][not(@string)] | //field[@widget='timesheet_uom_no_toggle'][not(@string)]"):
-            name_with_uom = re.sub(re.escape(_('Hours')) + "|Hours", encoding_uom_name or '', Model._fields[node.get('name')]._description_string(self.env), flags=re.IGNORECASE)
-            node.set('string', name_with_uom)
-
+            node.set('string', _('Time Spent'))
         return doc
 
     def _timesheet_get_portal_domain(self):
@@ -412,6 +397,9 @@ class AccountAnalyticLine(models.Model):
     def _is_timesheet_encode_uom_day(self):
         company_uom = self.env.company.timesheet_encode_uom_id
         return company_uom == self.env.ref('uom.product_uom_day')
+
+    def _is_updatable_timesheet(self):
+        return True
 
     @api.model
     def _convert_hours_to_days(self, time):

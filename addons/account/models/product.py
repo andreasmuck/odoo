@@ -13,11 +13,15 @@ class ProductCategory(models.Model):
     property_account_income_categ_id = fields.Many2one('account.account', company_dependent=True,
         string="Income Account",
         domain=ACCOUNT_DOMAIN,
-        help="This account will be used when validating a customer invoice.")
+        help="This account will be used when validating a customer invoice.",
+        tracking=True,
+    )
     property_account_expense_categ_id = fields.Many2one('account.account', company_dependent=True,
         string="Expense Account",
         domain=ACCOUNT_DOMAIN,
-        help="The expense is accounted for when a vendor bill is validated, except in anglo-saxon accounting with perpetual inventory valuation in which case the expense (Cost of Goods Sold account) is recognized at the customer invoice validation.")
+        help="The expense is accounted for when a vendor bill is validated, except in anglo-saxon accounting with perpetual inventory valuation in which case the expense (Cost of Goods Sold account) is recognized at the customer invoice validation.",
+        tracking=True,
+    )
 
 #----------------------------------------------------------
 # Products
@@ -25,12 +29,16 @@ class ProductCategory(models.Model):
 class ProductTemplate(models.Model):
     _inherit = "product.template"
 
-    taxes_id = fields.Many2many('account.tax', 'product_taxes_rel', 'prod_id', 'tax_id', help="Default taxes used when selling the product.", string='Customer Taxes',
+    taxes_id = fields.Many2many('account.tax', 'product_taxes_rel', 'prod_id', 'tax_id',
+        string="Sales Taxes",
+        help="Default taxes used when selling the product",
         domain=[('type_tax_use', '=', 'sale')],
         default=lambda self: self.env.companies.account_sale_tax_id or self.env.companies.root_id.sudo().account_sale_tax_id,
     )
     tax_string = fields.Char(compute='_compute_tax_string')
-    supplier_taxes_id = fields.Many2many('account.tax', 'product_supplier_taxes_rel', 'prod_id', 'tax_id', string='Vendor Taxes', help='Default taxes used when buying the product.',
+    supplier_taxes_id = fields.Many2many('account.tax', 'product_supplier_taxes_rel', 'prod_id', 'tax_id',
+        string="Purchase Taxes",
+        help="Default taxes used when buying the product",
         domain=[('type_tax_use', '=', 'purchase')],
         default=lambda self: self.env.companies.account_purchase_tax_id or self.env.companies.root_id.sudo().account_purchase_tax_id,
     )
@@ -62,10 +70,10 @@ class ProductTemplate(models.Model):
         return res
 
     def get_product_accounts(self, fiscal_pos=None):
-        accounts = self._get_product_accounts()
-        if not fiscal_pos:
-            fiscal_pos = self.env['account.fiscal.position']
-        return fiscal_pos.map_accounts(accounts)
+        return {
+            key: (fiscal_pos or self.env['account.fiscal.position']).map_account(account)
+            for key, account in self._get_product_accounts().items()
+        }
 
     @api.depends('company_id')
     @api.depends_context('allowed_company_ids')
@@ -85,10 +93,10 @@ class ProductTemplate(models.Model):
         joined = []
         included = res['total_included']
         if currency.compare_amounts(included, price):
-            joined.append(_('%s Incl. Taxes', format_amount(self.env, included, currency)))
+            joined.append(_('%(amount)s Incl. Taxes', amount=format_amount(self.env, included, currency)))
         excluded = res['total_excluded']
         if currency.compare_amounts(excluded, price):
-            joined.append(_('%s Excl. Taxes', format_amount(self.env, excluded, currency)))
+            joined.append(_('%(amount)s Excl. Taxes', amount=format_amount(self.env, excluded, currency)))
         if joined:
             tax_string = f"(= {', '.join(joined)})"
         else:
@@ -149,9 +157,9 @@ class ProductProduct(models.Model):
         return self.product_tmpl_id._get_product_accounts()
 
     def _get_tax_included_unit_price(self, company, currency, document_date, document_type,
-            is_refund_document=False, product_uom=None, product_currency=None,
-            product_price_unit=None, product_taxes=None, fiscal_position=None
-        ):
+        is_refund_document=False, product_uom=None, product_currency=None,
+        product_price_unit=None, product_taxes=None, fiscal_position=None
+    ):
         """ Helper to get the price unit from different models.
             This is needed to compute the same unit price in different models (sale order, account move, etc.) with same parameters.
         """
@@ -187,17 +195,44 @@ class ProductProduct(models.Model):
 
         # Apply fiscal position.
         if product_taxes and fiscal_position:
-            product_taxes_after_fp = fiscal_position.map_tax(product_taxes)
-            product_price_unit = self.env['account.tax']._adapt_price_unit_to_another_taxes(
+            product_price_unit = self._get_tax_included_unit_price_from_price(
                 product_price_unit,
-                product_taxes._convert_to_dict_for_taxes_computation(),
-                product_taxes_after_fp._convert_to_dict_for_taxes_computation(),
+                product_taxes,
+                fiscal_position=fiscal_position,
             )
 
         # Apply currency rate.
         if currency != product_currency:
             product_price_unit = product_currency._convert(product_price_unit, currency, company, document_date, round=False)
 
+        return product_price_unit
+
+    def _get_tax_included_unit_price_from_price(
+        self, product_price_unit, product_taxes,
+        fiscal_position=None,
+        product_taxes_after_fp=None,
+    ):
+        if not product_taxes:
+            return product_price_unit
+
+        if product_taxes_after_fp is None:
+            if not fiscal_position:
+                return product_price_unit
+
+            product_taxes_after_fp = fiscal_position.map_tax(product_taxes)
+
+        original_taxes_data = product_taxes._convert_to_dict_for_taxes_computation()
+        new_taxes_data = product_taxes_after_fp._convert_to_dict_for_taxes_computation()
+        product_values = product_taxes._eval_taxes_computation_turn_to_product_values(
+            original_taxes_data + new_taxes_data,
+            product=self,
+        )
+        product_price_unit = product_taxes._adapt_price_unit_to_another_taxes(
+            price_unit=product_price_unit,
+            product_values=product_values,
+            original_taxes_data=original_taxes_data,
+            new_taxes_data=new_taxes_data,
+        )
         return product_price_unit
 
     @api.depends('lst_price', 'product_tmpl_id', 'taxes_id')
@@ -230,14 +265,19 @@ class ProductProduct(models.Model):
 
         # Search for the product with the exact name, then ilike the name
         name_domains = [('name', '=', name)], [('name', 'ilike', name)] if name else []
+        company = company or self.env.company
         for name_domain in name_domains:
-            product = self.env['product.product'].search(
-                expression.AND([
-                    expression.OR(domains + [name_domain]),
-                    self.env['product.product']._check_company_domain(company),
-                ]),
-                limit=1,
-            )
-            if product:
-                return product
+            for extra_domain in (
+                [*self.env['res.partner']._check_company_domain(company), ('company_id', '!=', False)],
+                [('company_id', '=', False)],
+            ):
+                product = self.env['product.product'].search(
+                    expression.AND([
+                        expression.OR(domains + [name_domain]),
+                        extra_domain,
+                    ]),
+                    limit=1,
+                )
+                if product:
+                    return product
         return self.env['product.product']

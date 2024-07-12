@@ -12,13 +12,19 @@ import { listView } from "@web/views/list/list_view";
 import { ListController } from "@web/views/list/list_controller";
 import { ListRenderer } from "@web/views/list/list_renderer";
 import { onWillStart } from "@odoo/owl";
+import { MEDIAS_BREAKPOINTS, SIZES } from '@web/core/ui/ui_service';
 
 export class ExpenseListController extends ExpenseDocumentUpload(ListController) {
+    static template = `hr_expense.ListView`;
+
     setup() {
         super.setup();
         this.orm = useService('orm');
         this.actionService = useService('action');
         this.isExpenseSheet = this.model.config.resModel === "hr.expense.sheet";
+
+        const mobileMaxWidth = MEDIAS_BREAKPOINTS[SIZES.MD].minWidth;
+        this.onMobile = window.innerWidth <= mobileMaxWidth;
 
         onWillStart(async () => {
             this.userIsExpenseTeamApprover = await user.hasGroup("hr_expense.group_hr_expense_team_approver");
@@ -32,8 +38,9 @@ export class ExpenseListController extends ExpenseDocumentUpload(ListController)
     }
 
     displayCreateReport() {
-        const records = this.model.root.selection;
-        return !this.isExpenseSheet && (records.length === 0 || records.some(record => record.data.state === "draft"))
+        const usesSampleData = this.model.useSampleModel;
+        const records = this.model.root.records;
+        return !usesSampleData && !this.isExpenseSheet && records.length && records.some(record => record.data.state === "draft") && !this.onMobile;
     }
 
     displayApprove() {
@@ -55,7 +62,11 @@ export class ExpenseListController extends ExpenseDocumentUpload(ListController)
         const records = this.model.root.selection;
         const recordIds = records.map((a) => a.resId);
         const model = this.model.config.resModel;
-        const res = await this.orm.call(model, action, [recordIds]);
+        const context = {};
+        if (action === 'action_approve_expense_sheets') {
+            context['validate_analytic'] = true;
+        }
+        const res = await this.orm.call(model, action, [recordIds], {context: context});
         if (res) {
             await this.actionService.doAction(res, {
                 additionalContext: {

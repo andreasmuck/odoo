@@ -11,11 +11,13 @@ from odoo.addons.sale_purchase.tests.common import TestCommonSalePurchaseNoChart
 class TestSalePurchase(TestCommonSalePurchaseNoChart):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
+
+        cls.company_data_2 = cls.setup_other_company()
 
         # create a generic Sale Order with 2 classical products and a purchase service
-        SaleOrder = cls.env['sale.order'].with_context(tracking_disable=True)
+        SaleOrder = cls.env['sale.order']
         cls.analytic_plan = cls.env['account.analytic.plan'].create({'name': 'Plan Test'})
         cls.test_analytic_account_1, cls.test_analytic_account_2 = cls.env['account.analytic.account'].create([
             {
@@ -36,19 +38,19 @@ class TestSalePurchase(TestCommonSalePurchaseNoChart):
             'product_id': cls.company_data['product_service_delivery'].id,
             'product_uom_qty': 1,
             'order_id': cls.sale_order_1.id,
-            'tax_id': False,
+            'tax_ids': False,
         })
         cls.sol1_product_order = cls.env['sale.order.line'].create({
             'product_id': cls.company_data['product_order_no'].id,
             'product_uom_qty': 2,
             'order_id': cls.sale_order_1.id,
-            'tax_id': False,
+            'tax_ids': False,
         })
         cls.sol1_service_purchase_1 = cls.env['sale.order.line'].create({
             'product_id': cls.service_purchase_1.id,
             'product_uom_qty': 4,
             'order_id': cls.sale_order_1.id,
-            'tax_id': False,
+            'tax_ids': False,
         })
 
         cls.sale_order_2 = SaleOrder.create({
@@ -61,19 +63,19 @@ class TestSalePurchase(TestCommonSalePurchaseNoChart):
             'product_id': cls.company_data['product_delivery_no'].id,
             'product_uom_qty': 5,
             'order_id': cls.sale_order_2.id,
-            'tax_id': False,
+            'tax_ids': False,
         })
         cls.sol2_service_order = cls.env['sale.order.line'].create({
             'product_id': cls.company_data['product_service_order'].id,
             'product_uom_qty': 6,
             'order_id': cls.sale_order_2.id,
-            'tax_id': False,
+            'tax_ids': False,
         })
         cls.sol2_service_purchase_2 = cls.env['sale.order.line'].create({
             'product_id': cls.service_purchase_2.id,
             'product_uom_qty': 7,
             'order_id': cls.sale_order_2.id,
-            'tax_id': False,
+            'tax_ids': False,
         })
 
     def test_sale_create_purchase(self):
@@ -98,6 +100,10 @@ class TestSalePurchase(TestCommonSalePurchaseNoChart):
         self.assertNotEqual(purchase_line1.product_id, purchase_line2.product_id, "The 2 PO line should have different products")
         self.assertEqual(purchase_line1.product_id, self.sol1_service_purchase_1.product_id, "The create PO line must have the same product as its mother SO line")
         self.assertEqual(purchase_line2.product_id, self.sol2_service_purchase_2.product_id, "The create PO line must have the same product as its mother SO line")
+
+        self.assertEqual(purchase_line1.price_unit, self.supplierinfo1.price, "Unit price should be taken from the vendor line")
+        self.assertEqual(purchase_line2.price_unit, self.supplierinfo2.price, "Unit price should be taken from the vendor line")
+        self.assertEqual(purchase_line1.discount, self.supplierinfo1.discount, "Discount should be taken from the vendor line")
 
         purchase_order.button_cancel()
 

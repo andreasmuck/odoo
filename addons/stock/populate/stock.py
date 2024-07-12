@@ -55,15 +55,6 @@ class StorageCategory(models.Model):
 
     _populate_sizes = {'small': 10, 'medium': 20, 'large': 50}
 
-    def _populate(self, size):
-        # Activate options used in the stock populate to have a ready Database
-
-        self.env['res.config.settings'].create({
-            'group_stock_storage_categories': True,  # Activate storage categories
-        }).execute()
-
-        return super()._populate(size)
-
     def _populate_factories(self):
 
         return [
@@ -172,8 +163,9 @@ class StockPutawayRule(models.Model):
     _populate_dependencies = ['stock.location', 'product.product']
 
     def _populate_factories(self):
+        sublocation = ['no', 'last_used', 'closest_location']
         company_ids = self.env.registry.populated_models['res.company'][:COMPANY_NB_WITH_STOCK]
-        product_ids = self.env['product.product'].browse(self.env.registry.populated_models['product.product']).filtered(lambda p: p.type == 'product').ids
+        product_ids = self.env['product.product'].browse(self.env.registry.populated_models['product.product']).filtered(lambda p: p.is_storable).ids
         product_categ_ids = self.env.registry.populated_models['product.category']
         storage_categ_ids = self.env.registry.populated_models['stock.storage.category']
         location_ids = self.env['stock.location'].browse(self.env.registry.populated_models['stock.location']).filtered(lambda loc: loc.usage == 'internal')
@@ -199,6 +191,11 @@ class StockPutawayRule(models.Model):
             ]) + self.env['stock.location'].browse(values['location_in_id'])
             return random.choice(child_locs.ids)
 
+        def get_storage_categ_id(values, counter, random):
+            if values['sublocation'] != 'closest_location':
+                return False
+            return random.choice(storage_categ_ids)
+
         return [
             ('company_id', populate.randomize(company_ids)),
             ('product_id', populate.compute(get_product_id)),
@@ -206,7 +203,8 @@ class StockPutawayRule(models.Model):
             ('location_in_id', populate.compute(get_location_in_id)),
             ('location_out_id', populate.compute(get_location_out_id)),
             ('sequence', populate.randint(1, 1000)),
-            ('storage_category_id', populate.randomize(storage_categ_ids)),
+            ('sublocation', populate.randomize(sublocation)),
+            ('storage_category_id', populate.compute(get_storage_categ_id)),
         ]
 
 
@@ -235,7 +233,7 @@ class StockWarehouseOrderpoint(models.Model):
         for suplierinfo in supplierinfos:
             products = suplierinfo.product_id or suplierinfo.product_tmpl_id.product_variant_ids
             # Reordering rule is only on the storable product
-            if products and products[0].type == 'product':
+            if products and products[0].is_storable:
                 valid_product[suplierinfo.company_id.id] |= set(products.ids)
         valid_product = {company_id: product_ids | valid_product[False] for company_id, product_ids in valid_product.items() if company_id}
         invalid_product = {company_id: list(all_product_ids - product_ids) for company_id, product_ids in valid_product.items() if company_id}
@@ -296,7 +294,7 @@ class StockQuant(models.Model):
 
         product_ids = self.env['product.product'].search([
             ('id', 'in', self.env.registry.populated_models['product.product']),
-            ('type', '=', 'product'),
+            ('is_storable', '=', True),
             ('tracking', '=', 'none')
         ]).ids
         locations = self.env['stock.location'].search([
@@ -565,7 +563,7 @@ class StockMove(models.Model):
         return {'picking_id': next_picking_generator()}
 
     def _populate_factories(self):
-        product_ids = self.env['product.product'].browse(self.env.registry.populated_models['product.product']).filtered(lambda p: p.type in ('product', 'consu')).ids
+        product_ids = self.env['product.product'].browse(self.env.registry.populated_models['product.product']).filtered(lambda p: p.type == 'consu').ids
         random_products = populate.Random("move_product_sample")
         product_ids = random_products.sample(product_ids, int(len(product_ids) * 0.8))
 

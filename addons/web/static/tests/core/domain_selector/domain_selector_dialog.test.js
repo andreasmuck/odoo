@@ -1,9 +1,7 @@
-import { expect, test, describe } from "@odoo/hoot";
+import { describe, expect, test } from "@odoo/hoot";
 import { queryOne } from "@odoo/hoot-dom";
 import { animationFrame } from "@odoo/hoot-mock";
 import { Component, xml } from "@odoo/owl";
-
-import { contains, defineModels, mountWithCleanup, onRpc } from "@web/../tests/web_test_helpers";
 import {
     Country,
     Partner,
@@ -12,7 +10,13 @@ import {
     Stage,
     Team,
 } from "@web/../tests/core/tree_editor/condition_tree_editor_test_helpers";
-import { makeDialogMockEnv } from "@web/../tests/_framework/env_test_helpers";
+import {
+    contains,
+    defineModels,
+    makeDialogMockEnv,
+    mountWithCleanup,
+    onRpc,
+} from "@web/../tests/web_test_helpers";
 
 import { DomainSelectorDialog } from "@web/core/domain_selector_dialog/domain_selector_dialog";
 
@@ -56,7 +60,7 @@ test("a domain with a user context dynamic part is valid", async () => {
         return true;
     });
     await contains(".o_dialog footer button").click();
-    expect(["validation", "confirmed"]).toVerifySteps();
+    expect.verifySteps(["validation", "confirmed"]);
 });
 
 test("can extend eval context", async () => {
@@ -73,7 +77,7 @@ test("can extend eval context", async () => {
         return true;
     });
     await contains(".o_dialog footer button").click();
-    expect(["validation", "confirmed"]).toVerifySteps();
+    expect.verifySteps(["validation", "confirmed"]);
 });
 
 test("a domain with an unknown expression is not valid", async () => {
@@ -88,7 +92,7 @@ test("a domain with an unknown expression is not valid", async () => {
         return true;
     });
     await contains(".o_dialog footer button").click();
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 });
 
 test("model_field_selector should close on dialog drag", async () => {

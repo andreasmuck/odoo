@@ -9,7 +9,7 @@ from odoo.exceptions import UserError
 class HrEmployee(models.Model):
     _inherit = 'hr.employee'
 
-    has_timesheet = fields.Boolean(compute='_compute_has_timesheet')
+    has_timesheet = fields.Boolean(compute='_compute_has_timesheet', groups="hr.group_hr_user,base.group_system", export_string_translation=False)
 
     def _compute_has_timesheet(self):
         self.env.cr.execute("""
@@ -65,6 +65,5 @@ class HrEmployee(models.Model):
         action = self.env["ir.actions.act_window"]._for_xml_id("hr_timesheet.timesheet_action_from_employee")
         context = literal_eval(action['context'].replace('active_id', str(self.id)))
         context['create'] = context.get('create', True) and self.active
-        context['grid_range'] = "week"
         action['context'] = context
         return action

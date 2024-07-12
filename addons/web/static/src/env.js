@@ -43,6 +43,13 @@ export function makeEnv() {
 
 const serviceRegistry = registry.category("services");
 
+serviceRegistry.addValidation({
+    start: Function,
+    dependencies: { type: Array, element: String, optional: true },
+    async: { type: [{ type: Array, element: String }, { value: true }], optional: true },
+    "*": true,
+});
+
 export const SERVICES_METADATA = {};
 let startServicesPromise = null;
 
@@ -103,42 +110,25 @@ async function _startServices(env, toStart) {
             toStart.delete(service);
             const entries = (service.dependencies || []).map((dep) => [dep, services[dep]]);
             const dependencies = Object.fromEntries(entries);
-            let value;
-            try {
-                value = service.start(env, dependencies);
-            } catch (e) {
-                value = e;
-                console.error(e);
-            }
+            const value = service.start(env, dependencies);
             if ("async" in service) {
                 SERVICES_METADATA[name] = service.async;
             }
-            if (value instanceof Promise) {
-                proms.push(
-                    new Promise((resolve) => {
-                        value
-                            .then((val) => {
-                                services[name] = val || null;
-                            })
-                            .catch((error) => {
-                                services[name] = error;
-                                console.error("Can't load service '" + name + "' because:", error);
-                            })
-                            .finally(resolve);
-                    })
-                );
-            } else {
-                services[service.name] = value || null;
-            }
+            proms.push(
+                Promise.resolve(value).then((val) => {
+                    services[name] = val || null;
+                })
+            );
         }
         await Promise.all(proms);
         if (proms.length) {
             return start();
         }
     }
-    startServicesPromise = start();
+    startServicesPromise = start().finally(() => {
+        startServicesPromise = null;
+    });
     await startServicesPromise;
-    startServicesPromise = null;
     if (toStart.size) {
         const names = [...toStart].map((s) => s.name);
         const missingDeps = new Set();

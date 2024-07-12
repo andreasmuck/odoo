@@ -3,6 +3,7 @@ from contextlib import contextmanager
 
 from odoo import api, fields, models, _, Command
 from odoo.exceptions import UserError
+from odoo.tools import create_index
 from odoo.tools.misc import formatLang
 
 class AccountBankStatement(models.Model):
@@ -34,7 +35,7 @@ class AccountBankStatement(models.Model):
     # keeping this order is important because the validity of the statements are based on their order
     first_line_index = fields.Char(
         comodel_name='account.bank.statement.line',
-        compute='_compute_date_index', store=True, index=True,
+        compute='_compute_date_index', store=True,
     )
 
     balance_start = fields.Monetary(
@@ -102,6 +103,19 @@ class AccountBankStatement(models.Model):
         string="Attachments",
     )
 
+    def init(self):
+        super().init()
+        create_index(self.env.cr,
+                     indexname='account_bank_statement_journal_id_date_desc_id_desc_idx',
+                     tablename='account_bank_statement',
+                     expressions=['journal_id', 'date DESC', 'id DESC'])
+        create_index(
+            self.env.cr,
+            indexname='account_bank_statement_first_line_index_idx',
+            tablename='account_bank_statement',
+            expressions=['journal_id', 'first_line_index'],
+        )
+
     # -------------------------------------------------------------------------
     # COMPUTE METHODS
     # -------------------------------------------------------------------------
@@ -109,7 +123,7 @@ class AccountBankStatement(models.Model):
     @api.depends('create_date')
     def _compute_name(self):
         for stmt in self:
-            stmt.name = _("%s Statement %s", stmt.journal_id.code, stmt.date)
+            stmt.name = _("%(journal_code)s Statement %(date)s", journal_code=stmt.journal_id.code, date=stmt.date)
 
     @api.depends('line_ids.internal_index', 'line_ids.state')
     def _compute_date_index(self):

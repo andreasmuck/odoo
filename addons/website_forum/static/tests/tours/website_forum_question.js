@@ -9,53 +9,69 @@ registry.category("web_tour.tours").add('forum_question', {
     {
         content: "Ask the question in this forum by clicking on the button.",
         trigger: '.o_wforum_ask_btn',
+        run: "click",
     }, {
         content: "Give your question content.",
         trigger: 'input[name=post_name]',
-        run: 'text First Question Title',
-    }, {
+        run: "edit First Question Title",
+    },
+    {
+        trigger: "#wrap:not(:has(input[name=post_name]:value('')))",
+    },
+    {
         content: "Put your question here.",
-        extra_trigger: "#wrap:not(:has(input[name=post_name]:value('')))",
         trigger: '.note-editable p',
-        run: 'text First Question',
-    }, {
+        run: "editor First Question",
+    },
+    {
+        trigger: ".note-editable:not(:has(br))",
+    },
+    {
         content: "Insert tags related to your question.",
-        extra_trigger: '.note-editable:not(:has(br))',
         trigger: '.select2-choices',
-        run: 'text Tag',
-    }, {
+        run: "editor Tag",
+    },
+    {
+        trigger: "#wrap:not(:has(input[id=s2id_autogen2]:value('')))",
+    },
+    {
         content: "Click to post your question.",
-        extra_trigger: "#wrap:not(:has(input[id=s2id_autogen2]:value('')))",
         trigger: 'button:contains("Post")',
+        run: "click",
     }, {
         content: "This page contain new created question.",
         trigger: '#wrap:has(.fa-star)',
-        run: function() {}, //it's a check that page has been reloaded,
-    }, {
-        content: "Close modal once modal animation is done.",
-        extra_trigger: 'div.modal.modal_shown',
-        trigger: ".modal-header button.btn-close",
     },
     {
-        trigger: "a:contains(\"Answer\").collapsed",
-        content: "Click to answer.",
+        content: "Close modal once modal animation is done.",
+        trigger: ".modal .modal-header button.btn-close",
+        run: "click",
+    },
+    {
+        trigger: "a:contains(\"Reply\").collapsed",
+        content: "Click to reply.",
         position: "bottom",
+        run: "click",
     },
     {
         content: "Put your answer here.",
         trigger: '.note-editable p',
-        run: 'text First Answer',
-    }, {
+        run: "editor First Answer",
+    },
+    {
+        trigger: ".note-editable:not(:has(br))",
+    },
+    {
         content: "Click to post your answer.",
-        extra_trigger: '.note-editable:not(:has(br))',
         trigger: 'button:contains("Post Answer")',
-    }, {
+        run: "click",
+    },
+    {
         content: "Close modal once modal animation is done.",
-        extra_trigger: 'div.modal.modal_shown',
-        trigger: ".modal-header button.btn-close",
+        trigger: ".modal .modal-header button.btn-close",
+        run: "click",
     }, {
         content: "Congratulations! You just created and post your first question and answer.",
         trigger: '.o_wforum_validate_toggler',
-        isCheck: true,
     }]
 });

@@ -11,7 +11,7 @@
                     <div class="input-group">
                         <input type="text" class="form-control text-center" t-att-value="this.props.url"
                                readonly="readonly" onClick="this.select();"/>
-                        <CopyButton content="this.props.url" copyText="copyUrlText" successText="successText"/>
+                        <CopyButton content="this.props.url" copyText="copyUrlText" className="'btn-primary'" successText="successText"/>
                     </div>
                 </div>
                 <div class="col-12 mt-4">
@@ -22,7 +22,7 @@
                                t-on-click.prevent="() => onSocialShareClick(`https://www.facebook.com/sharer/sharer.php?u=${props.url}`)">
                                 <i class="fa fa-facebook-square fa-fw"/>
                             </a>
-                            <a class="btn border bg-white" aria-label="Share on Twitter" title="Share on Twitter"
+                            <a class="btn border bg-white" aria-label="Share on X" title="Share on X"
                                t-on-click.prevent="() => onSocialShareClick(`https://twitter.com/intent/tweet?text=${props.name}&amp;url=${props.url}`)">
                                 <i class="fa fa-twitter fa-fw"/>
                             </a>

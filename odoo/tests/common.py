@@ -54,11 +54,14 @@ import odoo
 from odoo import api
 from odoo.models import BaseModel
 from odoo.exceptions import AccessError
+from odoo.fields import Command
 from odoo.modules.registry import Registry
 from odoo.service import security
 from odoo.sql_db import BaseCursor, Cursor
-from odoo.tools import float_compare, single_email_re, profiler, lower_logging, SQL, DotDict
-from odoo.tools.misc import find_in_path, mute_logger
+from odoo.tools import float_compare, mute_logger, profiler, SQL, DotDict
+from odoo.tools.mail import single_email_re
+from odoo.tools.misc import find_in_path, lower_logging
+from odoo.tools.xml_utils import _validate_xml
 
 from . import case
 
@@ -143,6 +146,16 @@ def standalone(*tags):
     return register
 
 
+def test_xsd(url=None, path=None, skip=False):
+    def decorator(func):
+        def wrapped_f(self, *args, **kwargs):
+            if not skip:
+                xmls = func(self, *args, **kwargs)
+                _validate_xml(self.env, url, path, xmls)
+        return wrapped_f
+    return decorator
+
+
 # For backwards-compatibility - get_db_name() should be used instead
 DB = get_db_name()
 
@@ -173,7 +186,7 @@ def new_test_user(env, login='', groups='base.group_user', context=None, **kwarg
     if context is None:
         context = {}
 
-    groups_id = [(6, 0, [env.ref(g.strip()).id for g in groups.split(',')])]
+    groups_id = [Command.set(kwargs.pop('groups_id', False) or [env.ref(g.strip()).id for g in groups.split(',')])]
     create_values = dict(kwargs, login=login, groups_id=groups_id)
     # automatically generate a name as "Login (groups)" to ease user comprehension
     if not create_values.get('name'):
@@ -789,17 +802,34 @@ class TransactionCase(BaseCase):
 
         cls.addClassCleanup(cls._gc_filestore)
         cls.registry = odoo.registry(get_db_name())
+        cls.registry_start_invalidated = cls.registry.registry_invalidated
         cls.registry_start_sequence = cls.registry.registry_sequence
+
         def reset_changes():
             if (cls.registry_start_sequence != cls.registry.registry_sequence) or cls.registry.registry_invalidated:
                 with cls.registry.cursor() as cr:
                     cls.registry.setup_models(cr)
-            cls.registry.registry_invalidated = False
+            cls.registry.registry_invalidated = cls.registry_start_invalidated
             cls.registry.registry_sequence = cls.registry_start_sequence
             with cls.muted_registry_logger:
                 cls.registry.clear_all_caches()
             cls.registry.cache_invalidated.clear()
         cls.addClassCleanup(reset_changes)
+
+        def signal_changes():
+            if not cls.registry.ready:
+                _logger.info('Skipping signal changes during tests')
+                return
+            _logger.info('Simulating signal changes during tests')
+            if cls.registry.registry_invalidated:
+                cls.registry.registry_sequence += 1
+            for cache_name in cls.registry.cache_invalidated or ():
+                cls.registry.cache_sequences[cache_name] += 1
+            cls.registry.registry_invalidated = False
+            cls.registry.cache_invalidated.clear()
+
+        cls._signal_changes_patcher = patch.object(cls.registry, 'signal_changes', signal_changes)
+        cls.startClassPatcher(cls._signal_changes_patcher)
 
         cls.cr = cls.registry.cursor()
         cls.addClassCleanup(cls.cr.close)
@@ -820,7 +850,7 @@ class TransactionCase(BaseCase):
 
         # restore environments after the test to avoid invoking flush() with an
         # invalid environment (inexistent user id) from another test
-        envs = self.env.all.envs
+        envs = self.env.transaction.envs
         for env in list(envs):
             self.addCleanup(env.clear)
         # restore the set of known environments as it was at setUp
@@ -900,11 +930,11 @@ def run(gen_func):
     except StopIteration:
         return
 
-def save_test_file(test_name, content, prefix, extension='png', logger=_logger, document_type='Screenshot'):
+def save_test_file(test_name, content, prefix, extension='png', logger=_logger, document_type='Screenshot', date_format="%Y%m%d_%H%M%S_%f"):
     assert re.fullmatch(r'\w*_', prefix)
     assert re.fullmatch(r'[a-z]+', extension)
     assert re.fullmatch(r'\w+', test_name)
-    now = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    now = datetime.now().strftime(date_format)
     screenshots_dir = pathlib.Path(odoo.tools.config['screenshots']) / get_db_name() / 'screenshots'
     screenshots_dir.mkdir(parents=True, exist_ok=True)
     fname = f'{prefix}{now}_{test_name}.{extension}'
@@ -1787,9 +1817,15 @@ class HttpCase(TransactionCase):
             # than this transaction.
             self.cr.flush()
             self.cr.clear()
-            with patch('odoo.addons.base.models.res_users.Users._check_credentials', return_value=True):
-                # patching to speedup the check in case the password is hashed with many hashround + avoid to update the password
-                uid = self.registry['res.users'].authenticate(session.db, user, password, {'interactive': False})
+
+            def patched_check_credentials(self, credential, env):
+                return {'uid': self.id, 'auth_method': 'password', 'mfa': 'default'}
+
+            # patching to speedup the check in case the password is hashed with many hashround + avoid to update the password
+            with patch('odoo.addons.base.models.res_users.Users._check_credentials', new=patched_check_credentials):
+                credential = {'login': user, 'password': password, 'type': 'password'}
+                auth_info = self.registry['res.users'].authenticate(session.db, credential, {'interactive': False})
+            uid = auth_info['uid']
             env = api.Environment(self.cr, uid, {})
             session.uid = uid
             session.login = user
@@ -1984,10 +2020,16 @@ def users(*logins):
 
 @decorator
 def warmup(func, *args, **kwargs):
-    """ Decorate a test method to run it twice: once for a warming up phase, and
-        a second time for real.  The test attribute ``warm`` is set to ``False``
-        during warm up, and ``True`` once the test is warmed up.  Note that the
-        effects of the warmup phase are rolled back thanks to a savepoint.
+    """
+    Stabilize assertQueries and assertQueryCount assertions.
+
+    Reset the cache to a stable state by flushing pending changes and
+    invalidating the cache.
+
+    Warmup the ormcaches by running the decorated function an extra time
+    before the actual test runs. The extra execution ignores
+    assertQueries and assertQueryCount assertions, it also discardes all
+    changes but the ormcaches ones.
     """
     self = args[0]
     self.env.flush_all()

@@ -39,7 +39,7 @@ class TestLeadTime(TestCommonSalePurchaseNoChart):
 
         product = self.env['product.product'].create({
             'name': 'corpse starch',
-            'type': 'product',
+            'is_storable': True,
             'seller_ids': [(6, 0, seller.ids)],
             'route_ids': [(6, 0, (self.mto_route + self.buy_route).ids)],
         })
@@ -54,7 +54,7 @@ class TestLeadTime(TestCommonSalePurchaseNoChart):
             'product_uom_qty': 1,
             'product_uom': product.uom_id.id,
             'price_unit': product.list_price,
-            'tax_id': False,
+            'tax_ids': False,
             'order_id': so.id,
         })
         so.action_confirm()

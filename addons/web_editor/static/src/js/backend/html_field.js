@@ -79,7 +79,7 @@ export class HtmlField extends Component {
             this.commitChanges({ urgent: true })
         );
         useBus(model.bus, "NEED_LOCAL_CHANGES", ({ detail }) =>
-            detail.proms.push(this.commitChanges())
+            detail.proms.push(this.commitChanges({ shouldInline: true }))
         );
 
         useSpellCheck();
@@ -143,13 +143,10 @@ export class HtmlField extends Component {
         onMounted(() => {
             this.dynamicPlaceholder?.setElementRef(this.wysiwyg);
         });
-        onWillUnmount(() => {
+        onWillUnmount(async () => {
             if (!this.props.readonly && this._isDirty()) {
-                // If we still have uncommited changes, commit them with the
-                // urgent flag to avoid losing them. Urgent flag is used to be
-                // able to save the changes before the component is destroyed
-                // by the owl component manager.
-                this.commitChanges({ urgent: true });
+                // If we still have uncommited changes, commit them to avoid losing them.
+                await this.commitChanges();
             }
             if (this._qwebPlugin) {
                 this._qwebPlugin.destroy();
@@ -241,6 +238,7 @@ export class HtmlField extends Component {
             },
             fieldId: this.props.id,
             editorPlugins: [...(wysiwygOptions.editorPlugins || []), QWebPlugin, this.MoveNodePlugin],
+            record: this.props.record,
         };
     }
     /**
@@ -381,8 +379,8 @@ export class HtmlField extends Component {
         popover.style.top = topPosition + 'px';
         popover.style.left = leftPosition + 'px';
     }
-    async commitChanges({ urgent } = {}) {
-        if (this._isDirty() || urgent) {
+    async commitChanges({ urgent, shouldInline } = {}) {
+        if (this._isDirty() || urgent || (shouldInline && this.props.isInlineStyle)) {
             let savePendingImagesPromise, toInlinePromise;
             if (this.wysiwyg && this.wysiwyg.odooEditor) {
                 this.wysiwyg.odooEditor.observerUnactive('commitChanges');
@@ -567,8 +565,7 @@ export class HtmlField extends Component {
         // Remove temporarily the class so that css editing will not be converted.
         $odooEditor.removeClass('odoo-editor-editable');
         $editable.html(html);
-
-        await toInline($editable, this.cssRules, this.wysiwyg.$iframe);
+        await toInline($editable, { $iframe: this.wysiwyg.$iframe, wysiwyg:this.wysiwyg });
         $odooEditor.addClass('odoo-editor-editable');
 
         this.wysiwyg.setValue($editable.html());
@@ -579,7 +576,7 @@ export class HtmlField extends Component {
         if (!(this.props.record.fieldNames.includes('attachment_ids') && this.props.record.resModel === 'mail.compose.message')) {
             return;
         }
-        this.props.record.data.attachment_ids.linkTo(attachment.res_id, attachment);
+        this.props.record.data.attachment_ids.linkTo(attachment.id, attachment);
     }
     _onDblClickEditableMedia(ev) {
         const el = ev.currentTarget;

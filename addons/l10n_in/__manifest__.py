@@ -23,7 +23,6 @@ Sheet, now only Vertical format has been permitted Which is Supported By Odoo.
         'base_vat',
         'account_debit_note',
         'account',
-        'account_audit_trail',
     ],
     'auto_install': ['account'],
     'data': [
@@ -39,6 +38,7 @@ Sheet, now only Vertical format has been permitted Which is Supported By Odoo.
         'data/res_partner_industry.xml',
         'data/account_cash_rounding.xml',
         'views/account_invoice_views.xml',
+        'views/account_move_line_views.xml',
         'views/account_journal_views.xml',
         'views/res_config_settings_views.xml',
         'views/product_template_view.xml',

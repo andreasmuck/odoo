@@ -21,7 +21,7 @@ import warnings
 
 import psycopg2
 import pytz
-from markupsafe import Markup
+from markupsafe import Markup, escape as markup_escape
 from psycopg2.extras import Json as PsycopgJson
 from difflib import get_close_matches, unified_diff
 from hashlib import sha256
@@ -30,15 +30,16 @@ from .models import check_property_field_value_name
 from .netsvc import ColoredFormatter, GREEN, RED, DEFAULT, COLOR_PATTERN
 from .tools import (
     float_repr, float_round, float_compare, float_is_zero, human_size,
-    pg_varchar, ustr, OrderedSet, pycompat, sql, SQL, date_utils, unique,
-    image_process, merge_sequences, SQL_ORDER_BY_TYPE, is_list_of, has_list_types,
+    ustr, OrderedSet, pycompat, sql, SQL, date_utils, unique,
+    image_process, merge_sequences, is_list_of,
     html_normalize, html_sanitize,
+    DEFAULT_SERVER_DATE_FORMAT as DATE_FORMAT,
+    DEFAULT_SERVER_DATETIME_FORMAT as DATETIME_FORMAT,
 )
-from .tools.misc import unquote
-from .tools import DEFAULT_SERVER_DATE_FORMAT as DATE_FORMAT
-from .tools import DEFAULT_SERVER_DATETIME_FORMAT as DATETIME_FORMAT
-from .tools.translate import html_translate, _
+from .tools.sql import pg_varchar
 from .tools.mimetypes import guess_mimetype
+from .tools.misc import unquote, has_list_types
+from .tools.translate import html_translate, _
 
 from odoo.exceptions import CacheMiss
 from odoo.osv import expression
@@ -1041,7 +1042,7 @@ class Field(MetaField('DummyField', (object,), {})):
     @property
     def column_order(self):
         """ Prescribed column order in table. """
-        return 0 if self.column_type is None else SQL_ORDER_BY_TYPE[self.column_type[0]]
+        return 0 if self.column_type is None else sql.SQL_ORDER_BY_TYPE[self.column_type[0]]
 
     def update_db(self, model, columns):
         """ Update the database schema to implement this field.
@@ -1187,7 +1188,7 @@ class Field(MetaField('DummyField', (object,), {})):
     # Descriptor methods
     #
 
-    def __get__(self, record, owner):
+    def __get__(self, record, owner=None):
         """ return the value of field ``self`` on ``record`` """
         if record is None:
             return self         # the field is accessed through the owner class
@@ -1242,7 +1243,7 @@ class Field(MetaField('DummyField', (object,), {})):
             if not env.cache.contains(record, self):
                 raise MissingError("\n".join([
                     _("Record does not exist or has been deleted."),
-                    _("(Record: %s, User: %s)", record, env.uid),
+                    _("(Record: %(record)s, User: %(user)s)", record=record, user=env.uid),
                 ])) from None
             value = env.cache.get(record, self)
 
@@ -1333,7 +1334,7 @@ class Field(MetaField('DummyField', (object,), {})):
             # [rec.line_ids.mapped('name') for rec in recs] would generate one
             # query per record in `recs`!
             remaining = records.__class__(records.env, records._ids[len(vals):], records._prefetch_ids)
-            self.__get__(first(remaining), type(remaining))
+            self.__get__(first(remaining))
             vals += records.env.cache.get_until_miss(remaining, self)
 
         return self.convert_to_record_multi(vals, records)
@@ -1385,7 +1386,7 @@ class Field(MetaField('DummyField', (object,), {})):
         """ Process the pending computations of ``self`` on ``records``. This
         should be called only if ``self`` is computed and stored.
         """
-        to_compute_ids = records.env.all.tocompute.get(self)
+        to_compute_ids = records.env.transaction.tocompute.get(self)
         if not to_compute_ids:
             return
 
@@ -1766,21 +1767,38 @@ class _String(Field):
         if value is None:
             return False
         if callable(self.translate) and record.env.context.get('edit_translations'):
-            if not (terms := self.get_trans_terms(value)):
+            if not self.get_trans_terms(value):
                 return value
             base_lang = record._get_base_lang()
-            if base_lang != (record.env.lang or 'en_US'):
-                base_value = record.with_context(edit_translations=None, check_translations=True, lang=base_lang)[self.name]
-                base_terms = self.get_trans_terms(base_value)
-                term_to_state = {term: "translated" if base_term != term else "to_translate" for term, base_term in zip(terms, base_terms)}
-            else:
-                term_to_state = defaultdict(lambda: 'translated')
             lang = record.env.lang or 'en_US'
+
+            if lang != base_lang:
+                base_value = record.with_context(edit_translations=None, check_translations=True, lang=base_lang)[self.name]
+                base_terms_iter = iter(self.get_trans_terms(base_value))
+                get_base = lambda term: next(base_terms_iter)
+            else:
+                get_base = lambda term: term
+
             delay_translation = value != record.with_context(edit_translations=None, check_translations=None, lang=lang)[self.name]
 
-            # use a wrapper to let the frontend js code identify each term and its metadata in the 'edit_translations' context
+            # use a wrapper to let the frontend js code identify each term and
+            # its metadata in the 'edit_translations' context
             def translate_func(term):
-                return f'''<span {'class="o_delay_translation" ' if delay_translation else ''}data-oe-model="{record._name}" data-oe-id="{record.id}" data-oe-field="{self.name}" data-oe-translation-state="{term_to_state[term]}" data-oe-translation-initial-sha="{sha256(term.encode()).hexdigest()}">{term}</span>'''
+                source_term = get_base(term)
+                translation_state = 'translated' if lang == base_lang or source_term != term else 'to_translate'
+                translation_source_sha = sha256(source_term.encode()).hexdigest()
+                return (
+                    '<span '
+                        f'''{'class="o_delay_translation" ' if delay_translation else ''}'''
+                        f'data-oe-model="{markup_escape(record._name)}" '
+                        f'data-oe-id="{markup_escape(record.id)}" '
+                        f'data-oe-field="{markup_escape(self.name)}" '
+                        f'data-oe-translation-state="{translation_state}" '
+                        f'data-oe-translation-source-sha="{translation_source_sha}"'
+                    '>'
+                        f'{term}'
+                    '</span>'
+                )
             # pylint: disable=not-callable
             value = self.translate(translate_func, value)
         return value
@@ -1800,6 +1818,9 @@ class _String(Field):
 
         from_lang_terms = self.get_trans_terms(from_lang_value)
         dictionary = defaultdict(lambda: defaultdict(dict))
+        if not from_lang_terms:
+            return dictionary
+        dictionary.update({from_lang_term: defaultdict(dict) for from_lang_term in from_lang_terms})
 
         for lang, to_lang_value in to_lang_values.items():
             to_lang_terms = self.get_trans_terms(to_lang_value)
@@ -2128,11 +2149,11 @@ class Html(_String):
                     _logger.info(diff_str)
 
                     raise UserError(_(
-                        "The field value you're saving (%s %s) includes content that is "
+                        "The field value you're saving (%(model)s %(field)s) includes content that is "
                         "restricted for security reasons. It is possible that someone "
                         "with higher privileges previously modified it, and you are therefore "
                         "not able to modify it yourself while preserving the content.",
-                        record._description, self.string,
+                        model=record._description, field=self.string,
                     ))
 
         return html_sanitize(value, **sanitize_vals)
@@ -2416,7 +2437,7 @@ class Binary(Field):
         try:
             return psycopg2.Binary(str(value).encode('ascii'))
         except UnicodeEncodeError:
-            raise UserError(_("ASCII characters are required for %s in %s") % (value, self.name))
+            raise UserError(_("ASCII characters are required for %(value)s in %(field)s", value=value, field=self.name))
 
     def convert_to_cache(self, value, record, validate=True):
         if isinstance(value, _BINARY):
@@ -2452,18 +2473,18 @@ class Binary(Field):
             for record_no_bin_size, record in zip(records_no_bin_size, records):
                 try:
                     value = cache.get(record_no_bin_size, self)
-                    try:
-                        value = base64.b64decode(value)
-                    except (TypeError, binascii.Error):
-                        pass
+                    # don't decode non-attachments to be consistent with pg_size_pretty
+                    if not (self.store and self.column_type):
+                        with contextlib.suppress(TypeError, binascii.Error):
+                            value = base64.b64decode(value)
                     try:
                         if isinstance(value, (bytes, _BINARY)):
                             value = human_size(len(value))
                     except (TypeError):
                         pass
                     cache_value = self.convert_to_cache(value, record)
-                    dirty = self.column_type and self.store and any(records._ids)
-                    cache.set(record, self, cache_value, dirty=dirty)
+                    # the dirty flag is independent from this assignment
+                    cache.set(record, self, cache_value, check_dirty=False)
                 except CacheMiss:
                     pass
         else:
@@ -2504,6 +2525,7 @@ class Binary(Field):
         ])
 
     def write(self, records, value):
+        records = records.with_context(bin_size=False)
         if not self.attachment:
             super().write(records, value)
             return
@@ -2583,10 +2605,11 @@ class Image(Binary):
     def create(self, record_values):
         new_record_values = []
         for record, value in record_values:
-            # strange behavior when setting related image field, when `self`
-            # does not resize the same way as its related field
             new_value = self._image_process(value, record.env)
             new_record_values.append((record, new_value))
+            # when setting related image field, keep the unprocessed image in
+            # cache to let the inverse method use the original image; the image
+            # will be resized once the inverse has been applied
             cache_value = self.convert_to_cache(value if self.related else new_value, record)
             record.env.cache.update(record, self, itertools.repeat(cache_value))
         super(Image, self).create(new_record_values)
@@ -2608,6 +2631,16 @@ class Image(Binary):
         cache_value = self.convert_to_cache(value if self.related else new_value, records)
         dirty = self.column_type and self.store and any(records._ids)
         records.env.cache.update(records, self, itertools.repeat(cache_value), dirty=dirty)
+
+    def _inverse_related(self, records):
+        super()._inverse_related(records)
+        if not (self.max_width and self.max_height):
+            return
+        # the inverse has been applied with the original image; now we fix the
+        # cache with the resized value
+        for record in records:
+            value = self._process_related(record[self.name], record.env)
+            record.env.cache.set(record, self, value, dirty=(self.store and self.column_type))
 
     def _image_process(self, value, env):
         if self.readonly and not self.max_width and not self.max_height:
@@ -2937,7 +2970,7 @@ class _Relational(Field):
     context = {}                        # context for searching values
     check_company = False
 
-    def __get__(self, records, owner):
+    def __get__(self, records, owner=None):
         # base case: do the regular access
         if records is None or len(records._ids) <= 1:
             return super().__get__(records, owner)
@@ -2959,12 +2992,17 @@ class _Relational(Field):
 
     @property
     def _related_domain(self):
+        def validated(domain):
+            if isinstance(domain, str) and not self.inherited:
+                # string domains are expressions that are not valid for self's model
+                return None
+            return domain
+
         if callable(self.domain):
             # will be called with another model than self's
-            return lambda recs: self.domain(recs.env[self.model_name])
+            return lambda recs: validated(self.domain(recs.env[self.model_name]))  # pylint: disable=not-callable
         else:
-            # maybe not correct if domain is a string...
-            return self.domain
+            return validated(self.domain)
 
     _related_context = property(attrgetter('context'))
 
@@ -4446,7 +4484,11 @@ class One2many(_RelationalMulti):
         if self.comodel_name in model.env:
             comodel = model.env[self.comodel_name]
             if self.inverse_name not in comodel._fields:
-                raise UserError(_("No inverse field %r found for %r") % (self.inverse_name, self.comodel_name))
+                raise UserError(_(
+                    'No inverse field "%(inverse_field)s" found for "%(comodel)s"',
+                    inverse_field=self.inverse_name,
+                    comodel=self.comodel_name
+                ))
 
     def get_domain_list(self, records):
         comodel = records.env.registry[self.comodel_name]
@@ -4456,7 +4498,7 @@ class One2many(_RelationalMulti):
             domain = domain + [(inverse_field.model_field, '=', records._name)]
         return domain
 
-    def __get__(self, records, owner):
+    def __get__(self, records, owner=None):
         if records is not None and self.inverse_name is not None:
             # force the computation of the inverse field to ensure that the
             # cache value of self is consistent
@@ -4540,7 +4582,8 @@ class One2many(_RelationalMulti):
                             to_create.append(dict(command[2], **{inverse: record.id}))
                         allow_full_delete = False
                     elif command[0] == Command.UPDATE:
-                        comodel.browse(command[1]).write(command[2])
+                        prefetch_ids = recs[self.name]._prefetch_ids
+                        comodel.browse(command[1]).with_prefetch(prefetch_ids).write(command[2])
                     elif command[0] == Command.DELETE:
                         to_delete.append(command[1])
                     elif command[0] == Command.UNLINK:
@@ -4924,7 +4967,8 @@ class Many2many(_RelationalMulti):
                 if command[0] == Command.CREATE:
                     to_create.append((recs._ids, command[2]))
                 elif command[0] == Command.UPDATE:
-                    comodel.browse(command[1]).write(command[2])
+                    prefetch_ids = recs[self.name]._prefetch_ids
+                    comodel.browse(command[1]).with_prefetch(prefetch_ids).write(command[2])
                 elif command[0] == Command.DELETE:
                     to_delete.append(command[1])
                 elif command[0] == Command.UNLINK:
@@ -5157,7 +5201,7 @@ class Id(Field):
     def update_db(self, model, columns):
         pass                            # this column is created with the table
 
-    def __get__(self, record, owner):
+    def __get__(self, record, owner=None):
         if record is None:
             return self         # the field is accessed through the class owner
 

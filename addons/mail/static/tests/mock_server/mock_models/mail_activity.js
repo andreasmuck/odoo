@@ -1,10 +1,11 @@
+import { mailDataHelpers } from "@mail/../tests/mock_server/mail_mock_server";
+
+import { fields, getKwArgs, makeKwArgs, models, serverState } from "@web/../tests/web_test_helpers";
 import { Domain } from "@web/core/domain";
-import { groupBy, sortBy, unique } from "@web/core/utils/arrays";
 import { deserializeDate, serializeDate, today } from "@web/core/l10n/dates";
-import { fields, models, serverState } from "@web/../tests/web_test_helpers";
+import { groupBy, sortBy, unique } from "@web/core/utils/arrays";
 import { DEFAULT_MAIL_SEARCH_ID, DEFAULT_MAIL_VIEW_ID } from "./constants";
 import { MailActivityType } from "./mail_activity_type";
-import { parseModelParams } from "../mail_mock_server";
 
 const { DateTime } = luxon;
 
@@ -32,11 +33,12 @@ export class MailActivity extends models.ServerModel {
         const MailActivityType = this.env["mail.activity.type"];
 
         const activities = this._filter([["id", "in", ids]]);
-        const activityTypes = MailActivityType._filter([
-            ["id", "in", unique(activities.map((a) => a.activity_type_id))],
-        ]);
+        const activityTypes = MailActivityType._filter(
+            [["id", "in", unique(activities.map((a) => a.activity_type_id))]],
+            { active_test: false }
+        );
         const activityTypeById = Object.fromEntries(
-            activityTypes._records.map((actType) => [actType.id, actType])
+            activityTypes.map((actType) => [actType.id, actType])
         );
         this.write(
             activities
@@ -65,6 +67,13 @@ export class MailActivity extends models.ServerModel {
 
     /** @param {number[]} ids */
     activity_format(ids) {
+        return new mailDataHelpers.Store(
+            this.search([["id", "in", ids]], makeKwArgs({ context: { active_test: false } }))
+        ).get_result();
+    }
+
+    /** @param {number[]} ids */
+    _to_store(ids, store) {
         /** @type {import("mock_models").MailActivityType} */
         const MailActivityType = this.env["mail.activity.type"];
         /** @type {import("mock_models").MailTemplate} */
@@ -74,9 +83,9 @@ export class MailActivity extends models.ServerModel {
         /** @type {import("mock_models").ResUsers} */
         const ResUsers = this.env["res.users"];
 
-        return this.read(ids).map((record) => {
+        for (const record of this.read(ids)) {
             const activityType = record.activity_type_id
-                ? MailActivityType._records.find((r) => r.id === record.activity_type_id[0])
+                ? MailActivityType.find((r) => r.id === record.activity_type_id[0])
                 : false;
             if (activityType) {
                 record.display_name = activityType.name;
@@ -92,12 +101,11 @@ export class MailActivity extends models.ServerModel {
             if (record.summary) {
                 record.display_name = record.summary;
             }
-            const user = ResUsers.search_read([["id", "=", record.user_id[0]]])[0];
-            record.persona = ResPartner.mail_partner_format([user.partner_id[0]])[
-                user.partner_id[0]
-            ];
-            return record;
-        });
+            const [user] = ResUsers._filter([["id", "=", record.user_id[0]]]);
+            record.persona = { id: user.partner_id, type: "partner" };
+            store.add(ResPartner.browse(user.partner_id));
+            store.add("Activity", record);
+        }
     }
 
     /**
@@ -108,14 +116,7 @@ export class MailActivity extends models.ServerModel {
      * @param {boolean} fetch_done
      */
     get_activity_data(res_model, domain, limit = 0, offset = 0, fetch_done) {
-        const kwargs = parseModelParams(
-            arguments,
-            "res_model",
-            "domain",
-            "limit",
-            "offset",
-            "fetch_done"
-        );
+        const kwargs = getKwArgs(arguments, "res_model", "domain", "limit", "offset", "fetch_done");
         res_model = kwargs.res_model;
         domain = kwargs.domain;
         limit = kwargs.limit || 0;

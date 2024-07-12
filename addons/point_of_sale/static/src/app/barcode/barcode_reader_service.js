@@ -1,5 +1,3 @@
-/** @odoo-module **/
-
 import { _t } from "@web/core/l10n/translation";
 import { registry } from "@web/core/registry";
 import { Mutex } from "@web/core/utils/concurrency";
@@ -9,11 +7,14 @@ import { BarcodeParser } from "@barcodes/js/barcode_parser";
 import { GS1BarcodeError } from "@barcodes_gs1_nomenclature/js/barcode_parser";
 
 export class BarcodeReader {
-    static serviceDependencies = ["dialog", "hardware_proxy"];
-    constructor(parser, { dialog, hardware_proxy }) {
+    static serviceDependencies = ["dialog", "hardware_proxy", "notification", "action", "orm"];
+    constructor(parser, { dialog, hardware_proxy, notification, action, orm }) {
         this.parser = parser;
         this.dialog = dialog;
+        this.action = action;
+        this.orm = orm;
         this.hardwareProxy = hardware_proxy;
+        this.notification = notification;
         this.setup();
     }
 
@@ -44,7 +45,6 @@ export class BarcodeReader {
     scan(code) {
         return this.mutex.exec(() => this._scan(code));
     }
-
     async _scan(code) {
         if (!code) {
             return;
@@ -73,17 +73,23 @@ export class BarcodeReader {
         } else {
             const cbs = cbMaps.map((cbMap) => cbMap[parseBarcode.type]).filter(Boolean);
             if (cbs.length === 0) {
-                this.dialog.add(AlertDialog, {
-                    title: `Unknown Barcode: ${this.codeRepr(parseBarcode)}`,
-                    body: _t(
-                        "The Point of Sale could not find any product, customer, employee or action associated with the scanned barcode."
-                    ),
-                });
+                this.showNotFoundNotification(parseBarcode);
             }
             for (const cb of cbs) {
                 await cb(parseBarcode);
             }
         }
+    }
+    showNotFoundNotification(code) {
+        this.notification.add(
+            _t(
+                "The Point of Sale could not find any product, customer, employee or action associated with the scanned barcode."
+            ),
+            {
+                type: "warning",
+                title: _t(`Unknown Barcode`) + " " + this.codeRepr(code),
+            }
+        );
     }
 
     codeRepr(parsedBarcode) {

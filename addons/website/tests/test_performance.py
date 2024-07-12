@@ -13,7 +13,22 @@ from odoo.tests.common import HttpCase, tagged
 
 _logger = logging.getLogger(__name__)
 
+
 class UtilPerf(HttpCaseWithUserPortal, HttpCaseWithUserDemo):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # remove menu containing a slug url (only website_helpdesk normally), to
+        # avoid the menu cache being disabled, which would increase sql queries
+        cls.env['website.menu'].search([
+            ('url', '=like', '/%/%-%'),
+        ]).unlink()
+        # if website_livechat is installed before another module, the
+        # get_livechat_channel_info add unrelated query for the current test.
+        # So we disable it.
+        if 'channel_id' in cls.env['website']:
+            cls.env['website'].search([]).channel_id = False
+
     def _get_url_hot_query(self, url, cache=True, query_list=False):
         """ This method returns the number of SQL Queries used inside a request.
         The returned query number will be the same as a "real" (outside of test
@@ -274,11 +289,13 @@ class TestWebsitePerformance(TestWebsitePerformanceCommon):
             'website_page': 2,
             # 1. `_serve_page` search page matching URL..
             # 2. ..then reads it (`is_visible`)
+            'website': 1,
+            # Check if website.cookies_bar is active
             'ir_ui_view': 1,
             # Check if `view.track` to track visitor or not
         }
-        self._check_url_hot_query(self.page.url, 5, select_tables_perf)
-        self.assertEqual(self._get_url_hot_query(self.page.url, cache=False), 5)
+        self._check_url_hot_query(self.page.url, 6, select_tables_perf)
+        self.assertEqual(self._get_url_hot_query(self.page.url, cache=False), 6)
 
     def test_40_perf_sql_queries_page_multi_level_menu(self):
         # menu structure should not impact SQL requests

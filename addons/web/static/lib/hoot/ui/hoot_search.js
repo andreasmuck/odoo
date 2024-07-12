@@ -7,7 +7,14 @@ import { Suite } from "../core/suite";
 import { Tag } from "../core/tag";
 import { Test } from "../core/test";
 import { EXCLUDE_PREFIX, refresh } from "../core/url";
-import { debounce, lookup, normalize, title, useWindowListener } from "../hoot_utils";
+import {
+    INCLUDE_LEVEL,
+    debounce,
+    lookup,
+    normalize,
+    title,
+    useWindowListener,
+} from "../hoot_utils";
 import { HootTagButton } from "./hoot_tag_button";
 
 /**
@@ -25,7 +32,11 @@ import { HootTagButton } from "./hoot_tag_button";
 // Global
 //-----------------------------------------------------------------------------
 
-const { Boolean, localStorage, Object } = globalThis;
+const {
+    Boolean,
+    localStorage,
+    Object: { entries: $entries, values: $values },
+} = globalThis;
 
 //-----------------------------------------------------------------------------
 // Internal
@@ -36,14 +47,16 @@ const { Boolean, localStorage, Object } = globalThis;
  * @param {Record<string, number>} values
  */
 const formatIncludes = (values) =>
-    Object.entries(values).map(([id, value]) => (value >= 0 ? id : `${EXCLUDE_PREFIX}${id}`));
+    $entries(values)
+        .filter(([id, value]) => Math.abs(value) === INCLUDE_LEVEL.url)
+        .map(([id, value]) => (value >= 0 ? id : `${EXCLUDE_PREFIX}${id}`));
 
 /**
  * @param {string} query
  */
 const getPattern = (query) => {
     query = query.match(R_QUERY_CONTENT)[1];
-    return parseRegExp(normalize(query));
+    return parseRegExp(normalize(query), { safe: true });
 };
 
 /**
@@ -115,7 +128,7 @@ const templateIncludeWidget = (tagName) => /* xml */ `
                         'text-fail': includeStatus lt 0,
                         'text-muted': !isSet and hasIncludeValue,
                         'text-primary': !isSet and !hasIncludeValue,
-                        'fst-italic': hasIncludeValue ? includeStatus lte 0 : includeStatus lt 0,
+                        'italic': hasIncludeValue ? includeStatus lte 0 : includeStatus lt 0,
                     }"
                     t-esc="job.name"
                 />
@@ -127,6 +140,7 @@ const templateIncludeWidget = (tagName) => /* xml */ `
 const EMPTY_SUITE = new Suite(null, "...", []);
 const SECRET_SEQUENCE = [38, 38, 40, 40, 37, 39, 37, 39, 66, 65];
 const R_QUERY_CONTENT = new RegExp(`^\\s*${EXCLUDE_PREFIX}?\\s*(.*)\\s*$`);
+const RESULT_LIMIT = 5;
 const STORAGE_KEY = "hoot-latest-searches";
 
 // Template parts, because 16 levels of indent is a bit much
@@ -159,17 +173,25 @@ const TEMPLATE_FILTERS_AND_CATEGORIES = /* xml */ `
         </t>
     </div>
     <t t-foreach="categories" t-as="category" t-key="category">
-        <t t-if="state.categories[category].length">
-            <div class="flex flex-col mb-2">
+        <t t-set="jobs" t-value="state.categories[category][0]" />
+        <t t-set="checkedCount" t-value="state.categories[category][1]" />
+        <t t-if="jobs.length">
+            <div class="flex flex-col mb-2 max-h-48 overflow-hidden">
                 <h4 class="text-primary font-bold flex items-center mb-2">
                     <span class="w-full">
                         <t t-esc="title(category)" />
-                        (<t t-esc="state.categories[category].length" />)
+                        (<t t-esc="checkedCount" />)
                     </span>
                 </h4>
                 <ul class="flex flex-col overflow-y-auto gap-1">
-                    <t t-foreach="state.categories[category]" t-as="job" t-key="job.id">
+                    <t t-set="remainingCount" t-value="state.categories[category][2]" />
+                    <t t-foreach="jobs" t-as="job" t-key="job.id">
                         ${templateIncludeWidget("li")}
+                    </t>
+                    <t t-if="remainingCount > 0">
+                        <div class="italic">
+                            <t t-esc="remainingCount" /> more items ...
+                        </div>
                     </t>
                 </ul>
             </div>
@@ -303,7 +325,7 @@ export class HootSearch extends Component {
                     </label>
                 </div>
                 <t t-if="state.showDropdown">
-                    <div class="hoot-search-dropdown animate-slide-down bg-base text-base absolute mt-1 p-3 shadow rounded shadow z-2">
+                    <div class="hoot-search-dropdown flex flex-col animate-slide-down bg-base text-base absolute mt-1 p-3 shadow rounded shadow z-2">
                         <t t-if="state.empty">
                             ${TEMPLATE_SEARCH_DASHBOARD}
                         </t>
@@ -338,11 +360,11 @@ export class HootSearch extends Component {
     setup() {
         const { runner } = this.env;
 
-        runner.__beforeAll(() => {
+        runner.beforeAll(() => {
             this.state.categories = this.findSuggestions();
             this.state.empty &&= !this.hasFilters();
         });
-        runner.__afterAll(() => this.focusSearchInput());
+        runner.afterAll(() => this.focusSearchInput());
 
         this.rootRef = useRef("root");
         this.searchInputRef = useRef("search-input");
@@ -378,18 +400,21 @@ export class HootSearch extends Component {
 
         const result = [];
         const remaining = [];
+        let checkedCount = 0;
         for (const item of items) {
-            if (item.id in checked) {
+            const value = Math.abs(checked[item.id]);
+            if (value === INCLUDE_LEVEL.url) {
                 result.push(item);
+                checkedCount++;
             } else {
                 remaining.push(item);
             }
         }
 
         const matching = lookup(query, remaining, (item) => item.key);
-        result.push(...matching.slice(0, 5));
+        result.push(...matching.slice(0, RESULT_LIMIT));
 
-        return result;
+        return [result, checkedCount, matching.length - RESULT_LIMIT];
     }
 
     findSuggestions() {
@@ -412,11 +437,18 @@ export class HootSearch extends Component {
         for (const category of this.categories) {
             let include = 0;
             let exclude = 0;
-            for (const value of Object.values(includeSpecs[category])) {
-                if (value > 0) {
-                    include++;
-                } else if (value < 0) {
-                    exclude++;
+            for (const value of $values(includeSpecs[category])) {
+                switch (value) {
+                    case 1:
+                    case 2: {
+                        include++;
+                        break;
+                    }
+                    case -1:
+                    case -2: {
+                        exclude++;
+                        break;
+                    }
                 }
             }
             if (include + exclude) {
@@ -427,8 +459,8 @@ export class HootSearch extends Component {
     }
 
     getHasIncludeValue() {
-        return Object.values(this.runnerState.includeSpecs).some((values) =>
-            Object.values(values).some((value) => value > 0)
+        return $values(this.runnerState.includeSpecs).some((values) =>
+            $values(values).some((value) => value > 0)
         );
     }
 
@@ -462,8 +494,8 @@ export class HootSearch extends Component {
     hasFilters() {
         return Boolean(
             this.state.query.trim() ||
-                Object.values(this.runnerState.includeSpecs).some(
-                    (values) => Object.keys(values).length
+                $values(this.runnerState.includeSpecs).some((values) =>
+                    $values(values).some((value) => Math.abs(value) === INCLUDE_LEVEL.url)
                 )
         );
     }
@@ -472,7 +504,7 @@ export class HootSearch extends Component {
      * @param {number} value
      */
     isReadonly(value) {
-        return value === 2 || value === -2;
+        return Math.abs(value) > 1;
     }
 
     /**
@@ -566,6 +598,8 @@ export class HootSearch extends Component {
         this.state.query = ev.target.value;
         this.state.empty = !this.hasFilters();
 
+        this.env.ui.resultsPage = 0;
+
         this.updateParams(true);
         this.updateSuggestions();
     }
@@ -653,7 +687,7 @@ export class HootSearch extends Component {
         const checked = this.runnerState.includeSpecs;
         for (const category of [...this.categories].reverse()) {
             let foundItemToUncheck = false;
-            for (const [key, value] of Object.entries(checked[category])) {
+            for (const [key, value] of $entries(checked[category])) {
                 if (this.isReadonly(value)) {
                     continue;
                 }

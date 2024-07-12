@@ -1,11 +1,15 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
+
+import json
 
 from collections import OrderedDict
 from lxml import etree
+from re import search
+
 from odoo import Command
+from odoo.tools import mute_logger
 from odoo.exceptions import AccessError
-from odoo.tests import tagged
+from odoo.tests import HttpCase, tagged
 
 from .test_project_sharing import TestProjectSharingCommon
 
@@ -16,15 +20,13 @@ class TestProjectSharingPortalAccess(TestProjectSharingCommon):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        project_share_wizard = cls.env['project.share.wizard'].create({
-            'access_mode': 'edit',
+        cls.env['project.share.wizard'].create({
             'res_model': 'project.project',
             'res_id': cls.project_portal.id,
-            'partner_ids': [
-                Command.link(cls.partner_portal.id),
+            'collaborator_ids': [
+                Command.create({'partner_id': cls.partner_portal.id, 'access_mode': 'edit'}),
             ],
         })
-        project_share_wizard.action_share_record()
 
         Task = cls.env['project.task']
         cls.read_protected_fields_task = OrderedDict([
@@ -86,11 +88,10 @@ class TestProjectSharingPortalAccess(TestProjectSharingCommon):
         })
 
         project_share_wizard_no_user = self.env['project.share.wizard'].create({
-            'access_mode': 'edit',
             'res_model': 'project.project',
             'res_id': self.project_portal.id,
-            'partner_ids': [
-                Command.link(partner_portal_no_user.id),
+            'collaborator_ids': [
+                Command.create({'partner_id': partner_portal_no_user.id, 'access_mode': 'edit'}),
             ],
         })
         self.env["res.config.settings"].create({"auth_signup_uninvited": 'b2b'}).execute()
@@ -104,3 +105,34 @@ class TestProjectSharingPortalAccess(TestProjectSharingCommon):
         self.assertTrue(mail_partner, 'A mail should have been sent to the non portal user')
         self.assertIn('href="http://localhost:8069/web/signup', str(mail_partner.body), 'The message link should contain the url to register to the portal')
         self.assertIn('token=', str(mail_partner.body), 'The message link should contain a personalized token to register to the portal')
+
+
+class TestProjectSharingChatterAccess(TestProjectSharingCommon, HttpCase):
+    @mute_logger('odoo.addons.http_routing.models.ir_http', 'odoo.http')
+    def test_post_chatter_as_portal_user(self):
+        message = self.get_project_share_link()
+        share_link = str(message.body.split('href="')[1].split('">')[0])
+        match = search(r"access_token=([^&]+)&amp;pid=([^&]+)&amp;hash=([^&]*)", share_link)
+        access_token, pid, _hash = match.groups()
+
+        res = self.url_open(
+            url="/mail/chatter_post",
+            data=json.dumps({
+                "params": {
+                    "thread_model": self.task_no_collabo._name,
+                    "thread_id": self.task_no_collabo.id,
+                    "post_data": {'body': '(-b ±√[b²-4ac]) / 2a'},
+                    "token": access_token,
+                    "pid": pid,
+                    "hash": _hash,
+                },
+            }),
+            headers={'Content-Type': 'application/json'},
+        )
+        self.assertEqual(res.status_code, 200)
+
+        self.assertTrue(
+            self.env['mail.message'].sudo().search([
+                ('author_id', '=', self.user_portal.partner_id.id),
+            ])
+        )

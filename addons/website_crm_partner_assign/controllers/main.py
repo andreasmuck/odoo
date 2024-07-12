@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-import datetime
 import werkzeug.urls
 
-from collections import OrderedDict
 from werkzeug.exceptions import NotFound
 
 from odoo import fields
@@ -13,6 +11,7 @@ from odoo.http import request
 from odoo.addons.http_routing.models.ir_http import slug, unslug
 from odoo.addons.website.models.ir_http import sitemap_qs2dom
 from odoo.addons.portal.controllers.portal import CustomerPortal
+from odoo.addons.website_google_map.controllers.main import GoogleMap
 from odoo.addons.website_partner.controllers.main import WebsitePartnerPage
 
 from odoo.tools.translate import _
@@ -99,14 +98,16 @@ class WebsiteAccount(CustomerPortal):
         domain = self.get_domain_my_opp(request.env.user)
 
         today = fields.Date.today()
-        this_week_end_date = fields.Date.to_string(fields.Date.from_string(today) + datetime.timedelta(days=7))
 
         searchbar_filters = {
             'all': {'label': _('Active'), 'domain': []},
+            'no_activities': {
+                'label': _('No Activities'),
+                'domain': [('activity_ids', 'not any', [('user_id', '=', request.env.user.id)]), ('stage_id.is_won', '=', False)]
+            },
+            'overdue': {'label': _('Late Activities'), 'domain': [('activity_date_deadline', '<', today)]},
             'today': {'label': _('Today Activities'), 'domain': [('activity_date_deadline', '=', today)]},
-            'week': {'label': _('This Week Activities'),
-                     'domain': [('activity_date_deadline', '>=', today), ('activity_date_deadline', '<=', this_week_end_date)]},
-            'overdue': {'label': _('Overdue Activities'), 'domain': [('activity_date_deadline', '<', today)]},
+            'future': {'label': _('Future Activities'), 'domain': [('activity_date_deadline', '>', today)]},
             'won': {'label': _('Won'), 'domain': [('stage_id.is_won', '=', True)]},
             'lost': {'label': _('Lost'), 'domain': [('active', '=', False), ('probability', '=', 0)]},
         }
@@ -132,7 +133,9 @@ class WebsiteAccount(CustomerPortal):
 
         if date_begin and date_end:
             domain += [('create_date', '>', date_begin), ('create_date', '<=', date_end)]
-        # pager
+        # pager: bypass activities access rights for search but still apply access rules
+        leads_sudo = CrmLead.sudo()._search(domain)
+        domain = [('id', 'in', leads_sudo)]
         opp_count = CrmLead.search_count(domain)
         pager = request.website.pager(
             url="/my/opportunities",
@@ -152,7 +155,7 @@ class WebsiteAccount(CustomerPortal):
             'pager': pager,
             'searchbar_sortings': searchbar_sortings,
             'sortby': sortby,
-            'searchbar_filters': OrderedDict(sorted(searchbar_filters.items())),
+            'searchbar_filters': searchbar_filters,
             'filterby': filterby,
         })
         return request.render("website_crm_partner_assign.portal_my_opportunities", values)
@@ -181,8 +184,26 @@ class WebsiteAccount(CustomerPortal):
             })
 
 
-class WebsiteCrmPartnerAssign(WebsitePartnerPage):
+class WebsiteCrmPartnerAssign(WebsitePartnerPage, GoogleMap):
     _references_per_page = 40
+
+    def _get_gmap_domains(self, **kw):
+        domains = super()._get_gmap_domains(**kw)
+        current_grade = kw.get('current_grade')
+        current_country = kw.get('current_country')
+
+        domain = [('grade_id', '!=', False), ('is_company', '=', True)]
+        if not request.env.user.has_group('website.group_website_restricted_editor'):
+            domain += [('grade_id.website_published', '=', True)]
+
+        if current_country:
+            domain += [('country_id', '=', int(current_country))]
+
+        if current_grade:
+            domain += [('grade_id', '=', int(current_grade))]
+
+        domains['website_crm_partner_assign.partners'] = domain
+        return domains
 
     def sitemap_partners(env, rule, qs):
         if not qs or qs.lower() in '/partners':

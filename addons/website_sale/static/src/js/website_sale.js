@@ -16,7 +16,6 @@ import { Component } from "@odoo/owl";
 export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerMixin, {
     selector: '.oe_website_sale',
     events: Object.assign({}, VariantMixin.events || {}, {
-        'change form .js_product:first input[name="add_qty"]': '_onChangeAddQuantity',
         'mouseup .js_publish': '_onMouseupPublish',
         'touchend .js_publish': '_onMouseupPublish',
         'change .oe_cart input.js_quantity[data-product-id]': '_onChangeCartQuantity',
@@ -31,7 +30,6 @@ export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerM
         'click #add_to_cart, .o_we_buy_now, #products_grid .o_wsale_product_btn .a-submit': 'async _onClickAdd',
         'click input.js_product_change': 'onChangeVariant',
         'change .js_main_product [data-attribute_exclusions]': 'onChangeVariant',
-        'change oe_advanced_configurator_modal [data-attribute_exclusions]': 'onChangeVariant',
         'click .o_product_page_reviews_link': '_onClickReviewsLink',
         'mousedown .o_wsale_filmstip_wrapper': '_onMouseDown',
         'mouseleave .o_wsale_filmstip_wrapper': '_onMouseLeave',
@@ -55,7 +53,6 @@ export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerM
         this.filmStripScrollLeft = 0;
         this.filmStripMoved = false;
 
-        delete this.events['change .main_product:not(.in_cart) input.js_quantity'];
         delete this.events['change [data-attribute_exclusions]'];
     },
     /**
@@ -64,13 +61,7 @@ export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerM
     start() {
         const def = this._super(...arguments);
 
-        this._applyHashFromSearch();
-
-        this.$("div.js_product")
-            .toArray()
-            .forEach((product) => {
-            $('input.js_product_change', product).first().trigger('change');
-        });
+        this._applyHash();
 
         // This has to be triggered to compute the "out of stock" feature and the hash variant changes
         this.triggerVariantChange(this.$el);
@@ -82,13 +73,6 @@ export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerM
         })
 
         this._startZoom();
-
-        window.addEventListener('popstate', (ev) => {
-            if (ev.state?.newURL) {
-                this._applyHash();
-                this.triggerVariantChange(this.$el);
-            }
-        });
 
         // This allows conditional styling for the filmstrip
         if (isBrowserFirefox() || hasTouch()) {
@@ -158,15 +142,18 @@ export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerM
     },
     _applyHash: function () {
         const params = new URLSearchParams(window.location.hash.substring(1));
-        if (params.get("attr")) {
-            var attributeIds = params.get("attr").split(',');
-            var $inputs = this.$('input.js_variant_change, select.js_variant_change option');
-            attributeIds.forEach((id) => {
-                var $toSelect = $inputs.filter('[data-value_id="' + id + '"]');
-                if ($toSelect.is('input[type="radio"]')) {
-                    $toSelect.prop('checked', true);
-                } else if ($toSelect.is('option')) {
-                    $toSelect.prop('selected', true);
+        if (params.get("attribute_values")) {
+            const attributeValueIds = params.get("attribute_values").split(',');
+            const inputs = document.querySelectorAll(
+                'input.js_variant_change, select.js_variant_change option'
+            );
+            inputs.forEach((element) => {
+                if (attributeValueIds.includes(element.dataset.attributeValueId)) {
+                    if (element.tagName === "INPUT") {
+                        element.checked = true;
+                    } else if (element.tagName === "OPTION") {
+                        element.selected = true;
+                    }
                 }
             });
             this._changeAttribute(['.css_attribute_color', '.o_variant_pills']);
@@ -179,9 +166,12 @@ export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerM
      * @private
      */
     _setUrlHash: function ($parent) {
-        var $attributes = $parent.find('input.js_variant_change:checked, select.js_variant_change option:selected');
-        var attributeIds = $attributes.toArray().map((elem) => $(elem).data("value_id"));
-        window.location.replace('#attr=' + attributeIds.join(','));
+        const inputs = document.querySelectorAll(
+            'input.js_variant_change:checked, select.js_variant_change option:checked'
+        );
+        let attributeIds = [];
+        inputs.forEach((element) => attributeIds.push(element.dataset.attributeValueId));
+        window.location.hash = 'attribute_values=' + attributeIds.join(',');
     },
     /**
      * Set the checked values active.
@@ -403,20 +393,22 @@ export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerM
             'input[type="radio"][name="product_id"]:checked'
         ];
 
+        const productTemplateId =
+            parseInt($form.find('input[type="hidden"][name="product_template_id"]').first().val());
         var productReady = this.selectOrCreateProduct(
             $form,
             parseInt($form.find(productSelector.join(', ')).first().val(), 10),
-            $form.find('.product_template_id').val(),
+            productTemplateId,
         );
 
         return productReady.then(function (productId) {
             $form.find(productSelector.join(', ')).val(productId);
-            self._updateRootProduct($form, productId);
-            return self._onProductReady();
+            self._updateRootProduct($form, productId, productTemplateId);
+            return self._onProductReady($form.closest('.o_wsale_product_page').length > 0);
         });
     },
 
-    _onProductReady: function () {
+    _onProductReady(isOnProductPage = false) {
         return this._submitForm();
     },
 
@@ -450,13 +442,6 @@ export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerM
      */
     _onClickAddCartJSON: function (ev) {
         this.onClickAddCartJSON(ev);
-    },
-    /**
-     * @private
-     * @param {Event} ev
-     */
-    _onChangeAddQuantity: function (ev) {
-        this.onChangeAddQuantity(ev);
     },
     /**
      * @private
@@ -496,8 +481,8 @@ export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerM
      * @private
      * @param {Event} ev
      */
-    _onClickSubmit: function (ev, forceSubmit) {
-        if ($(ev.currentTarget).is('#add_to_cart, #products_grid .a-submit') && !forceSubmit) {
+    _onClickSubmit: function (ev) {
+        if ($(ev.currentTarget).is('#add_to_cart, #products_grid .a-submit')) {
             return;
         }
         var $aSubmit = $(ev.currentTarget);
@@ -609,27 +594,6 @@ export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerM
     /**
      * @private
      */
-    _applyHashFromSearch() {
-        const params =  new URL(window.location).searchParams;
-        if (params.get("attrib")) {
-            const dataValueIds = [];
-            for (const attrib of [].concat(params.get("attrib"))) {
-                const attribSplit = attrib.split('-');
-                const attribValueSelector = `.js_variant_change[name="ptal-${attribSplit[0]}"][value="${attribSplit[1]}"]`;
-                const attribValue = this.el.querySelector(attribValueSelector);
-                if (attribValue !== null) {
-                    dataValueIds.push(attribValue.dataset.value_id);
-                }
-            }
-            if (dataValueIds.length) {
-                window.location.hash = `attr=${dataValueIds.join(',')}`;
-            }
-        }
-        this._applyHash();
-    },
-    /**
-     * @private
-     */
     _onClickReviewsLink: function () {
         $('#o_product_page_reviews_content').collapse('show');
     },
@@ -639,6 +603,8 @@ export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerM
      * @private
      */
     _onClickConfirmOrder: function () {
+        // FIXME ANVFE this should only be triggered when we effectively click on that specific button no?
+        // should not impact the address page at least
         const submitFormButton = $('form[name="o_wsale_confirm_order"]').find('button[type="submit"]');
         submitFormButton.attr('disabled', true);
         setTimeout(() => submitFormButton.attr('disabled', false), 5000);
@@ -653,10 +619,12 @@ export const WebsiteSale = publicWidget.Widget.extend(VariantMixin, cartHandlerM
      * @private
      * @param {Object} $form
      * @param {Number} productId
+     * @param {Number} productTemplateId
      */
-    _updateRootProduct($form, productId) {
+    _updateRootProduct($form, productId, productTemplateId) {
         this.rootProduct = {
             product_id: productId,
+            product_template_id: productTemplateId,
             quantity: parseFloat($form.find('input[name="add_qty"]').val() || 1),
             product_custom_attribute_values: this.getCustomVariantValues($form.find('.js_product')),
             variant_values: this.getSelectedVariantValues($form.find('.js_product')),

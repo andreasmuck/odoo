@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 import base64
 import datetime
@@ -11,6 +10,7 @@ import werkzeug.urls
 import werkzeug.utils
 import werkzeug.wrappers
 
+from hashlib import md5
 from itertools import islice
 from lxml import etree, html
 from textwrap import shorten
@@ -39,7 +39,7 @@ LOC_PER_SITEMAP = 45000
 SITEMAP_CACHE_TIME = datetime.timedelta(hours=12)
 
 
-class QueryURL(object):
+class QueryURL:
     def __init__(self, path='', path_args=None, **args):
         self.path = path
         self.args = args
@@ -57,9 +57,9 @@ class QueryURL(object):
                 if isinstance(value, models.BaseModel):
                     paths[key] = slug(value)
                 else:
-                    paths[key] = u"%s" % value
+                    paths[key] = "%s" % value
             elif value:
-                if isinstance(value, list) or isinstance(value, set):
+                if isinstance(value, (list, set)):
                     fragments.append(werkzeug.urls.url_encode([(key, item) for item in value]))
                 else:
                     fragments.append(werkzeug.urls.url_encode([(key, value)]))
@@ -98,7 +98,7 @@ class Website(Home):
 
         homepage_url = request.website._get_cached('homepage_url')
         if homepage_url and homepage_url != '/':
-            request.env['ir.http'].reroute(homepage_url)
+            request.reroute(homepage_url)
 
         # Check for page
         website_page = request.env['ir.http']._serve_page()
@@ -219,6 +219,9 @@ class Website(Home):
 
     @http.route(['/robots.txt'], type='http', auth="public", website=True, multilang=False, sitemap=False)
     def robots(self, **kwargs):
+        # Don't use `request.website.domain` here, the template is in charge of
+        # detecting if the current URL is the domain one and add a `Disallow: /`
+        # if it's not the case to prevent the crawler to continue.
         return request.render('website.robots', {'url_root': request.httprequest.url_root}, mimetype='text/plain')
 
     @http.route('/sitemap.xml', type='http', auth="public", website=True, multilang=False, sitemap=False)
@@ -228,6 +231,10 @@ class Website(Home):
         View = request.env['ir.ui.view'].sudo()
         mimetype = 'application/xml;charset=utf-8'
         content = None
+        url_root = request.httprequest.url_root
+        # For a same website, each domain has its own sitemap (cache)
+        hashed_url_root = md5(url_root.encode()).hexdigest()[:8]
+        sitemap_base_url = '/sitemap-%d-%s' % (current_website.id, hashed_url_root)
 
         def create_sitemap(url, content):
             return Attachment.create({
@@ -237,7 +244,7 @@ class Website(Home):
                 'name': url,
                 'url': url,
             })
-        dom = [('url', '=', '/sitemap-%d.xml' % current_website.id), ('type', '=', 'binary')]
+        dom = [('url', '=', '%s.xml' % sitemap_base_url), ('type', '=', 'binary')]
         sitemap = Attachment.search(dom, limit=1)
         if sitemap:
             # Check if stored version is still valid
@@ -248,8 +255,8 @@ class Website(Home):
 
         if not content:
             # Remove all sitemaps in ir.attachments as we're going to regenerated them
-            dom = [('type', '=', 'binary'), '|', ('url', '=like', '/sitemap-%d-%%.xml' % current_website.id),
-                   ('url', '=', '/sitemap-%d.xml' % current_website.id)]
+            dom = [('type', '=', 'binary'), '|', ('url', '=like', '%s-%%.xml' % sitemap_base_url),
+                   ('url', '=', '%s.xml' % sitemap_base_url)]
             sitemaps = Attachment.search(dom)
             sitemaps.unlink()
 
@@ -258,13 +265,13 @@ class Website(Home):
             while True:
                 values = {
                     'locs': islice(locs, 0, LOC_PER_SITEMAP),
-                    'url_root': request.httprequest.url_root[:-1],
+                    'url_root': url_root[:-1],
                 }
                 urls = View._render_template('website.sitemap_locs', values)
                 if urls.strip():
                     content = View._render_template('website.sitemap_xml', {'content': urls})
                     pages += 1
-                    last_sitemap = create_sitemap('/sitemap-%d-%d.xml' % (current_website.id, pages), content)
+                    last_sitemap = create_sitemap('%s-%d.xml' % (sitemap_base_url, pages), content)
                 else:
                     break
 
@@ -273,19 +280,21 @@ class Website(Home):
             elif pages == 1:
                 # rename the -id-page.xml => -id.xml
                 last_sitemap.write({
-                    'url': "/sitemap-%d.xml" % current_website.id,
-                    'name': "/sitemap-%d.xml" % current_website.id,
+                    'url': "%s.xml" % sitemap_base_url,
+                    'name': "%s.xml" % sitemap_base_url,
                 })
             else:
                 # TODO: in master/saas-15, move current_website_id in template directly
-                pages_with_website = ["%d-%d" % (current_website.id, p) for p in range(1, pages + 1)]
+                pages_with_website = ["%d-%s-%d" % (current_website.id, hashed_url_root, p) for p in range(1, pages + 1)]
 
                 # Sitemaps must be split in several smaller files with a sitemap index
                 content = View._render_template('website.sitemap_index_xml', {
                     'pages': pages_with_website,
-                    'url_root': request.httprequest.url_root,
+                    # URLs inside the sitemap index have to be on the same
+                    # domain as the sitemap index itself
+                    'url_root': url_root,
                 })
-                create_sitemap('/sitemap-%d.xml' % current_website.id, content)
+                create_sitemap('%s.xml' % sitemap_base_url, content)
 
         return request.make_response(content, [('Content-Type', mimetype)])
 
@@ -352,7 +361,7 @@ class Website(Home):
                 'value': page['loc'],
                 'label': 'name' in page and '%s (%s)' % (page['loc'], page['name']) or page['loc'],
             })
-        matching_urls = set(map(lambda match: match['value'], matching_pages))
+        matching_urls = {match['value'] for match in matching_pages}
 
         matching_last_modified = []
         last_modified_pages = current_website._get_website_pages(order='write_date desc', limit=5)
@@ -370,7 +379,7 @@ class Website(Home):
                 icon = mod and '%s' % (module_sudo and module_sudo.icon or mod) or ''
                 suggested_controllers.append({
                     'value': url,
-                    'icon':  icon,
+                    'icon': icon,
                     'label': '%s (%s)' % (url, name),
                 })
 
@@ -639,6 +648,14 @@ class Website(Home):
             website._force()
         page = request.env['website'].new_page(path, add_menu=add_menu, sections_arch=kwargs.get('sections_arch'), **template)
         url = page['url']
+        # In case the page is created through the 404 "Create Page" button, the
+        # URL may use special characters which are slugified on page creation.
+        # If that URL is also a menu, we update it accordingly.
+        # NB: we don't want to slugify on menu creation as it could redirect
+        # towards files (with spaces, apostrophes, etc.).
+        menu = request.env['website.menu'].search([('url', '=', '/' + path)])
+        if menu:
+            menu.page_id = page['page_id']
 
         if redirect:
             if ext_special_case:  # redirect non html pages to backend to edit
@@ -716,7 +733,7 @@ class Website(Home):
     def reset_template(self, view_id, mode='soft', **kwargs):
         """ This method will try to reset a broken view.
         Given the mode, the view can either be:
-        - Soft reset: restore to previous architeture.
+        - Soft reset: restore to previous architecture.
         - Hard reset: it will read the original `arch` from the XML file if the
         view comes from an XML file (arch_fs).
         """
@@ -724,18 +741,6 @@ class Website(Home):
         # Deactivate COW to not fix a generic view by creating a specific
         view.with_context(website_id=None).reset_arch(mode)
         return True
-
-    @http.route(['/website/publish'], type='json', auth="user", website=True)
-    def publish(self, id, object):
-        Model = request.env[object]
-        record = Model.browse(int(id))
-
-        values = {}
-        if 'website_published' in Model._fields:
-            values['website_published'] = not record.website_published
-            record.write(values)
-            return bool(record.website_published)
-        return False
 
     @http.route(['/website/seo_suggest'], type='json', auth="user", website=True)
     def seo_suggest(self, keywords=None, lang=None):
@@ -746,7 +751,7 @@ class Website(Home):
                 'ie': 'utf8', 'oe': 'utf8', 'output': 'toolbar', 'q': keywords, 'hl': language[0], 'gl': language[1]})
             req.raise_for_status()
             response = req.content
-        except IOError:
+        except OSError:
             return []
         xmlroot = ET.fromstring(response)
         return json.dumps([sugg[0].attrib['data'] for sugg in xmlroot if len(sugg) and sugg[0].attrib['data']])
@@ -777,6 +782,22 @@ class Website(Home):
             res['seo_name'] = record.seo_name and slugify(record.seo_name) or ''
 
         return res
+
+    @http.route(['/website/check_can_modify_any'], type='json', auth="user", website=True)
+    def check_can_modify_any(self, records):
+        if not request.env.user.has_group('website.group_website_restricted_editor'):
+            raise werkzeug.exceptions.Forbidden()
+        first_error = None
+        for rec in records:
+            try:
+                record = request.env[rec['res_model']].browse(rec['res_id'])
+                request.website._check_user_can_modify(record)
+                return True
+            except AccessError as e:
+                if not first_error:
+                    first_error = e
+                continue
+        raise first_error
 
     @http.route(['/google<string(length=16):key>.html'], type='http', auth="public", website=True, sitemap=False)
     def google_console_search(self, key, **kwargs):
@@ -883,7 +904,7 @@ class Website(Home):
 
 class WebsiteBinary(Binary):
 
-    # Retrocompatibility routes
+    # Backward compatibility routes
     @http.route([
         '/website/image',
         '/website/image/<xmlid>',
@@ -893,15 +914,14 @@ class WebsiteBinary(Binary):
         '/website/image/<model>/<id>/<field>',
         '/website/image/<model>/<id>/<field>/<int:width>x<int:height>'
     ], type='http', auth="public", website=False, multilang=False)
-    # pylint: disable=redefined-builtin,invalid-name
-    def website_content_image(self, id=None, max_width=0, max_height=0, **kw):
+    def website_content_image(self, id=None, max_width=0, max_height=0, **kw):  # noqa: A002
         if max_width:
             kw['width'] = max_width
         if max_height:
             kw['height'] = max_height
         if id:
-            id, _, unique = id.partition('_')
-            kw['id'] = int(id)
+            identifier, _, unique = id.partition('_')
+            kw['id'] = int(identifier)
             if unique:
                 kw['unique'] = unique
         return self.content_image(**kw)

@@ -9,12 +9,13 @@ from odoo.addons.base.models.ir_mail_server import extract_rfc2822_addresses
 from odoo.addons.base.models.ir_qweb_fields import nl2br_enclose
 from odoo.tests import tagged
 from odoo.tests.common import BaseCase
-from odoo.tools import (
-    is_html_empty, html_to_inner_content, html_sanitize, append_content_to_html, plaintext2html,
+from odoo.tools import misc
+from odoo.tools.mail import (
+    is_html_empty, html2plaintext, html_to_inner_content, html_sanitize, append_content_to_html, plaintext2html,
     email_domain_normalize, email_normalize, email_re,
     email_split, email_split_and_format, email_split_tuples,
     single_email_re,
-    misc, formataddr,
+    formataddr,
     prepend_html_content,
 )
 
@@ -96,7 +97,7 @@ class TestSanitizer(BaseCase):
             ("<DIV STYLE=\"background-image: url(&#1;javascript:alert('XSS'))\">"),  # div background + extra characters
             ("<IMG SRC='vbscript:msgbox(\"XSS\")'>"),  # VBscrip in an image
             ("<BODY ONLOAD=alert('XSS')>"),  # event handler
-            ("<BR SIZE=\"&{alert('XSS')}\>"),  # & javascript includes
+            ("<BR SIZE=\"&{alert('XSS')}\\>"),  # & javascript includes
             ("<LINK REL=\"stylesheet\" HREF=\"javascript:alert('XSS');\">"),  # style sheet
             ("<LINK REL=\"stylesheet\" HREF=\"http://ha.ckers.org/xss.css\">"),  # remote style sheet
             ("<STYLE>@import'http://ha.ckers.org/xss.css';</STYLE>"),  # remote style sheet 2
@@ -837,3 +838,35 @@ class TestEmailTools(BaseCase):
                 res, exp,
                 'Seems single_email_re is broken with %s (expected %r, received %r)' % (src, exp, res)
             )
+
+
+class TestMailTools(BaseCase):
+    """ Test mail utility methods. """
+
+    def test_html2plaintext(self):
+        self.assertEqual(html2plaintext(False), '')
+        self.assertEqual(html2plaintext('\t'), '')
+        self.assertEqual(html2plaintext('  '), '')
+        self.assertEqual(html2plaintext("""<h1>Title</h1>
+<h2>Sub title</h2>
+<br/>
+<h3>Sub sub title</h3>
+<h4>Sub sub sub title</h4>
+<p>Paragraph <em>with</em> <b>bold</b></p>
+<table><tr><td>table element 1</td></tr><tr><td>table element 2</td></tr></table>
+<p><special-chars>0 &lt; 10 &amp;  &nbsp; 10 &gt; 0</special-chars></p>"""),
+                         """**Title**
+**Sub title**
+
+*Sub sub title*
+Sub sub sub title
+Paragraph /with/ *bold*
+
+table element 1
+table element 2
+0 < 10 & \N{NO-BREAK SPACE} 10 > 0""")
+        self.assertEqual(html2plaintext('<p><img src="/web/image/428-c064ab1b/test-image.jpg?access_token=f72b5ec5-a363-45fb-b9ad-81fc794d6d7b" class="img img-fluid o_we_custom_image"><br></p>'),
+                         """test-image [1]
+
+
+[1] /web/image/428-c064ab1b/test-image.jpg?access_token=f72b5ec5-a363-45fb-b9ad-81fc794d6d7b""")

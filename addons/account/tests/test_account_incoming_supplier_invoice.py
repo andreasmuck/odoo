@@ -10,14 +10,10 @@ from unittest.mock import patch
 class TestAccountIncomingSupplierInvoice(AccountTestInvoicingCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
-        cls.internal_user = cls.env['res.users'].create({
-            'name': 'Internal User',
-            'login': 'internal.user@test.odoo.com',
-            'email': 'internal.user@test.odoo.com',
-        })
+        cls.internal_user = cls._create_new_internal_user(login='internal.user@test.odoo.com')
 
         cls.supplier_partner = cls.env['res.partner'].create({
             'name': 'Your Supplier',
@@ -27,6 +23,11 @@ class TestAccountIncomingSupplierInvoice(AccountTestInvoicingCommon):
 
         cls.journal = cls.company_data['default_journal_purchase']
         cls.attachment_number = 0
+
+    @classmethod
+    def default_env_context(cls):
+        # OVERRIDE
+        return {}
 
     def _create_dummy_pdf_attachment(self):
         self.attachment_number += 1
@@ -53,6 +54,11 @@ class TestAccountIncomingSupplierInvoice(AccountTestInvoicingCommon):
             'datas': b"R0lGODdhAQABAIAAAP///////ywAAAAAAQABAAACAkQBADs=",
             'mimetype': 'image/gif',
         })
+
+    def _disable_ocr(self, company):
+        if 'extract_in_invoice_digitalization_mode' in company._fields:
+            company.extract_in_invoice_digitalization_mode = 'no_send'
+            company.extract_out_invoice_digitalization_mode = 'no_send'
 
     @contextmanager
     def with_success_decoder(self, omit=None):
@@ -88,11 +94,13 @@ class TestAccountIncomingSupplierInvoice(AccountTestInvoicingCommon):
         with patch.object(type(self.env['ir.attachment']), '_decode_edi_pdf', decode_edi_pdf):
             yield xml_filename
 
-    def _assert_extend_with_attachments(self, expected_values, new=False):
-        attachments = self.env['ir.attachment'].browse([x.id for x in expected_values])
+    def _assert_extend_with_attachments(self, input_values, expected_values=None, new=False, **context):
+        if not expected_values:
+            expected_values = input_values
+        attachments = self.env['ir.attachment'].browse([x.id for x in input_values])
         nb_moves_before = self.env['account.move'].search_count([('company_id', '=', self.env.company.id)])
         results = self.env['account.move']\
-            .with_context(default_move_type='out_invoice', default_journal_id=self.company_data['default_journal_sale'].id)\
+            .with_context(**context, default_move_type='out_invoice', default_journal_id=self.company_data['default_journal_sale'].id)\
             ._extend_with_attachments(attachments, new=new)
         invoice_number = 0
         previous_invoice = None
@@ -127,7 +135,7 @@ class TestAccountIncomingSupplierInvoice(AccountTestInvoicingCommon):
 
         following_partners = invoice.message_follower_ids.mapped('partner_id')
         self.assertEqual(following_partners, self.env.user.partner_id)
-        self.assertRegex(invoice.name, 'BILL/\d{4}/\d{2}/0001')
+        self.assertRegex(invoice.name, r'BILL/\d{4}/\d{2}/0001')
 
     def test_supplier_invoice_forwarded_by_internal_user_without_supplier(self):
         """ In this test, the bill was forwarded by an employee,
@@ -193,6 +201,7 @@ class TestAccountIncomingSupplierInvoice(AccountTestInvoicingCommon):
         self.assertEqual(following_partners, self.env.user.partner_id | self.internal_user.partner_id)
 
     def test_extend_with_attachments_multi_pdf(self):
+        self._disable_ocr(self.company_data['company'])
         pdf1 = self._create_dummy_pdf_attachment()
         pdf2 = self._create_dummy_pdf_attachment()
         gif1 = self._create_dummy_gif_attachment()
@@ -206,16 +215,25 @@ class TestAccountIncomingSupplierInvoice(AccountTestInvoicingCommon):
             self._assert_extend_with_attachments({pdf1: 1, pdf2: 2}, new=True)
             self.assertEqual(decoded_files, {pdf1.name, pdf2.name})
         with self.with_success_decoder() as decoded_files:
+            self._assert_extend_with_attachments({pdf1: 1, pdf2: 2}, new=True, from_alias=True)
+            self.assertEqual(decoded_files, {pdf1.name, pdf2.name})
+        with self.with_success_decoder() as decoded_files:
             self._assert_extend_with_attachments({pdf1: 1, pdf2: 1, gif1: 1, gif2: 1}, new=False)
             self.assertEqual(decoded_files, {pdf1.name})
         with self.with_success_decoder() as decoded_files:
             self._assert_extend_with_attachments({pdf1: 1, pdf2: 2, gif1: 3, gif2: 4}, new=True)
             self.assertEqual(decoded_files, {pdf1.name, pdf2.name, gif1.name, gif2.name})
         with self.with_success_decoder() as decoded_files:
+            self._assert_extend_with_attachments({pdf1: 1, pdf2: 2, gif1: 3, gif2: 4}, expected_values={pdf1: 1, pdf2: 2}, new=True, from_alias=True)
+            self.assertEqual(decoded_files, {pdf1.name, pdf2.name})
+        with self.with_success_decoder() as decoded_files:
             self._assert_extend_with_attachments({pdf1: 1, xml1: 1}, new=False)
             self.assertEqual(decoded_files, {xml1.name})
         with self.with_success_decoder() as decoded_files:
             self._assert_extend_with_attachments({pdf1: 1, xml1: 1}, new=True)
+            self.assertEqual(decoded_files, {xml1.name})
+        with self.with_success_decoder() as decoded_files:
+            self._assert_extend_with_attachments({pdf1: 1, xml1: 1}, new=True, from_alias=True)
             self.assertEqual(decoded_files, {xml1.name})
         with self.with_success_decoder() as decoded_files:
             self._assert_extend_with_attachments({xml1: 1, xml2: 1}, new=False)
@@ -223,8 +241,14 @@ class TestAccountIncomingSupplierInvoice(AccountTestInvoicingCommon):
         with self.with_success_decoder() as decoded_files:
             self._assert_extend_with_attachments({xml1: 1, xml2: 2}, new=True)
             self.assertEqual(decoded_files, {xml1.name, xml2.name})
+        with self.with_success_decoder() as decoded_files:
+            self._assert_extend_with_attachments({xml1: 1, xml2: 2}, new=True, from_alias=True)
+            self.assertEqual(decoded_files, {xml1.name, xml2.name})
         with self.with_success_decoder(omit={pdf1.name}) as decoded_files:
             self._assert_extend_with_attachments({pdf1: 1, pdf2: 2}, new=True)
+            self.assertEqual(decoded_files, {pdf2.name})
+        with self.with_success_decoder(omit={pdf1.name}) as decoded_files:
+            self._assert_extend_with_attachments({pdf1: 1, pdf2: 2}, new=True, from_alias=True)
             self.assertEqual(decoded_files, {pdf2.name})
         with self.with_success_decoder() as decoded_files, self.with_simulated_embedded_xml(pdf1) as xml_filename:
             self._assert_extend_with_attachments({pdf1: 1, pdf2: 1}, new=False)
@@ -232,9 +256,15 @@ class TestAccountIncomingSupplierInvoice(AccountTestInvoicingCommon):
         with self.with_success_decoder() as decoded_files, self.with_simulated_embedded_xml(pdf1) as xml_filename:
             self._assert_extend_with_attachments({pdf1: 1, pdf2: 2}, new=True)
             self.assertEqual(decoded_files, {xml_filename, pdf2.name})
+        with self.with_success_decoder() as decoded_files, self.with_simulated_embedded_xml(pdf1) as xml_filename:
+            self._assert_extend_with_attachments({pdf1: 1, pdf2: 2}, new=True, from_alias=True)
+            self.assertEqual(decoded_files, {xml_filename, pdf2.name})
         with self.with_success_decoder() as decoded_files, self.with_simulated_embedded_xml(pdf1):
             self._assert_extend_with_attachments({pdf1: 1, xml1: 1}, new=False)
             self.assertEqual(decoded_files, {xml1.name})
         with self.with_success_decoder() as decoded_files, self.with_simulated_embedded_xml(pdf1):
             self._assert_extend_with_attachments({pdf1: 1, xml1: 1}, new=True)
+            self.assertEqual(decoded_files, {xml1.name})
+        with self.with_success_decoder() as decoded_files, self.with_simulated_embedded_xml(pdf1):
+            self._assert_extend_with_attachments({pdf1: 1, xml1: 1}, new=True, from_alias=True)
             self.assertEqual(decoded_files, {xml1.name})

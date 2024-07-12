@@ -1,6 +1,5 @@
 import { describe, expect, test } from "@odoo/hoot";
 
-import { deserializeDateTime, serializeDate, today } from "@web/core/l10n/dates";
 import {
     assertSteps,
     click,
@@ -13,12 +12,11 @@ import {
     startServer,
     step,
     triggerHotkey,
-} from "../mail_test_helpers";
-import { mockService, onRpc, patchWithCleanup, serverState } from "@web/../tests/web_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
 import { advanceTime, mockDate } from "@odoo/hoot-mock";
+import { mockService, onRpc, patchWithCleanup, serverState } from "@web/../tests/web_test_helpers";
+import { deserializeDateTime, serializeDate, today } from "@web/core/l10n/dates";
 import { getOrigin } from "@web/core/utils/urls";
-import { getMockEnv } from "@web/../tests/_framework/env_test_helpers";
-import { actionService } from "@web/webclient/actions/action_service";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -289,23 +287,19 @@ test("activity with mail template: preview mail", async () => {
         res_id: partnerId,
         res_model: "res.partner",
     });
-    mockService("action", () => {
-        const ogService = actionService.start(getMockEnv());
-        return {
-            ...ogService,
-            doAction(action) {
-                if (action?.res_model !== "res.partner") {
-                    // Click on Preview Mail Template
-                    step("do_action");
-                    expect(action.context.default_res_ids).toEqual([partnerId]);
-                    expect(action.context.default_model).toBe("res.partner");
-                    expect(action.context.default_template_id).toBe(mailTemplateId);
-                    expect(action.type).toBe("ir.actions.act_window");
-                    expect(action.res_model).toBe("mail.compose.message");
-                }
-                return ogService.doAction.call(this, ...arguments);
-            },
-        };
+    mockService("action", {
+        doAction(action) {
+            if (action?.res_model !== "res.partner") {
+                // Click on Preview Mail Template
+                step("do_action");
+                expect(action.context.default_res_ids).toEqual([partnerId]);
+                expect(action.context.default_model).toBe("res.partner");
+                expect(action.context.default_template_id).toBe(mailTemplateId);
+                expect(action.type).toBe("ir.actions.act_window");
+                expect(action.res_model).toBe("mail.compose.message");
+            }
+            return super.doAction(...arguments);
+        },
     });
     await start();
     await openFormView("res.partner", partnerId);
@@ -326,10 +320,10 @@ test("activity with mail template: send mail", async () => {
         res_id: partnerId,
         res_model: "res.partner",
     });
-    onRpc("/web/dataset/call_kw/res.partner/activity_send_mail", (request) => {
+    onRpc("/web/dataset/call_kw/res.partner/activity_send_mail", async (request) => {
         step("activity_send_mail");
-        const { params } = request.json();
-        expect(params.args[0].length).toBe(1);
+        const { params } = await request.json();
+        expect(params.args[0]).toHaveLength(1);
         expect(params.args[0][0]).toBe(partnerId);
         expect(params.args[1]).toBe(mailTemplateId);
         // random value returned in order for the mock server to know that this route is implemented.
@@ -393,23 +387,50 @@ test("activity click on edit", async () => {
         res_id: partnerId,
         res_model: "res.partner",
     });
-    mockService("action", () => {
-        const mockedActionService = actionService.start(getMockEnv());
-        patchWithCleanup(mockedActionService, {
-            doAction(action) {
-                if (action?.res_model !== "res.partner") {
-                    step("do_action");
-                    expect(action.type).toBe("ir.actions.act_window");
-                    expect(action.res_model).toBe("mail.activity");
-                    expect(action.res_id).toBe(activityId);
-                }
-                return super.doAction(...arguments);
-            },
-        });
-        return mockedActionService;
+    mockService("action", {
+        doAction(action) {
+            if (action?.res_model !== "res.partner") {
+                step("do_action");
+                expect(action.type).toBe("ir.actions.act_window");
+                expect(action.res_model).toBe("mail.activity");
+                expect(action.res_id).toBe(activityId);
+            }
+            return super.doAction(...arguments);
+        },
     });
     await start();
     await openFormView("res.partner", partnerId);
+    await click(".o-mail-Activity .btn", { text: "Edit" });
+    await assertSteps(["do_action"]);
+});
+
+test("activity click on edit should pass correct context", async () => {
+    const pyEnv = await startServer();
+    const partnerId = pyEnv["res.partner"].create({});
+    const mailTemplateId = pyEnv["mail.template"].create({ name: "Dummy mail template" });
+    const [activityTypeId] = pyEnv["mail.activity.type"].search([["name", "=", "Email"]]);
+    const activityId = pyEnv["mail.activity"].create({
+        activity_type_id: activityTypeId,
+        can_write: true,
+        mail_template_ids: [mailTemplateId],
+        res_id: partnerId,
+        res_model: "res.partner",
+    });
+    const env = await start();
+    await openFormView("res.partner", partnerId);
+    patchWithCleanup(env.services.action, {
+        async doAction(action) {
+            step("do_action");
+            expect(action.type).toBe("ir.actions.act_window");
+            expect(action.res_model).toBe("mail.activity");
+            expect(action.res_id).toBe(activityId);
+            expect(action.context).toEqual({
+                default_res_model: "res.partner",
+                default_res_id: partnerId,
+            });
+            return super.doAction(...arguments);
+        },
+    });
     await click(".o-mail-Activity .btn", { text: "Edit" });
     await assertSteps(["do_action"]);
 });
@@ -424,10 +445,10 @@ test("activity click on cancel", async () => {
         res_id: partnerId,
         res_model: "res.partner",
     });
-    onRpc("/web/dataset/call_kw/mail.activity/unlink", (request) => {
+    onRpc("/web/dataset/call_kw/mail.activity/unlink", async (request) => {
         step("unlink");
-        const { params } = request.json();
-        expect(params.args[0].length).toBe(1);
+        const { params } = await request.json();
+        expect(params.args[0]).toHaveLength(1);
         expect(params.args[0][0]).toBe(activityId);
     });
     await start();
@@ -508,35 +529,30 @@ test("Activity are sorted by deadline", async () => {
 test("chatter 'activities' button open the activity schedule wizard", async () => {
     const pyEnv = await startServer();
     const fakeId = pyEnv["res.partner"].create({});
-    mockService("action", () => {
-        const ogService = actionService.start(getMockEnv());
-        return {
-            ...ogService,
-            doAction(action, options) {
-                if (action?.res_model !== "res.partner") {
-                    step("doAction");
-                    const expectedAction = {
-                        context: {
-                            active_ids: [fakeId],
-                            active_id: fakeId,
-                            active_model: "res.partner",
-                        },
-                        name: "Schedule Activity",
-                        res_model: "mail.activity.schedule",
-                        target: "new",
-                        type: "ir.actions.act_window",
-                        view_mode: "form",
-                        views: [[false, "form"]],
-                    };
-                    expect(action).toEqual(expectedAction, {
-                        message: "should execute an action with correct params",
-                    });
-                    options.onClose();
-                    return Promise.resolve();
-                }
-                return ogService.doAction.call(this, ...arguments);
-            },
-        };
+    mockService("action", {
+        async doAction(action, options) {
+            if (action?.res_model !== "res.partner") {
+                step("doAction");
+                const expectedAction = {
+                    context: {
+                        active_ids: [fakeId],
+                        active_id: fakeId,
+                        active_model: "res.partner",
+                    },
+                    name: "Schedule Activity",
+                    res_model: "mail.activity.schedule",
+                    target: "new",
+                    type: "ir.actions.act_window",
+                    view_mode: "form",
+                    views: [[false, "form"]],
+                };
+                expect(action).toEqual(expectedAction, {
+                    message: "should execute an action with correct params",
+                });
+                options.onClose();
+            }
+            return super.doAction(...arguments);
+        },
     });
     await start();
     await openFormView("res.partner", fakeId, {

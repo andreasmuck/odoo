@@ -198,7 +198,7 @@ export class Powerbox {
                 commandElWrapper.querySelector('.oe-powerbox-commandDescription').innerText = command.description;
                 categoryWrapperEl.append(commandElWrapper);
                 // Handle events on command (activate and pick).
-                commandElWrapper.addEventListener('mousemove', () => {
+                commandElWrapper.addEventListener('mouseenter', () => {
                     this.el.querySelector('.oe-powerbox-commandWrapper.active').classList.remove('active');
                     this._context.selectedCommand = command;
                     commandElWrapper.classList.add('active');
@@ -332,7 +332,7 @@ export class Powerbox {
                 this._context.initialTarget.textContent.split(''),
                 true,
             );
-            this._context.lastText = diff.bMove.join('');
+            this._context.lastText = diff.bMove.join('').replaceAll('\ufeff', '');
             const selection = this.document.getSelection();
             if (
                 this._context.lastText.match(/\s/) ||

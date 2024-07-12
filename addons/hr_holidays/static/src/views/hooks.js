@@ -28,7 +28,7 @@ export function useLeaveCancelWizard() {
     return (leaveId, callback) => {
         action.doAction(
             {
-                name: _t("Delete Confirmation"),
+                name: _t("Cancel Time Off"),
                 type: "ir.actions.act_window",
                 res_model: "hr.holidays.cancel.leave",
                 target: "new",
@@ -54,7 +54,6 @@ export function useNewAllocationRequest() {
         };
         if (employeeId) {
             context["default_employee_id"] = employeeId;
-            context["default_employee_ids"] = [employeeId];
             context["form_view_ref"] =
                 "hr_holidays.hr_leave_allocation_view_form_manager_dashboard";
         }

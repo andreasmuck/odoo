@@ -133,7 +133,7 @@ class ChannelUsersRelation(models.Model):
 
             if not record.channel_id.active:
                 continue
-            elif not was_finished and record.completed_slides_count >= record.channel_id.total_slides:
+            elif not was_finished and record.channel_id.total_slides and record.completed_slides_count >= record.channel_id.total_slides:
                 completed_records += record
             elif was_finished and record.completed_slides_count < record.channel_id.total_slides:
                 uncompleted_records += record
@@ -157,15 +157,13 @@ class ChannelUsersRelation(models.Model):
         Override unlink method :
         Remove attendee from a channel, then also remove slide.slide.partner related to.
         """
-        removed_slide_partner_domain = []
-        for channel_partner in self:
+        if self:
             # find all slide link to the channel and the partner
             removed_slide_partner_domain = expression.OR([
-                removed_slide_partner_domain,
                 [('partner_id', '=', channel_partner.partner_id.id),
                  ('slide_id', 'in', channel_partner.channel_id.slide_ids.ids)]
+                for channel_partner in self
             ])
-        if removed_slide_partner_domain:
             self.env['slide.slide.partner'].search(removed_slide_partner_domain).unlink()
         return super(ChannelUsersRelation, self).unlink()
 
@@ -742,6 +740,9 @@ class Channel(models.Model):
         if 'name' not in default:
             for channel, vals in zip(self, vals_list):
                 vals['name'] = f"{channel.name} ({_('copy')})"
+
+        if 'enroll' not in default and self.visibility == "members":
+            vals['enroll'] = 'invite'
         return vals_list
 
     def write(self, vals):
@@ -1024,16 +1025,14 @@ class Channel(models.Model):
         if not partner_ids:
             raise ValueError("Do not use this method with an empty partner_id recordset")
 
-        removed_channel_partner_domain = []
-        for channel in self:
-            removed_channel_partner_domain = expression.OR([
-                removed_channel_partner_domain,
-                [('partner_id', 'in', partner_ids),
-                 ('channel_id', '=', channel.id)]
-            ])
+        removed_channel_partner_domain = expression.OR([
+            [('partner_id', 'in', partner_ids),
+             ('channel_id', '=', channel.id)]
+            for channel in self
+        ])
 
         self.message_unsubscribe(partner_ids=partner_ids)
-        if removed_channel_partner_domain:
+        if self:
             removed_channel_partner = self.env['slide.channel.partner'].sudo().search(removed_channel_partner_domain)
             if removed_channel_partner:
                 removed_channel_partner.action_archive()
@@ -1269,3 +1268,9 @@ class Channel(models.Model):
         if field in image_fields:
             return self.website_default_background_image_url
         return super()._get_placeholder_filename(field)
+
+    def open_website_url(self):
+        """ Overridden to use a relative URL instead of an absolute when website_id is False. """
+        if self.website_id:
+            return super().open_website_url()
+        return self.env['website'].get_client_action(f'/slides/{slug(self)}')

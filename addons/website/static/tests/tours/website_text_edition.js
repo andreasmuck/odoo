@@ -9,34 +9,38 @@ wTourUtils.registerWebsitePreviewTour('website_text_edition', {
     url: '/',
     edition: true,
 }, () => [
-    wTourUtils.goToTheme(),
+    ...wTourUtils.goToTheme(),
     {
         content: "Open colorpicker to change website main color",
         trigger: 'we-select[data-color="o-color-1"] .o_we_color_preview',
+        run: "click",
     },
     {
         content: "Input the value for the new website main color (also make sure it is independent from the backend)",
         trigger: '.o_hex_input',
-        run: `text_blur ${WEBSITE_MAIN_COLOR}`,
+        run: `edit ${WEBSITE_MAIN_COLOR} && click body`,
     },
     wTourUtils.goBackToBlocks(),
-    wTourUtils.dragNDrop({id: 's_text_block', name: 'Text'}),
+    ...wTourUtils.dragNDrop({id: 's_text_block', name: 'Text'}),
     {
         content: "Click on the text block first paragraph (to auto select)",
         trigger: ':iframe .s_text_block p',
+        run: "click",
     },
     {
         content: "Open the foreground colorpicker",
         trigger: '#toolbar:not(.oe-floating) #oe-text-color',
+        run: "click",
     },
     {
         content: "Go to the 'solid' tab",
         trigger: '.o_we_colorpicker_switch_pane_btn[data-target="custom-colors"]',
+        run: "click",
     },
     {
         content: "Input the website main color explicitly",
         trigger: '.o_hex_input',
-        run: `text_blur ${WEBSITE_MAIN_COLOR}`,
+        run: `edit ${WEBSITE_MAIN_COLOR} && click body`,
     },
     {
         content: "Check that paragraph now uses the main color *class*",

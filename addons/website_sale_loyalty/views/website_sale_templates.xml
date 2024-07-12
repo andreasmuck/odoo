@@ -42,7 +42,7 @@
                                                 <div class="flex-grow-1">
                                                     <t t-set="program" t-value="reward.program_id"/>
                                                     <t t-set="points" t-value="coupon._format_points(website_sale_order._get_real_points_for_coupon(coupon))"/>
-                                                    <t t-if="program.program_type not in ['ewallet', 'promo_code'] and (program.trigger == 'with_code' or (program.trigger == 'auto' and program.applies_on == 'future'))">
+                                                    <t t-if="program.program_type not in ['ewallet', 'promo_code', 'loyalty'] and (program.trigger == 'with_code' or (program.trigger == 'auto' and program.applies_on == 'future'))">
                                                         <t t-if="program.program_type == 'gift_card'">
                                                             <strong t-esc="reward.description"/>
                                                             <strong> - </strong>
@@ -155,7 +155,7 @@
 
     <template id="cart_summary" name="Payment" inherit_id="website_sale.checkout_layout">
         <xpath expr="//td[@name='website_sale_cart_summary_line_price']/child::*" position="attributes">
-            <attribute name="t-att-style">'display: None;' if line.reward_id.reward_type == 'shipping' else ''</attribute>
+            <attribute name="t-att-data-reward-type">line.reward_id.reward_type</attribute>
         </xpath>
     </template>
 

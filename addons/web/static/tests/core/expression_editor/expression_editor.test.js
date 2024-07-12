@@ -1,5 +1,6 @@
 import { beforeEach, expect, test } from "@odoo/hoot";
-import { ExpressionEditor } from "@web/core/expression_editor/expression_editor";
+import { click, edit, queryAllTexts, queryOne } from "@odoo/hoot-dom";
+import { animationFrame } from "@odoo/hoot-mock";
 import {
     Country,
     Partner,
@@ -22,20 +23,19 @@ import {
     selectOperator,
     SELECTORS as treeEditorSELECTORS,
 } from "@web/../tests/core/tree_editor/condition_tree_editor_test_helpers";
-import { click, edit, queryAll, queryAllTexts, queryOne } from "@odoo/hoot-dom";
-import { animationFrame } from "@odoo/hoot-mock";
 import {
+    contains,
     defineModels,
+    fields,
     mountWithCleanup,
     patchWithCleanup,
-    contains,
-    fields,
 } from "@web/../tests/web_test_helpers";
+import { ExpressionEditor } from "@web/core/expression_editor/expression_editor";
 
 import { Component, xml } from "@odoo/owl";
 import { pick } from "@web/core/utils/objects";
 
-export const SELECTORS = {
+const SELECTORS = {
     ...treeEditorSELECTORS,
     debugArea: ".o_expression_editor_debug_container textarea",
 };
@@ -182,7 +182,7 @@ test("change path, operator and value", async () => {
     ]);
     const tree = getTreeEditorContent({ node: true });
     await openModelFieldSelectorPopover();
-    await contains(queryAll(".o_model_field_selector_popover_item_name")[5]).click();
+    await contains(".o_model_field_selector_popover_item_name:eq(5)").click();
     await selectOperator("not in", tree[1].node);
     await editValue(["Doku", "Lukaku", "KDB"]);
     expect(getTreeEditorContent()).toEqual([
@@ -313,7 +313,7 @@ test("rendering of connectors (2)", async () => {
         { level: 1, value: "expr" },
         { level: 1, value: ["Foo", "=", "abc"] },
     ]);
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
     expect(queryOne(SELECTORS.debugArea)).toHaveValue(`not (expr or foo == "abc")`);
 
     await selectConnector("all");
@@ -323,7 +323,7 @@ test("rendering of connectors (2)", async () => {
         { level: 1, value: "expr" },
         { level: 1, value: ["Foo", "=", "abc"] },
     ]);
-    expect([`expr and foo == "abc"`]).toVerifySteps();
+    expect.verifySteps([`expr and foo == "abc"`]);
     expect(queryOne(SELECTORS.debugArea)).toHaveValue(`expr and foo == "abc"`);
 });
 
@@ -394,9 +394,9 @@ test("no field of type properties in model field selector", async () => {
         { level: 0, value: "all" },
         { level: 1, value: ["Properties", "is set"] },
     ]);
-    expect(isNotSupportedPath()).toBeTruthy();
+    expect(isNotSupportedPath()).toBe(true);
     await clearNotSupported();
-    expect([`foo == ""`]).toVerifySteps();
+    expect.verifySteps([`foo == ""`]);
 
     await openModelFieldSelectorPopover();
     expect(queryAllTexts(".o_model_field_selector_popover_item_name")).toEqual(["Bar", "Foo"]);
@@ -421,7 +421,7 @@ test("no special fields in fields", async () => {
         { level: 1, value: ["Bar", "is not", "not set"] },
         { level: 1, value: ["Foo", "=", ""] },
     ]);
-    expect([`bar and foo == ""`]).toVerifySteps();
+    expect.verifySteps([`bar and foo == ""`]);
 });
 
 test("between operator", async () => {
@@ -442,7 +442,7 @@ test("between operator", async () => {
         "is set",
         "is not set",
     ]);
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
     await selectOperator("between");
-    expect([`id >= 1 and id <= 1`]).toVerifySteps();
+    expect.verifySteps([`id >= 1 and id <= 1`]);
 });

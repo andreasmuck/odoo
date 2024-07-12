@@ -7,11 +7,11 @@ import {
     getMenuItemTexts,
     models,
     mountWithCleanup,
+    mountWithSearch,
     onRpc,
     toggleMenuItem,
     toggleSearchBarMenu,
 } from "@web/../tests/web_test_helpers";
-import { mountWithSearch } from "./helpers";
 
 import { SearchBarMenu } from "@web/search/search_bar_menu/search_bar_menu";
 import { WithSearch } from "@web/search/with_search/with_search";
@@ -94,7 +94,7 @@ test("search query props are passed as props to concrete component", async () =>
         context: { key: "val" },
         orderBy: [{ name: "bar", asc: true }],
     });
-    expect(["setup"]).toVerifySteps();
+    expect.verifySteps(["setup"]);
 });
 
 test("do not load search view description by default", async () => {
@@ -103,14 +103,14 @@ test("do not load search view description by default", async () => {
         static template = xml`<div class="o_test_component">Test component content</div>`;
     }
 
-    onRpc("get_views", () => {
-        expect.step("get_views");
+    onRpc("get_views", ({ method }) => {
+        expect.step(method);
         throw new Error("No get_views should be done");
     });
     await mountWithSearch(TestComponent, {
         resModel: "animal",
     });
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 });
 
 test("load search view description if not provided and loadSearchView=true", async () => {
@@ -119,8 +119,8 @@ test("load search view description if not provided and loadSearchView=true", asy
         static template = xml`<div class="o_test_component">Test component content</div>`;
     }
 
-    onRpc("get_views", (_, { kwargs }) => {
-        expect.step("get_views");
+    onRpc("get_views", ({ method, kwargs }) => {
+        expect.step(method);
         delete kwargs.options.mobile;
         expect(kwargs).toEqual({
             context: {
@@ -133,6 +133,8 @@ test("load search view description if not provided and loadSearchView=true", asy
                 action_id: false,
                 load_filters: false,
                 toolbar: false,
+                embedded_action_id: false,
+                embedded_parent_res_id: false,
             },
             views: [[false, "search"]],
         });
@@ -141,7 +143,7 @@ test("load search view description if not provided and loadSearchView=true", asy
         resModel: "animal",
         searchViewId: false,
     });
-    expect(["get_views"]).toVerifySteps();
+    expect.verifySteps(["get_views"]);
 });
 
 test("do not load the search view description if provided even if loadSearchView=true", async () => {
@@ -150,8 +152,8 @@ test("do not load the search view description if provided even if loadSearchView
         static template = xml`<div class="o_test_component">Test component content</div>`;
     }
 
-    onRpc("get_views", () => {
-        expect.step("get_views");
+    onRpc("get_views", ({ method }) => {
+        expect.step(method);
         throw new Error("No get_views should be done");
     });
     await mountWithSearch(TestComponent, {
@@ -160,7 +162,7 @@ test("do not load the search view description if provided even if loadSearchView
         searchViewFields: {},
         searchViewId: false,
     });
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 });
 
 test("load view description if it is not complete and loadSearchView=true", async () => {
@@ -169,13 +171,15 @@ test("load view description if it is not complete and loadSearchView=true", asyn
         static template = xml`<div class="o_test_component">Test component content</div>`;
     }
 
-    onRpc("get_views", (_, { kwargs }) => {
-        expect.step("get_views");
+    onRpc("get_views", ({ method, kwargs }) => {
+        expect.step(method);
         delete kwargs.options.mobile;
         expect(kwargs.options).toEqual({
             action_id: false,
             load_filters: true,
             toolbar: false,
+            embedded_action_id: false,
+            embedded_parent_res_id: false,
         });
     });
     await mountWithSearch(TestComponent, {
@@ -185,7 +189,7 @@ test("load view description if it is not complete and loadSearchView=true", asyn
         searchViewId: true,
         loadIrFilters: true,
     });
-    expect(["get_views"]).toVerifySteps();
+    expect.verifySteps(["get_views"]);
 });
 
 test("load view description with given id if it is not provided and loadSearchView=true", async () => {
@@ -195,15 +199,15 @@ test("load view description with given id if it is not provided and loadSearchVi
         static template = xml`<div class="o_test_component"><SearchBarMenu/></div>`;
     }
 
-    onRpc("get_views", (_, { kwargs }) => {
-        expect.step("get_views");
+    onRpc("get_views", ({ method, kwargs }) => {
+        expect.step(method);
         expect(kwargs.views).toEqual([[1, "search"]]);
     });
     await mountWithSearch(TestComponent, {
         resModel: "animal",
         searchViewId: 1,
     });
-    expect(["get_views"]).toVerifySteps();
+    expect.verifySteps(["get_views"]);
 
     await toggleSearchBarMenu();
     expect(getMenuItemTexts()).toEqual([
@@ -237,11 +241,11 @@ test("toggle a filter render the underlying component with an updated domain", a
         resModel: "animal",
         searchViewId: 1,
     });
-    expect(["willStart"]).toVerifySteps();
+    expect.verifySteps(["willStart"]);
 
     await toggleSearchBarMenu();
     await toggleMenuItem("True domain");
-    expect(["willUpdateProps"]).toVerifySteps();
+    expect.verifySteps(["willUpdateProps"]);
 });
 
 test("react to prop 'domain' changes", async () => {
@@ -279,9 +283,72 @@ test("react to prop 'domain' changes", async () => {
     }
 
     const parent = await mountWithCleanup(Parent);
-    expect(["willStart"]).toVerifySteps();
+    expect.verifySteps(["willStart"]);
 
     parent.searchState.domain = [["type", "=", "herbivorous"]];
     await animationFrame();
-    expect(["willUpdateProps"]).toVerifySteps();
+    expect.verifySteps(["willUpdateProps"]);
+});
+
+test("search defaults are removed from context at reload", async function () {
+    const context = {
+        search_default_x: true,
+        searchpanel_default_y: true,
+    };
+
+    class TestComponent extends Component {
+        static template = xml`<div class="o_test_component">Test component content</div>`;
+        static props = { context: Object };
+        setup() {
+            onWillStart(() => {
+                expect.step("willStart");
+                expect(this.props.context).toEqual({
+                    lang: "en",
+                    tz: "taht",
+                    uid: 7,
+                    allowed_company_ids: [1],
+                });
+            });
+            onWillUpdateProps((nextProps) => {
+                expect.step("willUpdateProps");
+                expect(nextProps.context).toEqual({
+                    lang: "en",
+                    tz: "taht",
+                    uid: 7,
+                    allowed_company_ids: [1],
+                });
+            });
+        }
+    }
+
+    class Parent extends Component {
+        static props = ["*"];
+        static template = xml`
+            <WithSearch t-props="searchState" t-slot-scope="search">
+                <TestComponent
+                    context="search.context"
+                />
+            </WithSearch>
+        `;
+        static components = { WithSearch, TestComponent };
+        setup() {
+            useSubEnv({ config: {} });
+            this.searchState = useState({
+                resModel: "animal",
+                domain: [["type", "=", "carnivorous"]],
+                context,
+            });
+        }
+    }
+
+    const parent = await mountWithCleanup(Parent);
+    expect.verifySteps(["willStart"]);
+
+    expect(parent.searchState.context).toEqual(context);
+
+    parent.searchState.domain = [["type", "=", "herbivorous"]];
+
+    await animationFrame();
+    expect.verifySteps(["willUpdateProps"]);
+    expect(parent.searchState.context).toEqual(context);
 });

@@ -1,4 +1,3 @@
-/** @odoo-module */
 import { roundDecimals } from "@web/core/utils/numbers";
 
 export const computeComboLines = (
@@ -24,7 +23,7 @@ export const computeComboLines = (
             decimalPrecision.find((dp) => dp.name === "Product Price").digits
         );
         remainingTotal -= priceUnit;
-        if (comboLine == childLineConf[childLineConf.length - 1]) {
+        if (comboLine.id == childLineConf[childLineConf.length - 1].combo_line_id.id) {
             priceUnit += remainingTotal;
         }
         const attribute_value_ids = conf.configuration?.attribute_value_ids.map(

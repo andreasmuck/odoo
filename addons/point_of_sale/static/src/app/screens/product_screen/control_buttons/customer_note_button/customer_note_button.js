@@ -1,5 +1,3 @@
-/** @odoo-module **/
-
 import { _t } from "@web/core/l10n/translation";
 import { Component } from "@odoo/owl";
 import { usePos } from "@point_of_sale/app/store/pos_hook";
@@ -14,12 +12,14 @@ export class OrderlineNoteButton extends Component {
         label: { type: String, optional: true },
         getter: { type: Function, optional: true },
         setter: { type: Function, optional: true },
+        class: { type: String, optional: true },
     };
     static defaultProps = {
         icon: "fa fa-sticky-note",
         label: _t("Customer Note"),
         getter: (orderline) => orderline.get_customer_note(),
         setter: (orderline, note) => orderline.set_customer_note(note),
+        class: "",
     };
 
     setup() {

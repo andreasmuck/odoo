@@ -23,7 +23,7 @@ class MrpSubcontractingPurchaseTest(TestMrpSubcontractingCommon):
 
         self.finished2, self.comp3 = self.env['product.product'].create([{
             'name': 'SuperProduct',
-            'type': 'product',
+            'is_storable': True,
         }, {
             'name': 'Component',
             'type': 'consu',
@@ -147,9 +147,7 @@ class MrpSubcontractingPurchaseTest(TestMrpSubcontractingCommon):
         return_wizard = return_form.save()
         return_wizard.product_return_moves.quantity = 3
         return_wizard.product_return_moves.to_refund = True
-        return_id, _ = return_wizard._create_returns()
-
-        return_picking = self.env['stock.picking'].browse(return_id)
+        return_picking = return_wizard._create_return()
         return_picking.move_ids.quantity = 3
         return_picking.move_ids.picked = True
         return_picking.button_validate()
@@ -192,9 +190,7 @@ class MrpSubcontractingPurchaseTest(TestMrpSubcontractingCommon):
         return_wizard = return_form.save()
         return_wizard.product_return_moves.quantity = 3
         return_wizard.product_return_moves.to_refund = False
-        return_id, _ = return_wizard._create_returns()
-
-        return_picking = self.env['stock.picking'].browse(return_id)
+        return_picking = return_wizard._create_return()
         return_picking.move_ids.quantity = 3
         return_picking.move_ids.picked = True
         return_picking.button_validate()
@@ -215,11 +211,11 @@ class MrpSubcontractingPurchaseTest(TestMrpSubcontractingCommon):
 
         product = self.env['product.product'].create({
             'name': 'Product',
-            'detailed_type': 'product',
+            'is_storable': True,
         })
         component = self.env['product.product'].create({
             'name': 'Component',
-            'detailed_type': 'product',
+            'is_storable': True,
         })
         subcontractor = self.env['res.partner'].create({
             'name': 'Subcontractor',
@@ -297,9 +293,7 @@ class MrpSubcontractingPurchaseTest(TestMrpSubcontractingCommon):
         return_wizard = return_form.save()
         return_wizard.product_return_moves.quantity = 3
         return_wizard.product_return_moves.to_refund = True
-        return_id, _ = return_wizard._create_returns()
-
-        return_picking = self.env['stock.picking'].browse(return_id)
+        return_picking = return_wizard._create_return()
         return_picking.move_ids.quantity = 3
         return_picking.move_ids.picked = True
         return_picking.button_validate()
@@ -337,26 +331,27 @@ class MrpSubcontractingPurchaseTest(TestMrpSubcontractingCommon):
         po_form.partner_id = self.subcontractor_partner1
         with po_form.order_line.new() as po_line:
             po_line.product_id = self.finished
-            po_line.product_qty = 1
+            po_line.product_qty = 2
             po_line.price_unit = 50   # should be 70
         po = po_form.save()
         po.button_confirm()
 
         action = po.action_view_subcontracting_resupply()
         resupply_picking = self.env[action['res_model']].browse(action['res_id'])
-        resupply_picking.move_ids.quantity = 1
+        resupply_picking.move_ids.quantity = 2
         resupply_picking.move_ids.picked = True
         resupply_picking.button_validate()
 
         action = po.action_view_picking()
         final_picking = self.env[action['res_model']].browse(action['res_id'])
-        final_picking.move_ids.quantity = 1
+        final_picking.move_ids.quantity = 2
         final_picking.move_ids.picked = True
         final_picking.button_validate()
 
         action = po.action_create_invoice()
         invoice = self.env['account.move'].browse(action['res_id'])
         invoice.invoice_date = Date.today()
+        invoice.invoice_line_ids.quantity = 1
         invoice.action_post()
 
         # price diff line should be 100 - 50 - 10 - 20
@@ -485,9 +480,7 @@ class MrpSubcontractingPurchaseTest(TestMrpSubcontractingCommon):
         return_form = Form(self.env['stock.return.picking'].with_context(active_id=receipt.id, active_model='stock.picking'))
         wizard = return_form.save()
         wizard.product_return_moves.quantity = 1.0
-        return_picking_id, _pick_type_id = wizard._create_returns()
-
-        return_picking = self.env['stock.picking'].browse(return_picking_id)
+        return_picking = wizard._create_return()
         return_picking.move_ids.quantity = 1.0
         return_picking.button_validate()
 
@@ -730,11 +723,11 @@ class MrpSubcontractingPurchaseTest(TestMrpSubcontractingCommon):
         resupply_route = self.env['stock.route'].search([('name', '=', 'Resupply Subcontractor on Order')])
         finished, component = self.env['product.product'].create([{
             'name': 'Finished Product',
-            'type': 'product',
+            'is_storable': True,
             'seller_ids': [(0, 0, {'partner_id': self.subcontractor_partner1.id})]
         }, {
             'name': 'Component',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(4, resupply_route.id)],
         }])
 
@@ -842,3 +835,62 @@ class MrpSubcontractingPurchaseTest(TestMrpSubcontractingCommon):
         self.assertEqual(bom_data['lines']['leftover_capacity'], 1)
         # 01/16 + 2 x 2 days (for components and for final product) = 01/20
         self.assertEqual(bom_data['lines']['leftover_date'], '01/20/2024')
+
+    def test_location_after_dest_location_update_backorder_production(self):
+        """
+        Buy 2 subcontracted products.
+        Receive 1 product after changing the destination location.
+        Create a backorder.
+        Receive the last one.
+        Check the locations.
+        """
+        grp_multi_loc = self.env.ref('stock.group_stock_multi_locations')
+        self.env.user.write({'groups_id': [Command.link(grp_multi_loc.id)]})
+        subcontract_loc = self.env.company.subcontracting_location_id
+        production_loc = self.finished.property_stock_production
+        final_loc = self.env['stock.location'].create({
+            'name': 'Final location',
+            'location_id': self.env.ref('stock.warehouse0').lot_stock_id.id,
+        })
+        # buy 2 subcontracted products
+        po = self.env['purchase.order'].create({
+            'partner_id': self.subcontractor_partner1.id,
+            'order_line': [Command.create({
+                'name': self.finished.name,
+                'product_id': self.finished.id,
+                'product_qty': 2.0,
+                'product_uom': self.finished.uom_id.id,
+                'price_unit': 1.0,
+            })],
+        })
+        po.button_confirm()
+
+        receipt = po.picking_ids
+        # receive 1 subcontracted product
+        receipt.move_ids.quantity = 1
+        receipt_form = Form(receipt)
+        # change the destination location
+        receipt_form.location_dest_id = final_loc
+        receipt_form.save()
+        # change the destination location on the move line too
+        receipt.move_line_ids.location_dest_id = final_loc
+        # create the backorder
+        backorder_wizard_dict = receipt.button_validate()
+        backorder_wizard = Form(self.env[backorder_wizard_dict['res_model']].with_context(backorder_wizard_dict['context'])).save()
+        backorder_wizard.process()
+        backorder = receipt.backorder_ids
+        # test the stock quantities after receiving 1 product
+        stock_quants = self.env['stock.quant'].search([('product_id', '=', self.finished.id)])
+        self.assertEqual(len(stock_quants), 3)
+        self.assertEqual(stock_quants.filtered(lambda q: q.location_id == final_loc).quantity, 1.0)
+        self.assertEqual(stock_quants.filtered(lambda q: q.location_id == subcontract_loc).quantity, 0.0)
+        self.assertEqual(stock_quants.filtered(lambda q: q.location_id == production_loc).quantity, -1.0)
+        # receive the last subcontracted product
+        backorder.move_ids.quantity = 1
+        backorder.button_validate()
+        # test the final stock quantities
+        stock_quants = self.env['stock.quant'].search([('product_id', '=', self.finished.id)])
+        self.assertEqual(len(stock_quants), 3)
+        self.assertEqual(stock_quants.filtered(lambda q: q.location_id == final_loc).quantity, 2.0)
+        self.assertEqual(stock_quants.filtered(lambda q: q.location_id == subcontract_loc).quantity, 0.0)
+        self.assertEqual(stock_quants.filtered(lambda q: q.location_id == production_loc).quantity, -2.0)

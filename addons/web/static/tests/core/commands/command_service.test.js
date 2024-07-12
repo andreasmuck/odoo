@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, test } from "@odoo/hoot";
-import { press, queryAllTexts } from "@odoo/hoot-dom";
-import { Deferred, animationFrame } from "@odoo/hoot-mock";
+import { keyDown, press, queryAllTexts } from "@odoo/hoot-dom";
+import {
+    Deferred,
+    advanceFrame,
+    advanceTime,
+    animationFrame,
+    mockUserAgent,
+} from "@odoo/hoot-mock";
 import {
     contains,
     getService,
@@ -11,7 +17,6 @@ import {
 
 import { Component, reactive, xml } from "@odoo/owl";
 
-import { browser } from "@web/core/browser/browser";
 import { useCommand } from "@web/core/commands/command_hook";
 import { HotkeyCommandItem } from "@web/core/commands/default_providers";
 import { registry } from "@web/core/registry";
@@ -81,18 +86,18 @@ test("useCommand hook", async () => {
     const componentInfo = reactive({ Component: MyComponent });
     await mountWithCleanup(Parent, { props: { componentInfo } });
 
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command").toHaveCount(1);
     expect(".o_command").toHaveText("Take the throne");
 
     await contains(".o_command").click();
-    expect(["Hodor"]).toVerifySteps();
+    expect.verifySteps(["Hodor"]);
 
     componentInfo.Component = null;
     await animationFrame();
 
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command").toHaveCount(0);
 });
@@ -115,7 +120,7 @@ test("useCommand hook when the activeElement change", async () => {
     }
 
     await mountWithCleanup(MyComponent);
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command").toHaveCount(2);
     expect(queryAllTexts(".o_command")).toEqual(["Take the throne", "Lose the throne"]);
@@ -123,7 +128,7 @@ test("useCommand hook when the activeElement change", async () => {
     await animationFrame();
 
     await mountWithCleanup(OtherComponent, { noMainContainer: true });
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command").toHaveCount(2);
     expect(queryAllTexts(".o_command")).toEqual(["Lose the throne", "I'm taking the throne"]);
@@ -142,7 +147,7 @@ test("useCommand hook with isAvailable", async () => {
     }
     await mountWithCleanup(MyComponent);
 
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command_palette").toHaveCount(1);
     expect(".o_command").toHaveCount(0);
@@ -150,7 +155,7 @@ test("useCommand hook with isAvailable", async () => {
     press("escape");
     await animationFrame();
     available = true;
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command_palette").toHaveCount(1);
     expect(".o_command").toHaveCount(1);
@@ -164,7 +169,7 @@ test("command with hotkey", async () => {
     await animationFrame();
 
     press("a");
-    expect([hotkey]).toVerifySteps();
+    expect.verifySteps([hotkey]);
 });
 
 test("global command with hotkey", async () => {
@@ -180,9 +185,9 @@ test("global command with hotkey", async () => {
     await animationFrame();
 
     press("a");
-    expect([globalHotkey]).toVerifySteps();
+    expect.verifySteps([globalHotkey]);
     press("b");
-    expect([hotkey]).toVerifySteps();
+    expect.verifySteps([hotkey]);
 
     class MyComponent extends Component {
         static template = xml`<div t-ref="active"><button>visible</button></div>`;
@@ -195,7 +200,7 @@ test("global command with hotkey", async () => {
 
     press("a");
     press("b");
-    expect([globalHotkey]).toVerifySteps();
+    expect.verifySteps([globalHotkey]);
 });
 
 test("command with hotkey and isAvailable", async () => {
@@ -208,12 +213,12 @@ test("command with hotkey and isAvailable", async () => {
 
     press("a");
     await animationFrame();
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     isAvailable = true;
     press("a");
     await animationFrame();
-    expect([hotkey]).toVerifySteps();
+    expect.verifySteps([hotkey]);
 });
 
 test("useCommand hook with hotkey and hotkeyOptions", async () => {
@@ -241,21 +246,23 @@ test("useCommand hook with hotkey and hotkeyOptions", async () => {
     }
     await mountWithCleanup(MyComponent);
 
-    // Dispatch the three keys without repeat:
-    press(allowRepeatKey);
-    press(disallowRepeatKey);
-    press(defaultBehaviourKey);
+    keyDown(allowRepeatKey);
+    keyDown(allowRepeatKey);
     await animationFrame();
 
-    expect([allowRepeatKey, disallowRepeatKey, defaultBehaviourKey]).toVerifySteps();
+    expect.verifySteps([allowRepeatKey, allowRepeatKey]);
 
-    // Dispatch the three keys with repeat:
-    press(allowRepeatKey, { repeat: true });
-    press(disallowRepeatKey, { repeat: true });
-    press(defaultBehaviourKey, { repeat: true });
+    keyDown(disallowRepeatKey);
+    keyDown(disallowRepeatKey);
     await animationFrame();
 
-    expect([allowRepeatKey]).toVerifySteps();
+    expect.verifySteps([disallowRepeatKey]);
+
+    keyDown(defaultBehaviourKey);
+    keyDown(defaultBehaviourKey);
+    await animationFrame();
+
+    expect.verifySteps([defaultBehaviourKey]);
 });
 
 test("useCommand hook with hotkey and isAvailable", async () => {
@@ -308,9 +315,9 @@ test("useCommand hook with hotkey and isAvailable", async () => {
         press(hotkey);
     }
     await animationFrame();
-    expect(["a", "d"]).toVerifySteps();
+    expect.verifySteps(["a", "d"]);
 
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command_palette").toHaveCount(1);
     expect(".o_command").toHaveCount(3);
@@ -341,7 +348,7 @@ test("open command palette with command config", async () => {
 
     await mountWithCleanup(TestComponent);
 
-    press("alt+a");
+    press(["alt", "a"]);
     await animationFrame();
     expect(".o_command").toHaveCount(1);
     expect(queryAllTexts(".o_command span:first-child")).toEqual(["Command1"]);
@@ -366,7 +373,7 @@ test("data-hotkey added to command palette", async () => {
     await mountWithCleanup(MyComponent);
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     expect(".o_command").toHaveCount(2);
@@ -377,7 +384,7 @@ test("data-hotkey added to command palette", async () => {
     expect(".o_command_palette").toHaveCount(0);
 
     // Reopen palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     // Click on second command
@@ -387,7 +394,7 @@ test("data-hotkey added to command palette", async () => {
     expect("input[title='Bran Stark']").toBeFocused();
 
     // only step should come from the first command execution
-    expect(["Hodor"]).toVerifySteps();
+    expect.verifySteps(["Hodor"]);
 });
 
 test("access to hotkeys from the command palette", async () => {
@@ -416,7 +423,7 @@ test("access to hotkeys from the command palette", async () => {
     await mountWithCleanup(MyComponent);
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     expect(".o_command").toHaveCount(3);
@@ -428,24 +435,24 @@ test("access to hotkeys from the command palette", async () => {
     expect(".o_command_palette").toHaveCount(0);
 
     // Reopen palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     // Trigger the command b
-    press("alt+b");
+    press(["alt", "b"]);
     await animationFrame();
     expect(".o_command_palette").toHaveCount(0);
 
     // Reopen palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     // Trigger the command c
-    press("alt+c");
+    press(["alt", "c"]);
     await animationFrame();
     expect(".o_command_palette").toHaveCount(0);
 
-    expect(["A", "B", "C"]).toVerifySteps();
+    expect.verifySteps(["A", "B", "C"]);
 });
 
 test("can be searched", async () => {
@@ -459,7 +466,7 @@ test("can be searched", async () => {
     await animationFrame();
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     expect(".o_command_palette_search input").toHaveValue("");
@@ -508,7 +515,7 @@ test("configure the empty message based on the namespace", async () => {
     await mountWithCleanup(TestComponent);
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     expect(".o_command_palette_listbox_empty").toHaveText("Empty Default");
@@ -552,7 +559,7 @@ test("footer displays the right tips", async () => {
     await mountWithCleanup(TestComponent);
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command_palette_footer").toHaveText("TIP — search for @FirstName");
 
@@ -562,7 +569,7 @@ test("footer displays the right tips", async () => {
         name: "SecondName",
     });
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command_palette_footer").toHaveText("TIP — search for @FirstName and !SecondName");
 
@@ -572,7 +579,7 @@ test("footer displays the right tips", async () => {
         name: "ThirdName",
     });
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command_palette_footer").toHaveText(
         "TIP — search for @FirstName, !SecondName and #ThirdName"
@@ -610,7 +617,7 @@ test("namespaces display in the footer are still clickable", async () => {
     await mountWithCleanup(TestComponent);
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command_palette_footer").toHaveText("TIP — search for @users and #channels");
     expect(queryAllTexts(".o_command")).toEqual([]);
@@ -622,6 +629,7 @@ test("namespaces display in the footer are still clickable", async () => {
     expect(queryAllTexts(".o_command")).toEqual(["Command@"]);
 
     await contains(".o_command_palette_search input").edit("Com", { confirm: false });
+    await advanceFrame();
     await contains(".o_command_palette_footer .o_namespace:eq(1)").click();
     await animationFrame();
     expect(".o_command_palette_search .o_namespace").toHaveText("#");
@@ -660,7 +668,7 @@ test("defined multiple providers with the same namespace", async () => {
     await mountWithCleanup(TestComponent);
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     await animationFrame();
     expect(".o_command_palette_search input").toHaveValue("");
@@ -693,7 +701,7 @@ test("can switch between command providers", async () => {
     await mountWithCleanup(TestComponent);
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     expect(".o_command_palette_search input").toHaveValue("");
@@ -702,12 +710,13 @@ test("can switch between command providers", async () => {
 
     // Switch to the other provider
     await contains(".o_command_palette_search input").edit("@", { confirm: false });
+    await advanceFrame();
 
     expect(queryAllTexts(".o_command")).toEqual(otherNames);
 
     // Press backspace to recover the default provider
     press("backspace");
-    await animationFrame();
+    await advanceTime(1);
 
     expect(queryAllTexts(".o_command")).toEqual(defaultNames);
 });
@@ -744,7 +753,7 @@ test("multi level commands", async () => {
     await mountWithCleanup(TestComponent);
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     expect(".o_command_palette_search input").toHaveValue("");
@@ -804,7 +813,7 @@ test("multi level commands with hotkey", async () => {
     await mountWithCleanup(TestComponent);
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command_palette_search input").toHaveValue("");
     expect(".o_command_palette_search input").toHaveProperty(
@@ -837,7 +846,7 @@ test("command categories", async () => {
     await animationFrame();
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     expect(".o_command_category").toHaveCount(3);
@@ -865,7 +874,7 @@ test("data-command-category", async () => {
     await mountWithCleanup(MyComponent);
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     expect(".o_command").toHaveCount(4);
@@ -905,7 +914,7 @@ test("display shortcuts correctly for non-MacOS ", async () => {
     await animationFrame();
 
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     expect(queryAllTexts(".o_command")).toEqual([
@@ -919,16 +928,8 @@ test("display shortcuts correctly for non-MacOS ", async () => {
 });
 
 test("display shortcuts correctly for MacOS ", async () => {
-    patchWithCleanup(window, {
-        navigator: {
-            userAgent: window.navigator.userAgent.replace(/\([^)]*\)/, "(MacOs)"),
-        },
-    });
-    patchWithCleanup(browser, {
-        navigator: {
-            userAgent: window.navigator.userAgent.replace(/\([^)]*\)/, "(MacOs)"),
-        },
-    });
+    mockUserAgent("mac");
+
     class MyComponent extends Component {
         static components = { TestComponent };
         static template = xml`
@@ -956,7 +957,7 @@ test("display shortcuts correctly for MacOS ", async () => {
     await animationFrame();
 
     // Open palette
-    press("Control+k");
+    press(["meta", "k"]);
     await animationFrame();
 
     expect(queryAllTexts(".o_command")).toEqual([
@@ -988,23 +989,14 @@ test("display shortcuts correctly for non-MacOS with a new overlayModifier", asy
 
     await mountWithCleanup(MyComponent);
     // Open palette
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
 
     expect(queryAllTexts(".o_command")).toEqual(["Click\nALT + CONTROL + A"]);
 });
 
 test("display shortcuts correctly for MacOS with a new overlayModifier", async () => {
-    patchWithCleanup(window, {
-        navigator: {
-            userAgent: window.navigator.userAgent.replace(/\([^)]*\)/, "(MacOs)"),
-        },
-    });
-    patchWithCleanup(browser, {
-        navigator: {
-            userAgent: browser.navigator.userAgent.replace(/\([^)]*\)/, "(MacOs)"),
-        },
-    });
+    mockUserAgent("mac");
 
     const hotkeyService = registry.category("services").get("hotkey");
     patchWithCleanup(hotkeyService, {
@@ -1024,7 +1016,7 @@ test("display shortcuts correctly for MacOS with a new overlayModifier", async (
 
     await mountWithCleanup(MyComponent);
     // Open palette
-    press("Control+k");
+    press(["meta", "k"]);
     await animationFrame();
 
     expect(queryAllTexts(".o_command")).toEqual(["Click\nCONTROL + COMMAND + A"]);
@@ -1042,7 +1034,7 @@ test("openMainPalette with onClose", async () => {
 
     press("escape");
     await animationFrame();
-    expect(["onClose"]).toVerifySteps();
+    expect.verifySteps(["onClose"]);
 });
 
 test("uses openPalette to modify the config used by the command palette", async () => {
@@ -1051,7 +1043,7 @@ test("uses openPalette to modify the config used by the command palette", async 
 
     await mountWithCleanup(TestComponent);
 
-    press("Control+k");
+    press(["Control", "k"]);
     await animationFrame();
     expect(".o_command_palette_search input").toHaveValue("");
     expect(".o_command").toHaveCount(1);

@@ -4,7 +4,7 @@
 
 .product-img img {
     height: 100px;
-    object-fit: cover;
+    object-fit: contain;
 }
 
 .product-name {
@@ -43,4 +43,7 @@
     position: absolute;
     left: 19px;
     top: 3px;
+}
+.red-tag {
+    border-color: transparent #e75b5b63 transparent transparent;
 }

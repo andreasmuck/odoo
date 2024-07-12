@@ -12,8 +12,9 @@ from odoo.tools import file_open
 class TestAccountEdiUblCii(AccountTestInvoicingCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.company_data_2 = cls.setup_other_company()
 
         cls.uom_units = cls.env.ref('uom.product_uom_unit')
         cls.uom_dozens = cls.env.ref('uom.product_uom_dozen')
@@ -29,6 +30,12 @@ class TestAccountEdiUblCii(AccountTestInvoicingCommon):
             'uom_id': cls.uom_units.id,
             'standard_price': 80.0,
         })
+
+    def import_attachment(self, attachment, journal=None):
+        journal = journal or self.company_data["default_journal_purchase"]
+        return self.env['account.journal'] \
+            .with_context(default_journal_id=journal.id) \
+            ._create_document_from_attachment(attachment.id)
 
     def test_import_product(self):
         line_vals = [
@@ -93,7 +100,6 @@ class TestAccountEdiUblCii(AccountTestInvoicingCommon):
 
         facturx_attachment.raw = etree.tostring(xml_tree)
         new_invoice = invoice.journal_id._create_document_from_attachment(facturx_attachment.ids)
-
         self.assertRecordValues(new_invoice.invoice_line_ids, line_vals)
 
     def test_import_tax_prediction(self):
@@ -133,9 +139,7 @@ class TestAccountEdiUblCii(AccountTestInvoicingCommon):
             })
 
         # Import the document for the first time
-        bill = self.env['account.journal']\
-                .with_context(default_journal_id=self.company_data["default_journal_purchase"].id)\
-                ._create_document_from_attachment(xml_attachment.id)
+        bill = self.import_attachment(xml_attachment, self.company_data["default_journal_purchase"])
 
         # Ensure the first tax is retrieved as there isn't any prediction that could be leverage
         self.assertEqual(bill.invoice_line_ids.tax_ids, new_tax_1)
@@ -145,9 +149,7 @@ class TestAccountEdiUblCii(AccountTestInvoicingCommon):
         bill.action_post()
 
         # Import the bill again and ensure the prediction did his work
-        bill = self.env['account.journal']\
-                .with_context(default_journal_id=self.company_data["default_journal_purchase"].id)\
-                ._create_document_from_attachment(xml_attachment.id)
+        bill = self.import_attachment(xml_attachment, self.company_data["default_journal_purchase"])
         self.assertEqual(bill.invoice_line_ids.tax_ids, new_tax_2)
 
     def test_peppol_eas_endpoint_compute(self):
@@ -182,3 +184,38 @@ class TestAccountEdiUblCii(AccountTestInvoicingCommon):
             'peppol_eas': '0208',
             'peppol_endpoint': '0477472701',
         }])
+
+    def test_import_partner_peppol_fields(self):
+        """ Check that the peppol fields are used to retrieve the partner when importing a Bis 3 xml. """
+        partner = self.env['res.partner'].create({
+            'name': "My Belgian Partner",
+            'vat': "BE0477472701",
+            'peppol_eas': "0208",
+            'peppol_endpoint': "0477472701",
+            'email': "mypartner@email.com",
+        })
+        invoice = self.env['account.move'].create({
+            'partner_id': partner.id,
+            'move_type': 'out_invoice',
+            'invoice_line_ids': [Command.create({'product_id': self.product_a.id})]
+        })
+        invoice.action_post()
+        xml_attachment = self.env['ir.attachment'].create({
+            'raw': self.env['account.edi.xml.ubl_bis3']._export_invoice(invoice)[0],
+            'name': 'test_invoice.xml',
+        })
+
+        # There is a duplicated partner (with the same name and email)
+        self.env['res.partner'].create({
+            'name': "My Belgian Partner",
+            'email': "mypartner@email.com",
+        })
+        # Change the fields of the partner, keep the peppol fields
+        partner.update({
+            'name': "Turlututu",
+            'email': False,
+            'vat': False,
+        })
+        # The partner should be retrieved based on the peppol fields
+        imported_invoice = self.import_attachment(xml_attachment, self.company_data["default_journal_sale"])
+        self.assertEqual(imported_invoice.partner_id, partner)

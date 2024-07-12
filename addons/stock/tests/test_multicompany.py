@@ -125,7 +125,7 @@ class TestMultiCompany(TransactionCase):
         before validating. The quant and stock moves should belong to Company A.
         """
         product = self.env['product.product'].create({
-            'type': 'product',
+            'is_storable': True,
             'company_id': self.company_a.id,
             'name': 'Product limited to company A',
         })
@@ -150,7 +150,7 @@ class TestMultiCompany(TransactionCase):
         product = self.env['product.product'].create({
             'name': 'product limited to company b',
             'company_id': self.company_b.id,
-            'type': 'product'
+            'is_storable': True
         })
 
         with self.assertRaises(UserError):
@@ -180,7 +180,7 @@ class TestMultiCompany(TransactionCase):
         the lot is created in Company A since the product belongs to Company A.
         """
         product = self.env['product.product'].create({
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'serial',
             'name': 'product',
             'company_id': self.company_a.id,
@@ -216,13 +216,44 @@ class TestMultiCompany(TransactionCase):
         ])
         self.assertEqual(created_serial.company_id, self.company_a)
 
+    def test_lot_3(self):
+        """ Checks that with a lot created in company A, it's not possible to create the same lot without
+            a company from company B, while it's possible to create it with company B set as its company.
+        """
+        product = self.env['product.product'].create({
+            'type': 'consu',
+            'is_storable': True,
+            'tracking': 'serial',
+            'name': 'Cross-Company Product',
+        })
+        lot = self.env['stock.lot'].create({
+            'name': 'unique',
+            'product_id': product.id,
+            'company_id': self.company_a.id,
+        })
+        self.assertTrue(lot)
+        # Even without having access to it, it shouldn't be possible to duplicate the lot between a company & no-company.
+        with self.assertRaises(ValidationError):
+            self.env['stock.lot'].with_user(self.user_b).with_context(allowed_company_ids=self.company_b.ids).create({
+                'name': 'unique',
+                'product_id': product.id,
+                'company_id': False,
+            })
+        # But it should be possible to create it in another company.
+        lot_b = self.env['stock.lot'].with_user(self.user_b).create({
+            'name': 'unique',
+            'product_id': product.id,
+            'company_id': self.company_b.id,
+        })
+        self.assertTrue(lot_b)
+
     def test_orderpoint_1(self):
         """As a user of company A, create an orderpoint for company B. Check itsn't possible to
         use a warehouse of companny A"""
         # Required for `warehouse_id` and `location_id` to be visible in the view
         self.user_a.groups_id += self.env.ref("stock.group_stock_multi_locations")
         product = self.env['product.product'].create({
-            'type': 'product',
+            'is_storable': True,
             'name': 'shared product',
         })
         orderpoint = Form(self.env['stock.warehouse.orderpoint'].with_user(self.user_a))
@@ -243,7 +274,7 @@ class TestMultiCompany(TransactionCase):
         # Required for `warehouse_id` and `location_id` to be visible in the view
         self.user_a.groups_id += self.env.ref("stock.group_stock_multi_locations")
         product = self.env['product.product'].create({
-            'type': 'product',
+            'is_storable': True,
             'name': 'shared product',
         })
         orderpoint = Form(self.env['stock.warehouse.orderpoint'].with_user(self.user_a))
@@ -262,7 +293,7 @@ class TestMultiCompany(TransactionCase):
         # to test the change of location when changing of warehouse within a same company
         warehouse_a2 = self.env['stock.warehouse'].with_user(self.user_a).sudo().create({'name': 'foo', 'code': 'foo'})
         product = self.env['product.product'].create({
-            'type': 'product',
+            'is_storable': True,
             'name': 'shared product',
         })
         orderpoint = self.env['stock.warehouse.orderpoint'].with_user(self.user_a).create({
@@ -337,7 +368,7 @@ class TestMultiCompany(TransactionCase):
         """
         product = self.env['product.product'].create({
             'name': 'p1',
-            'type': 'product'
+            'is_storable': True
         })
         picking_type_b = self.env['stock.picking.type'].search([
             ('company_id', '=', self.company_b.id),
@@ -360,7 +391,7 @@ class TestMultiCompany(TransactionCase):
         """
         product = self.env['product.product'].create({
             'name': 'p1',
-            'type': 'product'
+            'is_storable': True
         })
         picking_type_b = self.env['stock.picking.type'].search([
             ('company_id', '=', self.company_b.id),
@@ -383,7 +414,7 @@ class TestMultiCompany(TransactionCase):
         """
         product = self.env['product.product'].create({
             'name': 'p1',
-            'type': 'product',
+            'is_storable': True,
             'company_id': self.company_b.id,
         })
         picking_type_b = self.env['stock.picking.type'].search([
@@ -413,7 +444,7 @@ class TestMultiCompany(TransactionCase):
 
         self.user_a.company_ids = [(6, 0, [self.company_a.id])]
         product_lot = self.env['product.product'].create({
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'lot',
             'name': 'product lot',
         })
@@ -454,13 +485,13 @@ class TestMultiCompany(TransactionCase):
             'location_dest_id': self.stock_location_a.id,
             'product_id': product_lot.id,
             'product_uom': product_lot.uom_id.id,
-            'product_uom_qty': 1.0,
+            'product_uom_qty': 0.1,
             'picking_type_id': self.warehouse_a.in_type_id.id,
         })
         move_from_supplier._action_confirm()
         move_line_1 = move_from_supplier.move_line_ids[0]
         move_line_1.lot_name = 'lot 1'
-        move_line_1.quantity = 1.0
+        move_line_1.quantity = 0.1
         move_from_supplier.picked = True
         move_from_supplier._action_done()
         lot_1 = move_line_1.lot_id
@@ -472,7 +503,7 @@ class TestMultiCompany(TransactionCase):
             'location_dest_id': intercom_location.id,
             'product_id': product_lot.id,
             'product_uom': product_lot.uom_id.id,
-            'product_uom_qty': 1.0,
+            'product_uom_qty': 0.1,
             'picking_type_id': picking_type_to_transit.id,
             'route_ids': [(4, route.id)],
         })
@@ -480,7 +511,7 @@ class TestMultiCompany(TransactionCase):
         move_to_transit.with_user(self.user_a)._action_assign()
         move_line_2 = move_to_transit.move_line_ids[0]
         self.assertTrue(move_line_2.lot_id, move_line_1.lot_id)
-        move_line_2.quantity = 1.0
+        move_line_2.quantity = 0.1
         move_to_transit.picked = True
         move_to_transit.with_user(self.user_a)._action_done()
 
@@ -499,17 +530,17 @@ class TestMultiCompany(TransactionCase):
 
         move_line_3 = move_push.move_line_ids[0]
         move_line_3.lot_name = 'lot 2'
-        move_line_3.quantity = 1.0
+        move_line_3.quantity = 0.1
         picking_receipt.move_ids.picked = True
         picking_receipt.button_validate()
         lot_2 = move_line_3.lot_id
         self.assertEqual(lot_1.name, 'lot 1')
-        self.assertEqual(self.env['stock.quant']._get_available_quantity(product_lot, intercom_location, lot_1), 1.0)
+        self.assertEqual(self.env['stock.quant']._get_available_quantity(product_lot, intercom_location, lot_1), 0.1)
         self.assertEqual(lot_2.name, 'lot 2')
-        self.assertEqual(self.env['stock.quant']._get_available_quantity(product_lot, self.stock_location_b, lot_2), 1.0)
+        self.assertEqual(self.env['stock.quant']._get_available_quantity(product_lot, self.stock_location_b, lot_2), 0.1)
 
     def test_intercom_lot_pull(self):
-        """Use warehouse of comany a to resupply warehouse of company b. Check
+        """Use warehouse of company a to resupply warehouse of company b. Check
         pull rule works correctly in two companies and moves are unchained from
         inter-company transit location."""
         customer_location = self.env.ref('stock.stock_location_customers')
@@ -523,7 +554,7 @@ class TestMultiCompany(TransactionCase):
         self.assertTrue(resupply_route, "Resupply route not found")
 
         product_lot = self.env['product.product'].create({
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'lot',
             'name': 'product lot',
             'route_ids': [(4, resupply_route.id), (4, self.env.ref('stock.route_warehouse0_mto').id)],

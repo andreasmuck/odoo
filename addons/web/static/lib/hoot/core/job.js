@@ -19,7 +19,9 @@ import { Tag } from "./tag";
 // Global
 //-----------------------------------------------------------------------------
 
-const { Object } = globalThis;
+const {
+    Object: { assign: $assign, entries: $entries },
+} = globalThis;
 
 //-----------------------------------------------------------------------------
 // Internal
@@ -29,7 +31,7 @@ const { Object } = globalThis;
  * @param {JobConfig} config
  */
 const validateConfig = (config) => {
-    for (const [key, value] of Object.entries(config)) {
+    for (const [key, value] of $entries(config)) {
         if (!isOfType(value, CONFIG_TAG_SCHEMA[key])) {
             throw new HootError(`invalid config tag: parameter "${key}" does not exist`);
         }
@@ -85,18 +87,11 @@ export class Job {
     }
 
     /**
-     * @returns {boolean}
-     */
-    canRun() {
-        return !this.config.skip;
-    }
-
-    /**
      * @param {JobConfig & { tags?: Iterable<Tag | string> }} config
      */
     configure({ tags, ...config }) {
         // Assigns and validates job config
-        Object.assign(this.config, config);
+        $assign(this.config, config);
         validateConfig(this.config);
 
         // Tags

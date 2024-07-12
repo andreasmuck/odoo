@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 export const changesToOrder = (
     order,
     skipped = false,
@@ -55,11 +53,14 @@ export const getOrderChanges = (order, skipped = false, orderPreparationCategori
 
             if (quantityDiff && orderline.skip_change === skipped) {
                 changes[lineKey] = {
+                    uuid: orderline.uuid,
                     name: orderline.get_full_product_name(),
                     product_id: product.id,
                     attribute_value_ids: orderline.attribute_value_ids,
                     quantity: quantityDiff,
                     note: note,
+                    pos_categ_id: product.pos_categ_ids[0]?.id ?? 0,
+                    pos_categ_sequence: product.pos_categ_ids[0]?.sequence ?? 0,
                 };
                 changesCount += quantityDiff;
                 changeAbsCount += Math.abs(quantityDiff);
@@ -77,16 +78,18 @@ export const getOrderChanges = (order, skipped = false, orderPreparationCategori
     // Checks whether an orderline has been deleted from the order since it
     // was last sent to the preparation tools. If so we add this to the changes.
     for (const [lineKey, lineResume] of Object.entries(order.last_order_preparation_change)) {
-        if (!order.getOrderedLine(lineKey)) {
-            const lineKey = `${lineResume["line_uuid"]} - ${lineResume["note"]}`;
+        if (!order.models["pos.order.line"].getBy("uuid", lineResume["uuid"])) {
             if (!changes[lineKey]) {
                 changes[lineKey] = {
+                    uuid: lineResume["uuid"],
                     product_id: lineResume["product_id"],
                     name: lineResume["name"],
                     note: lineResume["note"],
                     attribute_value_ids: lineResume["attribute_value_ids"],
                     quantity: -lineResume["quantity"],
                 };
+                changeAbsCount += Math.abs(lineResume["quantity"]);
+                changesCount += lineResume["quantity"];
             } else {
                 changes[lineKey]["quantity"] -= lineResume["quantity"];
             }

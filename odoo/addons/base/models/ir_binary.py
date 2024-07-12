@@ -70,7 +70,7 @@ class IrBinary(models.AbstractModel):
         :rtype: odoo.http.Stream
         """
         if record._name == 'ir.attachment' and field_name in ('raw', 'datas', 'db_datas'):
-            return Stream.from_attachment(record)
+            return record._to_http_stream()
 
         record.check_field_access_rights('read', [field_name])
         field_def = record._fields[field_name]
@@ -87,7 +87,7 @@ class IrBinary(models.AbstractModel):
             limit=1)
         if not field_attachment:
             raise MissingError("The related attachment does not exist.")
-        return Stream.from_attachment(field_attachment)
+        return field_attachment._to_http_stream()
 
     def _get_stream_from(
         self, record, field_name='raw', filename=None, filename_field='name',
@@ -224,7 +224,7 @@ class IrBinary(models.AbstractModel):
         if isinstance(stream.etag, str):
             stream.etag += f'-{width}x{height}-crop={crop}-quality={quality}'
         if isinstance(stream.last_modified, (int, float)):
-            stream.last_modified = datetime.utcfromtimestamp(stream.last_modified)
+            stream.last_modified = datetime.fromtimestamp(stream.last_modified, tz=None)
         modified = werkzeug.http.is_resource_modified(
             request.httprequest.environ,
             etag=stream.etag if isinstance(stream.etag, str) else None,

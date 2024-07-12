@@ -5,10 +5,50 @@ import hashlib
 
 from odoo import api, models, _
 from odoo.exceptions import UserError
+from odoo.tools import format_list
 
 class HrEmployee(models.Model):
-
     _inherit = 'hr.employee'
+
+    @api.model
+    def _load_pos_data_domain(self, data):
+        config_id = self.env['pos.config'].browse(data['pos.config']['data'][0]['id'])
+        if len(config_id.basic_employee_ids) > 0:
+            return [
+                '&', ('company_id', '=', config_id.company_id.id),
+                '|', ('user_id', '=', self.env.uid), ('id', 'in', config_id.basic_employee_ids.ids + config_id.advanced_employee_ids.ids)]
+        else:
+            return [('company_id', '=', config_id.company_id.id)]
+
+    @api.model
+    def _load_pos_data_fields(self, config_id):
+        return ['name', 'user_id', 'work_contact_id']
+
+    def _load_pos_data(self, data):
+        domain = self._load_pos_data_domain(data)
+        fields = self._load_pos_data_fields(data['pos.config']['data'][0]['id'])
+
+        employees = self.search(domain)
+        manager_ids = employees.filtered(lambda emp: data['pos.config']['data'][0]['group_pos_manager_id'] in emp.user_id.groups_id.ids).mapped('id')
+
+        employees_barcode_pin = employees.get_barcodes_and_pin_hashed()
+        bp_per_employee_id = {bp_e['id']: bp_e for bp_e in employees_barcode_pin}
+
+        employees = employees.read(fields, load=False)
+        for employee in employees:
+            if employee['user_id'] and employee['user_id'] in manager_ids or employee['id'] in data['pos.config']['data'][0]['advanced_employee_ids']:
+                role = 'manager'
+            else:
+                role = 'cashier'
+
+            employee['_role'] = role
+            employee['_barcode'] = bp_per_employee_id[employee['id']]['barcode']
+            employee['_pin'] = bp_per_employee_id[employee['id']]['pin']
+
+        return {
+            'data': employees,
+            'fields': fields,
+        }
 
     def get_barcodes_and_pin_hashed(self):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
@@ -32,6 +72,6 @@ class HrEmployee(models.Model):
             for employee in self:
                 config_ids = configs_with_all_employees | configs_with_specific_employees.filtered(lambda c: employee in c.basic_employee_ids)
                 if config_ids:
-                    error_msg += _("Employee: %s - PoS Config(s): %s \n", employee.name, ', '.join(config.name for config in config_ids))
+                    error_msg += _("Employee: %(employee)s - PoS Config(s): %(config_list)s \n", employee=employee.name, config_list=format_list(self.env, config_ids.mapped("name")))
 
             raise UserError(error_msg)

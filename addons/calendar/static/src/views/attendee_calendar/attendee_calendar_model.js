@@ -19,10 +19,12 @@ export class AttendeeCalendarModel extends CalendarModel {
      */
     async load() {
         const res = await super.load(...arguments);
-        const [credentialStatus, defaultDuration] = await Promise.all([
+        const [credentialStatus, syncStatus, defaultDuration] = await Promise.all([
             rpc("/calendar/check_credentials"),
+            this.orm.call("res.users", "check_synchronization_status", [[user.userId]]),
             this.orm.call("calendar.event", "get_default_duration"),
         ]);
+        this.syncStatus = syncStatus;
         this.credentialStatus = credentialStatus;
         this.defaultDuration = defaultDuration;
         return res;
@@ -64,8 +66,21 @@ export class AttendeeCalendarModel extends CalendarModel {
     }
 
     /**
+     * Load the filter section and add both 'user' and 'everybody' filters to the context.
      * @override
      */
+    async loadFilterSection(fieldName, filterInfo, previousSection) {
+        let result = await super.loadFilterSection(fieldName, filterInfo, previousSection);
+        if (result?.filters) {
+            user.updateContext({
+                calendar_filters: {
+                    all: result?.filters?.find((f) => f.type == "all")?.active ?? false,
+                    user: result?.filters?.find((f) => f.type == "user")?.active ?? false,
+                }
+            });
+        }
+        return result;
+    }
 
     /**
      * @override

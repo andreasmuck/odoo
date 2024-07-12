@@ -36,8 +36,6 @@
             <field name="arch" type="xml">
                 <data>
                     <div name="button_box" position="inside">
-                        <field name="contract_warning" invisible="1"/>
-                        <field name="employee_type" invisible="1"/>
                         <button name="action_open_contract"
                             class="oe_stat_button"
                             icon="fa-book"
@@ -158,7 +156,7 @@
                                 icon="fa-book"
                                 type="object"
                                 invisible="contracts_count == 0"
-                                groups="hr_contract.group_hr_contract_manager">
+                                groups="hr_contract.group_hr_contract_employee_manager">
                                 <div class="o_stat_info">
                                     <span class="o_stat_value">
                                         <field name="contracts_count"/>
@@ -195,6 +193,7 @@
                                 <!-- employee_id = fields.Many2one('hr.employee', string='Employee', tracking=True, domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]") -->
                                 <field name="company_id" invisible="1"/>
                                 <field name="employee_id" widget="many2one_avatar_employee"/>
+                                <field name="active_employee" invisible="1"/>
                                 <field name="date_start" string="Contract Start Date"/>
                                 <field name="date_end" string="Contract End Date"/>
                                 <field name="company_country_id" invisible="1"/>
@@ -239,7 +238,7 @@
                                     <group name="yearly_benefits"/>
                                 </group>
                             </page>
-                            <page string="Contract Details" name="other" groups="hr_contract.group_hr_contract_manager">
+                            <page string="Details" name="other" groups="hr_contract.group_hr_contract_manager">
                                 <group name="contract_details_0"/>
                                 <group name="contract_details" col="2"/>
                                 <group name="contract_details_2"/>
@@ -249,7 +248,7 @@
                             </page>
                         </notebook>
                     </sheet>
-                    <chatter/>
+                    <chatter groups="hr_contract.group_hr_contract_manager"/>
                 </form>
             </field>
         </record>
@@ -270,6 +269,7 @@
                     <field name="wage" widget="monetary" readonly="1" optional="hidden"/>
                     <field name="resource_calendar_id" optional="show"/>
                     <field name="structure_type_id" optional="hidden"/>
+                    <field name="kanban_state" widget="state_selection" nolabel="1"/>
                     <field name="state" widget="badge" decoration-info="state == 'draft'" decoration-warning="state == 'close'" decoration-success="state == 'open'"/>
                     <field name="company_id" groups="base.group_multi_company" readonly="1" optional="hidden"/>
                 </tree>
@@ -280,60 +280,31 @@
             <field name="name">hr.contract.kanban</field>
             <field name="model">hr.contract</field>
             <field name="arch" type="xml">
-                <kanban class="o_kanban_small_column" default_order="date_end" sample="1">
-                    <field name="employee_id"/>
+                <kanban default_order="date_end" sample="1">
                     <field name="activity_state"/>
-                    <field name="state"/>
                     <progressbar field="activity_state" colors='{"planned": "success", "today": "warning", "overdue": "danger"}'/>
                     <templates>
                     <t t-name="kanban-menu" groups="hr_contract.group_hr_contract_manager">
                         <t t-if="widget.editable"><a role="menuitem" type="edit" class="dropdown-item">Edit Contract</a></t>
                         <t t-if="widget.deletable"><a role="menuitem" type="delete" class="dropdown-item">Delete</a></t>
                     </t>
-                    <t t-name="kanban-box">
-                        <div class="oe_kanban_card oe_kanban_global_click">
-                            <div class="oe_kanban_content">
-                                <div class="o_hr_contract_state">
-                                    <strong class="o_kanban_record_title">
-                                        <field name="name"/>
-                                    </strong>
-                                </div>
-                                <div class="text-muted o_kanban_record_subtitle o_hr_contract_job_id" name="div_job_id">
-                                    <field name="job_id"/>
-                                </div>
-                                                                <div class="text-muted o_kanban_record_subtitle o_hr_contract_job_id" name="div_department_id">
-                                    <field name="department_id"/>
-                                </div>
-                                <div class="text-muted o_kanban_record_subtitle" name="div_date_id">
-                                    <span class="o_stat_text">
-                                        From
-                                    </span>
-                                    <span class="o_stat_value">
-                                        <field name="date_start"/>
-                                    </span>
-                                    <t t-if="record.date_end.raw_value">
-                                        <span class="o_stat_text">
-                                            To
-                                        </span>
-                                        <span class="o_stat_value">
-                                            <field name="date_end"/>
-                                        </span>
-                                    </t>
-                                </div>
-                                <div class="oe_kanban_bottom_right">
-                                    <span class="float-end">
-                                        <field name="employee_id" widget="many2one_avatar_employee"/>
-                                    </span>
-                                    <span class="float-end mr4">
-                                        <field name="kanban_state" widget="state_selection"/>
-                                    </span>
-                                </div>
-                                <div class="oe_kanban_bottom_left">
-                                    <field name="activity_ids" widget="kanban_activity"/>
-                                </div>
-                            </div>
-                            <div class="clearfix"></div>
+                    <t t-name="kanban-card">
+                        <field class="fw-bold fs-5" name="name"/>
+                        <field class="text-muted" name="job_id"/>
+                        <field class="text-muted" name="department_id"/>
+                        <div class="text-muted" name="div_date_id">
+                            From <field name="date_start"/>
+                            <t t-if="record.date_end.raw_value">
+                                To <field name="date_end"/>
+                            </t>
                         </div>
+                        <footer>
+                            <field name="activity_ids" widget="kanban_activity"/>
+                            <div class="d-flex ms-auto">
+                                <field class="mr4" name="kanban_state" widget="state_selection"/>
+                                <field name="employee_id" widget="many2one_avatar_employee"/>
+                            </div>
+                        </footer>
                     </t>
                     </templates>
                 </kanban>
@@ -387,7 +358,14 @@
             parent="hr.menu_hr_employee_payroll"
             sequence="6"
             groups="hr_contract.group_hr_contract_manager"/>
-        
+
+        <menuitem
+            id="menu_hr_employee_contracts"
+            name="Contracts"
+            action="hr_contract.action_hr_contract"
+            parent="hr.menu_hr_root"
+            sequence="5"/>
+
         <record id="hr.menu_resource_calendar_view" model="ir.ui.menu">
             <field name="parent_id" ref="menu_human_resources_configuration_contract"/>
         </record>

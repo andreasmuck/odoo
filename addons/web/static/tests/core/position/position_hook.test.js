@@ -1,13 +1,13 @@
-import { beforeEach, destroy, expect, getFixture, test } from "@odoo/hoot";
-import { queryAll, queryOne, scroll } from "@odoo/hoot-dom";
-import { animationFrame } from "@odoo/hoot-mock";
+import { before, destroy, expect, getFixture, test } from "@odoo/hoot";
+import { queryOne, scroll } from "@odoo/hoot-dom";
+import { Deferred, animationFrame } from "@odoo/hoot-mock";
 import { Component, xml, useRef, onMounted } from "@odoo/owl";
 import { defineParams, mountWithCleanup } from "@web/../tests/web_test_helpers";
 import { usePosition } from "@web/core/position/position_hook";
 
-beforeEach(
+before(
     () =>
-        document.readyState === "complete" ||
+        document.readyState !== "loading" ||
         new Promise((resolve) => addEventListener("load", resolve, { once: true }))
 );
 
@@ -141,13 +141,13 @@ test("is restricted to its container, even with margins", async () => {
         { position: "bottom" },
         { ...containerStyle, height: `${minSize + SHEET_MARGIN}px` }
     );
-    expect(["bottom-middle"]).toVerifySteps();
+    expect.verifySteps(["bottom-middle"]);
     // Remove 1px => popper should switch direction as it can't be contained
     await _mountTestComponentAndDestroy(
         { position: "bottom" },
         { ...containerStyle, height: `${minSize + SHEET_MARGIN - 1}px` }
     );
-    expect(["right-start"]).toVerifySteps();
+    expect.verifySteps(["right-start"]);
 
     // --> With additional margin
     // Leave just enough space for the popper to be contained
@@ -155,13 +155,13 @@ test("is restricted to its container, even with margins", async () => {
         { position: "bottom", margin },
         { ...containerStyle, height: `${minSize + margin + SHEET_MARGIN}px` }
     );
-    expect(["bottom-middle"]).toVerifySteps();
+    expect.verifySteps(["bottom-middle"]);
     // Remove 1px => popper should switch direction as it can't be contained
     await _mountTestComponentAndDestroy(
         { position: "bottom", margin },
         { ...containerStyle, height: `${minSize + margin + SHEET_MARGIN - 1}px` }
     );
-    expect(["right-start"]).toVerifySteps();
+    expect.verifySteps(["right-start"]);
 
     // === DIRECTION: TOP ===
     // Container style changes: push target to bottom
@@ -173,13 +173,13 @@ test("is restricted to its container, even with margins", async () => {
         { position: "top" },
         { ...containerStyle, height: `${minSize + SHEET_MARGIN}px` }
     );
-    expect(["top-middle"]).toVerifySteps();
+    expect.verifySteps(["top-middle"]);
     // Remove 1px => popper should switch direction as it can't be contained
     await _mountTestComponentAndDestroy(
         { position: "top" },
         { ...containerStyle, height: `${minSize + SHEET_MARGIN - 1}px` }
     );
-    expect(["right-end"]).toVerifySteps();
+    expect.verifySteps(["right-end"]);
 
     // --> With additional margin
     // Leave just enough space for the popper to be contained
@@ -187,13 +187,13 @@ test("is restricted to its container, even with margins", async () => {
         { position: "top", margin },
         { ...containerStyle, height: `${minSize + margin + SHEET_MARGIN}px` }
     );
-    expect(["top-middle"]).toVerifySteps();
+    expect.verifySteps(["top-middle"]);
     // Remove 1px => popper should switch direction as it can't be contained
     await _mountTestComponentAndDestroy(
         { position: "top", margin },
         { ...containerStyle, height: `${minSize + margin + SHEET_MARGIN - 1}px` }
     );
-    expect(["right-end"]).toVerifySteps();
+    expect.verifySteps(["right-end"]);
 
     // === DIRECTION: LEFT ===
     // Container style changes: reset previous changes
@@ -207,13 +207,13 @@ test("is restricted to its container, even with margins", async () => {
         { position: "left" },
         { ...containerStyle, width: `${minSize + SHEET_MARGIN}px` }
     );
-    expect(["left-middle"]).toVerifySteps();
+    expect.verifySteps(["left-middle"]);
     // Remove 1px => popper should switch direction as it can't be contained
     await _mountTestComponentAndDestroy(
         { position: "left" },
         { ...containerStyle, width: `${minSize + SHEET_MARGIN - 1}px` }
     );
-    expect(["bottom-end"]).toVerifySteps();
+    expect.verifySteps(["bottom-end"]);
 
     // --> With additional margin
     // Leave just enough space for the popper to be contained
@@ -221,13 +221,13 @@ test("is restricted to its container, even with margins", async () => {
         { position: "left", margin },
         { ...containerStyle, width: `${minSize + margin + SHEET_MARGIN}px` }
     );
-    expect(["left-middle"]).toVerifySteps();
+    expect.verifySteps(["left-middle"]);
     // Remove 1px => popper should switch direction as it can't be contained
     await _mountTestComponentAndDestroy(
         { position: "left", margin },
         { ...containerStyle, width: `${minSize + margin + SHEET_MARGIN - 1}px` }
     );
-    expect(["bottom-end"]).toVerifySteps();
+    expect.verifySteps(["bottom-end"]);
 
     // === DIRECTION: RIGHT ===
     // Container style changes: push target to left
@@ -239,13 +239,13 @@ test("is restricted to its container, even with margins", async () => {
         { position: "right" },
         { ...containerStyle, width: `${minSize + SHEET_MARGIN}px` }
     );
-    expect(["right-middle"]).toVerifySteps();
+    expect.verifySteps(["right-middle"]);
     // Remove 1px => popper should switch direction as it can't be contained
     await _mountTestComponentAndDestroy(
         { position: "right" },
         { ...containerStyle, width: `${minSize + SHEET_MARGIN - 1}px` }
     );
-    expect(["top-start"]).toVerifySteps();
+    expect.verifySteps(["top-start"]);
 
     // --> With additional margin
     // Leave just enough space for the popper to be contained
@@ -253,13 +253,13 @@ test("is restricted to its container, even with margins", async () => {
         { position: "right", margin },
         { ...containerStyle, width: `${minSize + margin + SHEET_MARGIN}px` }
     );
-    expect(["right-middle"]).toVerifySteps();
+    expect.verifySteps(["right-middle"]);
     // Remove 1px => popper should switch direction as it can't be contained
     await _mountTestComponentAndDestroy(
         { position: "right", margin },
         { ...containerStyle, width: `${minSize + margin + SHEET_MARGIN - 1}px` }
     );
-    expect(["top-start"]).toVerifySteps();
+    expect.verifySteps(["top-start"]);
 });
 
 test("popper is an inner element", async () => {
@@ -292,23 +292,19 @@ test("has no effect when component is destroyed", async () => {
     });
 
     const comp = await mountWithCleanup(TestComp);
-    expect(["onPositioned called"]).toVerifySteps({
-        message: "onPositioned called when component mounted",
-    });
+    // onPositioned called when component mounted
+    expect.verifySteps(["onPositioned called"]);
 
     scroll(queryOne("#scroll-container"), { y: 100 });
     await animationFrame();
-    expect(["onPositioned called"]).toVerifySteps({
-        message: "onPositioned called when container scroll",
-    });
+    // onPositioned called when container scroll
+    expect.verifySteps(["onPositioned called"]);
 
     scroll(queryOne("#scroll-container"), { y: 100 });
     destroy(comp);
     await animationFrame();
-    expect([]).toVerifySteps({
-        message:
-            "onPositioned not called even if scroll happened right before the component destroys",
-    });
+    // onPositioned not called even if scroll happened right before the component destroys
+    expect.verifySteps([]);
 });
 
 test("reposition popper when a load event occurs", async () => {
@@ -319,14 +315,12 @@ test("reposition popper when a load event occurs", async () => {
     });
 
     await mountWithCleanup(TestComp);
-    expect(["onPositioned called"]).toVerifySteps({
-        message: "onPositioned called when component mounted",
-    });
+    // onPositioned called when component mounted
+    expect.verifySteps(["onPositioned called"]);
     queryOne("#popper").dispatchEvent(new Event("load"));
     await animationFrame();
-    expect(["onPositioned called"]).toVerifySteps({
-        message: "onPositioned called when load event is triggered",
-    });
+    // onPositioned called when load event is triggered
+    expect.verifySteps(["onPositioned called"]);
 });
 
 test("reposition popper when a scroll event occurs", async () => {
@@ -345,19 +339,16 @@ test("reposition popper when a scroll event occurs", async () => {
     );
 
     await mountWithCleanup(TestComp);
-    expect(["onPositioned called"]).toVerifySteps({
-        message: "onPositioned called when component mounted",
-    });
+    // onPositioned called when component mounted
+    expect.verifySteps(["onPositioned called"]);
     scroll(queryOne("#popper"), { y: 10 });
     await animationFrame();
-    expect([]).toVerifySteps({
-        message: "onPositioned not called when scroll event is triggered inside popper",
-    });
+    // onPositioned not called when scroll event is triggered inside popper
+    expect.verifySteps([]);
     scroll(queryOne("#scroll-container"), { y: 10 });
     await animationFrame();
-    expect(["onPositioned called"]).toVerifySteps({
-        message: "onPositioned called when container scroll (parent of popper)",
-    });
+    // onPositioned called when container scroll (parent of popper)
+    expect.verifySteps(["onPositioned called"]);
 });
 
 test("is positioned relative to its containing block", async () => {
@@ -410,19 +401,20 @@ test("is positioned relative to its containing block", async () => {
 });
 
 test("iframe: popper is outside, target inside", async () => {
-    await mountWithCleanup(/* xml */ `
-        <iframe class="container" style="height: 200px; width: 400px; margin: 25px" srcdoc="&lt;div id='target-iframe' /&gt;" />
-    `);
+    await mountWithCleanup(`<div id="container"/>`);
 
-    await Promise.all(
-        queryAll("iframe").map(
-            (iframe) =>
-                iframe.contentDocument.readyState === "complete" ||
-                new Promise((resolve) => iframe.addEventListener("load", resolve))
-        )
-    );
+    const iframe = document.createElement("iframe");
+    Object.assign(iframe.style, {
+        height: "200px",
+        width: "400px",
+        margin: "25px",
+    });
+    iframe.srcdoc = `<div id="target-iframe" />`;
+    const def = new Deferred();
+    iframe.onload = () => def.resolve();
+    queryOne("#container").appendChild(iframe);
+    await def;
 
-    const iframe = queryOne("iframe");
     const iframeBody = iframe.contentDocument.body;
     Object.assign(iframeBody.style, {
         display: "flex",
@@ -449,7 +441,7 @@ test("iframe: popper is outside, target inside", async () => {
     );
 
     await mountWithCleanup(Popper, { noMainContainer: true });
-    expect(["bottom-middle"]).toVerifySteps();
+    expect.verifySteps(["bottom-middle"]);
 
     expect("#popper").toHaveCount(1);
     expect("#target-iframe").toHaveCount(0);
@@ -474,9 +466,9 @@ test("iframe: popper is outside, target inside", async () => {
     // Scrolling inside the iframe should reposition the popover accordingly
     const previousPositionSolution = onPositionedArgs.solution;
     const scrollOffset = 100;
-    scroll(iframe.contentDocument.documentElement, { y: scrollOffset });
+    scroll(queryOne("iframe").contentDocument.documentElement, { y: scrollOffset });
     await animationFrame();
-    expect(["bottom-middle"]).toVerifySteps();
+    expect.verifySteps(["bottom-middle"]);
     expect(previousPositionSolution.top).toBe(onPositionedArgs.solution.top + scrollOffset);
 
     // Check the expected position
@@ -493,19 +485,20 @@ test("iframe: popper is outside, target inside", async () => {
 });
 
 test("iframe: both popper and target inside", async () => {
-    await mountWithCleanup(/* xml */ `
-        <iframe class="container" style="height: 300px; width: 400px" srcdoc="&lt;div id='inner-container' /&gt;" />
-    `);
+    await mountWithCleanup(`<div id="container"/>`);
 
-    await Promise.all(
-        queryAll("iframe").map(
-            (iframe) =>
-                iframe.contentDocument.readyState === "complete" ||
-                new Promise((resolve) => iframe.addEventListener("load", resolve))
-        )
-    );
+    const iframe = document.createElement("iframe");
+    Object.assign(iframe.style, {
+        height: "200px",
+        width: "400px",
+        margin: "25px",
+    });
+    iframe.srcdoc = `<div id="inner-container" />`;
+    const def = new Deferred();
+    iframe.onload = () => def.resolve();
+    queryOne("#container").appendChild(iframe);
+    await def;
 
-    const iframe = queryOne("iframe");
     const iframeBody = iframe.contentDocument.body;
     Object.assign(iframeBody.style, {
         display: "flex",
@@ -537,7 +530,7 @@ test("iframe: both popper and target inside", async () => {
     });
 
     await mountWithCleanup(Popper, { noMainContainer: true, target: innerContainer });
-    expect(["bottom-middle"]).toVerifySteps();
+    expect.verifySteps(["bottom-middle"]);
 
     // Check everything is rendered where it should be
     expect(innerContainer.ownerDocument).toBe(iframe.contentDocument);
@@ -562,7 +555,7 @@ test("iframe: both popper and target inside", async () => {
     const scrollOffset = 100;
     scroll(iframe.contentDocument.documentElement, { y: scrollOffset });
     await animationFrame();
-    expect(["bottom-middle"]).toVerifySteps();
+    expect.verifySteps(["bottom-middle"]);
     expect(previousPositionSolution.top).toBe(onPositionedArgs.solution.top + scrollOffset);
 
     // Check the expected position
@@ -576,6 +569,89 @@ test("iframe: both popper and target inside", async () => {
 
     expect(popperBox.left).toBe(expectedLeft);
     expect(popperBox.left).toBe(onPositionedArgs.solution.left);
+});
+
+test("iframe: default container is the popper owner's document", async () => {
+    expect.assertions(1);
+    // Prepare an outer iframe, that will hold the popper element
+    let def = new Deferred();
+    const outerIframe = document.createElement("iframe");
+    Object.assign(outerIframe.style, { height: "450px", width: "450px" });
+    outerIframe.onload = () => def.resolve();
+    getFixture().prepend(outerIframe);
+    // registerCleanup(() => outerIframe.remove());
+    await def;
+    Object.assign(outerIframe.contentDocument.body.style, {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "flex-start",
+        backgroundColor: "salmon",
+        height: "450px",
+        width: "450px",
+        margin: "0",
+    });
+
+    def = new Deferred();
+    const iframeSheet = outerIframe.contentDocument.createElement("style");
+    iframeSheet.onload = () => def.resolve();
+    iframeSheet.textContent = `
+            #popper {
+                background-color: plum;
+                height: 100px;
+                width: 100px;
+            }
+        `;
+    outerIframe.contentDocument.head.appendChild(iframeSheet);
+    await def; // wait for the iframe's stylesheet to be loaded
+
+    // Prepare the inner iframe, that will hold the target element
+    def = new Deferred();
+    const innerIframe = document.createElement("iframe");
+    innerIframe.srcdoc = `<div id="target" />`;
+    Object.assign(innerIframe.style, {
+        height: "300px",
+        width: "120px",
+        marginLeft: "10px",
+    });
+    innerIframe.onload = () => def.resolve();
+    outerIframe.contentDocument.body.appendChild(innerIframe);
+    await def;
+    Object.assign(innerIframe.contentDocument.body.style, {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        height: "300px",
+        width: "120px",
+        margin: "0",
+    });
+
+    // Prepare the target element
+    const target = innerIframe.contentDocument.getElementById("target");
+    Object.assign(target.style, {
+        backgroundColor: "tomato",
+        height: "50px",
+        width: "50px",
+    });
+
+    // Mount the popper component and check its position
+    class Popper extends Component {
+        static props = ["*"];
+        static template = xml`<div id="popper" t-ref="popper" />`;
+        setup() {
+            usePosition("popper", () => target, {
+                position: "top-start",
+                onPositioned: (_, { direction, variant }) => {
+                    expect(`${direction}-${variant}`).toBe("top-start");
+                    // the style setup in this test leaves enough space in the inner iframe
+                    // for the popper to be positioned at top-middle, but this is exactly
+                    // what we want to avoid: the popper's base container should not be the
+                    // inner iframe, but the outer iframe, so the popper should be positioned
+                    // at top-start.
+                },
+            });
+        }
+    }
+    await mountWithCleanup(Popper, { target: outerIframe.contentDocument.body });
 });
 
 test("popper as child of another", async () => {
@@ -642,13 +718,13 @@ test("batch update call", async () => {
     }
 
     await mountWithCleanup(TestComponent);
-    expect(["positioned"]).toVerifySteps();
+    expect.verifySteps(["positioned"]);
 
     position.unlock();
     position.unlock();
     position.unlock();
     await animationFrame();
-    expect(["positioned"]).toVerifySteps();
+    expect.verifySteps(["positioned"]);
 });
 
 function getPositionTest(position, positionToCheck) {
@@ -732,9 +808,7 @@ function getRepositionTest(from, to, containerStyleChanges) {
         });
         await mountWithCleanup(TestComp);
         let [d, v = "middle"] = from.split("-");
-        expect([`${d}-${v}`]).toVerifySteps({
-            message: `has ${from} position`,
-        });
+        expect.verifySteps([`${d}-${v}`]);
 
         // Change container style and force update
         for (const styleToApply of containerStyleChanges.split(" ")) {
@@ -745,9 +819,7 @@ function getRepositionTest(from, to, containerStyleChanges) {
         await animationFrame();
 
         [d, v = "middle"] = to.split("-");
-        expect([`${d}-${v}`]).toVerifySteps({
-            message: `has ${to} position`,
-        });
+        expect.verifySteps([`${d}-${v}`]);
     };
 }
 

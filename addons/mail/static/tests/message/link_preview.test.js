@@ -1,7 +1,3 @@
-import { describe, expect, test } from "@odoo/hoot";
-
-/** @type {ReturnType<import("@mail/utils/common/misc").rpcWithEnv>} */
-let rpc;
 import {
     assertSteps,
     click,
@@ -13,8 +9,10 @@ import {
     start,
     startServer,
     step,
-} from "../mail_test_helpers";
-import { rpcWithEnv } from "@mail/utils/common/misc";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, expect, test } from "@odoo/hoot";
+
+import { rpc } from "@web/core/network/rpc";
 
 describe.current.tags("desktop");
 defineMailModels();
@@ -271,13 +269,11 @@ test("No crash on receiving link preview of non-known message", async () => {
         model: "discuss.channel",
         res_id: channelId,
     });
-    const env = await start();
-    rpc = rpcWithEnv(env);
+    await start();
     await openDiscuss();
     rpc("/mail/link_preview", { message_id: messageId });
-    expect(true).toBeTruthy();
     rpc("/mail/link_preview/hide", { link_preview_ids: [linkPreviewId] });
-    expect(true).toBeTruthy();
+    expect(true).toBe(true, { message: "no assertions" });
 });
 
 test("Squash the message and the link preview when the link preview is an image and the link is the only text in the message", async () => {
@@ -348,7 +344,7 @@ test("Sending message with link preview URL should show a link preview card", as
     await start();
     await openDiscuss(channelId);
     await insertText(".o-mail-Composer-input", "https://make-link-preview.com");
-    await click("button:not([disabled])", { text: "Send" });
+    await click("button[aria-label='Send']:enabled");
     await contains(".o-mail-LinkPreviewCard");
 });
 
@@ -390,17 +386,17 @@ test("link preview request is only made when message contains URL", async () => 
     await start();
     await openDiscuss(channelId);
     await insertText(".o-mail-Composer-input", "Hello, this message does not contain any link");
-    await click("button:enabled", { text: "Send" });
+    await click("button[aria-label='Send']:enabled");
     await contains(".o-mail-Message", {
         text: "Hello, this message does not contain any link",
     });
     await assertSteps([]);
     await insertText(".o-mail-Composer-input", "#");
     await click(".o-mail-NavigableList-item", { text: "#Sales" });
-    await click("button:enabled", { text: "Send" });
+    await click("button[aria-label='Send']:enabled");
     await contains(".o-mail-Message", { text: "#Sales" });
     await assertSteps([]);
     await insertText(".o-mail-Composer-input", "https://www.odoo.com");
-    await click("button:enabled", { text: "Send" });
+    await click("button[aria-label='Send']:enabled");
     await assertSteps(["/mail/link_preview"]);
 });

@@ -4,7 +4,7 @@ import { getColor } from "../colors";
 import { useCalendarPopover, useFullCalendar } from "../hooks";
 import { CalendarYearPopover } from "./calendar_year_popover";
 import { makeWeekColumn } from "@web/views/calendar/calendar_common/calendar_common_week_column";
-import { getWeekNumber } from "@web/views/calendar/utils";
+import { getLocalWeekNumber } from "@web/core/l10n/dates";
 
 import { Component, useEffect, useRef } from "@odoo/owl";
 
@@ -52,6 +52,7 @@ export class CalendarYearRenderer extends Component {
             droppable: true,
             editable: this.props.model.canEdit,
             dayMaxEventRows: this.props.model.eventLimit,
+            eventClassNames: this.eventClassNames,
             eventDidMount: this.onEventDidMount,
             eventResizableFromStart: true,
             events: (_, successCb) => successCb(this.mapRecordsToEvents()),
@@ -70,7 +71,7 @@ export class CalendarYearRenderer extends Component {
             timeZone: luxon.Settings.defaultZone.name,
             titleFormat: { month: "long", year: "numeric" },
             unselectAuto: false,
-            weekNumberCalculation: (date) => getWeekNumber(date, this.props.model.firstDayOfWeek),
+            weekNumberCalculation: (date) => getLocalWeekNumber(date),
             weekNumbers: false,
             weekNumberFormat: { week: "numeric" },
             windowResize: this.onWindowResizeDebounced,
@@ -173,26 +174,35 @@ export class CalendarYearRenderer extends Component {
         }
         return [];
     }
+    eventClassNames({ event }) {
+        const classesToAdd = [];
+        classesToAdd.push("o_event");
+        const record = this.props.model.records[event.id];
+        if (record) {
+            const color = getColor(record.colorIndex);
+            if (typeof color === "number") {
+                classesToAdd.push(`o_calendar_color_${color}`);
+            } else if (typeof color !== "string") {
+                classesToAdd.push("o_calendar_color_0");
+            }
+
+            if (record.isHatched) {
+                classesToAdd.push("o_event_hatched");
+            }
+            if (record.isStriked) {
+                classesToAdd.push("o_event_striked");
+            }
+        }
+        return classesToAdd;
+    }
     onEventDidMount(info) {
         const { el, event } = info;
         el.dataset.eventId = event.id;
-        el.classList.add("o_event");
         const record = this.props.model.records[event.id];
         if (record) {
             const color = getColor(record.colorIndex);
             if (typeof color === "string") {
                 el.style.backgroundColor = color;
-            } else if (typeof color === "number") {
-                el.classList.add(`o_calendar_color_${color}`);
-            } else {
-                el.classList.add("o_calendar_color_0");
-            }
-
-            if (record.isHatched) {
-                el.classList.add("o_event_hatched");
-            }
-            if (record.isStriked) {
-                el.classList.add("o_event_striked");
             }
         }
     }

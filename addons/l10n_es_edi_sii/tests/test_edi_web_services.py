@@ -10,8 +10,8 @@ from .common import TestEsEdiCommon
 class TestEdiWebServices(TestEsEdiCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref='es_full', edi_format_ref='l10n_es_edi_sii.edi_es_sii'):
-        super().setUpClass(chart_template_ref=chart_template_ref, edi_format_ref=edi_format_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
         # Invoice name are tracked by the web-services so this constant tries to get a new unique invoice name at each
         # execution.
@@ -49,15 +49,6 @@ class TestEdiWebServices(TestEsEdiCommon):
         cls.in_invoice.action_post()
 
         cls.moves = cls.out_invoice + cls.in_invoice
-
-    def test_edi_aeat(self):
-        self.env.company.l10n_es_edi_tax_agency = 'aeat'
-
-        self.moves.action_process_edi_web_services(with_commit=False)
-        generated_files = self._process_documents_web_services(self.moves, {'es_sii'})
-        self.assertTrue(generated_files)
-        self.assertRecordValues(self.out_invoice, [{'edi_state': 'sent'}])
-        self.assertRecordValues(self.in_invoice, [{'edi_state': 'sent'}])
 
     def test_edi_gipuzkoa(self):
         self.env.company.l10n_es_edi_tax_agency = 'gipuzkoa'

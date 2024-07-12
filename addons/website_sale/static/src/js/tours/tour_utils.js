@@ -22,28 +22,24 @@ function assertCartAmounts({taxes = false, untaxed = false, total = false, deliv
         steps.push({
             content: 'Check if the tax is correct',
             trigger: `tr#order_total_taxes .oe_currency_value:contains(/^${taxes}$/)`,
-            run: function () {},  // it's a check
         });
     }
     if (untaxed) {
         steps.push({
             content: 'Check if the tax is correct',
             trigger: `tr#order_total_untaxed .oe_currency_value:contains(/^${untaxed}$/)`,
-            run: function () {},  // it's a check
         });
     }
     if (total) {
         steps.push({
             content: 'Check if the tax is correct',
             trigger: `tr#order_total .oe_currency_value:contains(/^${total}$/)`,
-            run: function () {},  // it's a check
         });
     }
     if (delivery) {
         steps.push({
             content: 'Check if the tax is correct',
             trigger: `tr#order_delivery .oe_currency_value:contains(/^${delivery}$/)`,
-            run: function () {},  // it's a check
         });
     }
     return steps
@@ -58,7 +54,6 @@ function assertCartContains({productName, backend, notContains = false} = {}) {
     return {
         content: `Checking if ${productName} is in the cart`,
         trigger: `${backend ? ":iframe" : ""} ${trigger}`,
-        run: () => {}
     };
 }
 
@@ -69,7 +64,6 @@ function assertProductPrice(attribute, value, productName) {
     return {
         content: `The ${attribute} of the ${productName} is ${value}`,
         trigger: `div:contains("${productName}") [data-oe-expression="template_price_vals['${attribute}']"] .oe_currency_value:contains("${value}")`,
-        run: () => {}
     };
 }
 
@@ -84,7 +78,7 @@ function fillAdressForm(adressParams = {
     let steps = [];
     steps.push({
         content: "Address filling",
-        trigger: 'select[name="country_id"]',
+        trigger: 'form.checkout_autoformat',
         run: () => {
             document.querySelector('input[name="name"]').value = adressParams.name;
             document.querySelector('input[name="phone"]').value = adressParams.phone;
@@ -92,12 +86,13 @@ function fillAdressForm(adressParams = {
             document.querySelector('input[name="street"]').value = adressParams.street;
             document.querySelector('input[name="city"]').value = adressParams.city;
             document.querySelector('input[name="zip"]').value = adressParams.zip;
-            document.querySelectorAll("#country_id option")[1].selected = true;
+            document.querySelectorAll("#o_country_id option")[1].selected = true;
         }
     });
     steps.push({
         content: "Continue checkout",
-        trigger: '.oe_cart .btn:contains("Continue checkout")',
+        trigger: '#save_address',
+        run: 'click',
     });
     return steps;
 }
@@ -119,29 +114,37 @@ function goToCheckout() {
     };
 }
 
+function confirmOrder() {
+    return {
+        content: 'Confirm',
+        trigger: 'a[href^="/shop/confirm_order"]',
+        run: 'click',
+    };
+}
+
 function pay() {
     return {
         content: 'Pay',
         //Either there are multiple payment methods, and one is checked, either there is only one, and therefore there are no radio inputs
-        // extra_trigger: '#payment_method input:checked,#payment_method:not(:has("input:radio:visible"))',
-        trigger: 'button[name="o_payment_submit_button"]:visible:not(:disabled)'
+        trigger: 'button[name="o_payment_submit_button"]:visible:not(:disabled)',
+        run: "click",
     };
 }
 
 function payWithDemo() {
     return [{
         content: 'eCommerce: select Test payment provider',
-        trigger: 'input[name="o_payment_radio"][data-payment-method-code="demo"]'
+        trigger: 'input[name="o_payment_radio"][data-payment-method-code="demo"]',
+        run: "click",
     }, {
         content: 'eCommerce: add card number',
         trigger: 'input[name="customer_input"]',
-        run: 'text 4242424242424242'
+        run: "edit 4242424242424242",
     },
     pay(),
     {
         content: 'eCommerce: check that the payment is successful',
         trigger: '.oe_website_sale_tx_status:contains("Your payment has been successfully processed.")',
-        run: function () {}
     }]
 }
 
@@ -149,6 +152,7 @@ function payWithTransfer(redirect=false) {
     const first_step = {
         content: "Select `Wire Transfer` payment method",
         trigger: 'input[name="o_payment_radio"][data-payment-method-code="wire_transfer"]',
+        run: "click",
     }
     if (!redirect) {
         return [
@@ -158,7 +162,6 @@ function payWithTransfer(redirect=false) {
             content: "Last step",
             trigger: '.oe_website_sale_tx_status:contains("Please use the following transfer details")',
             timeout: 30000,
-            isCheck: true,
         }]
     } else {
         return [
@@ -174,7 +177,6 @@ function payWithTransfer(redirect=false) {
             }, {
                 content: "wait page loaded",
                 trigger: 'h1:contains("Contact us")',
-                run: function () {}, // it's a check
             }
         ]
     }
@@ -186,7 +188,7 @@ function searchProduct(productName) {
         {
             content: "Search for the product",
             trigger: 'form input[name="search"]',
-            run: `text ${productName}`
+            run: `edit ${productName}`,
         },
         wTourUtils.clickOnElement('Search', 'form:has(input[name="search"]) .oe_search_button'),
     ];
@@ -200,10 +202,12 @@ function selectPriceList(pricelist) {
         {
             content: "Click on pricelist dropdown",
             trigger: "div.o_pricelist_dropdown a[data-bs-toggle=dropdown]",
+            run: "click",
         },
         {
             content: "Click on pricelist",
             trigger: `span:contains(${pricelist})`,
+            run: "click",
         },
     ];
 }
@@ -216,6 +220,7 @@ export default {
     fillAdressForm,
     goToCart,
     goToCheckout,
+    confirmOrder,
     pay,
     payWithDemo,
     payWithTransfer,

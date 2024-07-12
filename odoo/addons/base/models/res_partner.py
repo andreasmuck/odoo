@@ -38,6 +38,21 @@ def _tz_get(self):
     return _tzs
 
 
+class FormatVATLabelMixin(models.AbstractModel):
+    _name = "format.vat.label.mixin"
+    _description = "Country Specific VAT Label"
+
+    @api.model
+    def _get_view(self, view_id=None, view_type='form', **options):
+        arch, view = super()._get_view(view_id, view_type, **options)
+        if vat_label := self.env.company.country_id.vat_label:
+            for node in arch.iterfind(".//field[@name='vat']"):
+                node.set("string", vat_label)
+            # In some module vat field is replaced and so above string change is not working
+            for node in arch.iterfind(".//label[@for='vat']"):
+                node.set("string", vat_label)
+        return arch, view
+
 class FormatAddressMixin(models.AbstractModel):
     _name = "format.address.mixin"
     _description = 'Address Format'
@@ -112,9 +127,10 @@ class PartnerCategory(models.Model):
     def _get_default_color(self):
         return randint(1, 11)
 
-    name = fields.Char(string='Tag Name', required=True, translate=True)
-    color = fields.Integer(string='Color', default=_get_default_color)
-    parent_id = fields.Many2one('res.partner.category', string='Parent Category', index=True, ondelete='cascade')
+    name = fields.Char('Name', required=True, translate=True)
+    display_name = fields.Char('Display Name', compute='_compute_display_name', search='_search_display_name')
+    color = fields.Integer(string='Color', default=_get_default_color, aggregator=False)
+    parent_id = fields.Many2one('res.partner.category', string='Category', index=True, ondelete='cascade')
     child_ids = fields.One2many('res.partner.category', 'parent_id', string='Child Tags')
     active = fields.Boolean(default=True, help="The active field allows you to hide the category without removing it.")
     parent_path = fields.Char(index=True)
@@ -122,7 +138,7 @@ class PartnerCategory(models.Model):
 
     @api.constrains('parent_id')
     def _check_parent_id(self):
-        if not self._check_recursion():
+        if self._has_cycle():
             raise ValidationError(_('You can not create recursive tags.'))
 
     @api.depends('parent_id')
@@ -147,6 +163,9 @@ class PartnerCategory(models.Model):
             domain = [('name', operator, name)] + domain
         return self._search(domain, limit=limit, order=order)
 
+    @api.model
+    def _search_display_name(self, operator, value):
+        return [('id', 'child_of', self._search([('name', operator, value)]))]
 
 class PartnerTitle(models.Model):
     _name = 'res.partner.title'
@@ -159,11 +178,12 @@ class PartnerTitle(models.Model):
 
 class Partner(models.Model):
     _description = 'Contact'
-    _inherit = ['format.address.mixin', 'avatar.mixin']
+    _inherit = ['format.address.mixin', 'format.vat.label.mixin', 'avatar.mixin']
     _name = "res.partner"
     _order = "complete_name ASC, id DESC"
     _rec_names_search = ['complete_name', 'email', 'ref', 'vat', 'company_registry']  # TODO vat must be sanitized the same way for storing/searching
     _allow_sudo_commands = False
+    _check_company_domain = models.check_company_domain_parent_of
 
     # the partner types that must be added to a partner's complete name, like "Delivery"
     _complete_name_displayed_types = ('invoice', 'delivery', 'other')
@@ -193,12 +213,12 @@ class Partner(models.Model):
     title = fields.Many2one('res.partner.title')
     parent_id = fields.Many2one('res.partner', string='Related Company', index=True)
     parent_name = fields.Char(related='parent_id.name', readonly=True, string='Parent name')
-    child_ids = fields.One2many('res.partner', 'parent_id', string='Contact', domain=[('active', '=', True)])
+    child_ids = fields.One2many('res.partner', 'parent_id', string='Contact', domain=[('active', '=', True)], context={'active_test': False})
     ref = fields.Char(string='Reference', index=True)
     lang = fields.Selection(_lang_get, string='Language',
                             help="All the emails and documents sent to this contact will be translated in this language.")
     active_lang_count = fields.Integer(compute='_compute_active_lang_count')
-    tz = fields.Selection(_tz_get, string='Timezone', default=lambda self: self._context.get('tz'),
+    tz = fields.Selection(_tzs, string='Timezone', default=lambda self: self._context.get('tz'),
                           help="When printing documents and exporting/importing data, time values are computed according to this timezone.\n"
                                "If the timezone is not set, UTC (Coordinated Universal Time) is used.\n"
                                "Anywhere else, time values are computed according to the time offset of your web client.")
@@ -422,20 +442,9 @@ class Partner(models.Model):
         for company in self:
             company.company_registry = company.company_registry
 
-    @api.model
-    def _get_view(self, view_id=None, view_type='form', **options):
-        arch, view = super()._get_view(view_id, view_type, **options)
-        if vat_label := self.env.company.country_id.vat_label:
-            for node in arch.iterfind(".//field[@name='vat']"):
-                node.set("string", vat_label)
-            # In some module vat field is replaced and so above string change is not working
-            for node in arch.iterfind(".//label[@for='vat']"):
-                node.set("string", vat_label)
-        return arch, view
-
     @api.constrains('parent_id')
     def _check_parent_id(self):
-        if not self._check_recursion():
+        if self._has_cycle():
             raise ValidationError(_('You cannot create recursive Partner hierarchies.'))
 
     def copy_data(self, default=None):
@@ -647,8 +656,12 @@ class Partner(models.Model):
         was meant to be company address """
         parent = self.parent_id
         address_fields = self._address_fields()
-        if (parent.is_company or not parent.parent_id) and len(parent.child_ids) == 1 and \
-            any(self[f] for f in address_fields) and not any(parent[f] for f in address_fields):
+        if (
+            (parent.is_company or not parent.parent_id)
+            and any(self[f] for f in address_fields)
+            and not any(parent[f] for f in address_fields)
+            and len(parent.child_ids) == 1
+        ):
             addr_vals = self._update_fields_values(address_fields)
             parent.update_address(addr_vals)
 
@@ -903,11 +916,6 @@ class Partner(models.Model):
             return False
         return base64.b64encode(res.content)
 
-    def _email_send(self, email_from, subject, body, on_error=None):
-        for partner in self.filtered('email'):
-            tools.email_send(email_from, [partner.email], subject, body, on_error)
-        return True
-
     def address_get(self, adr_pref=None):
         """ Find contacts/addresses of the right type(s) by doing a depth-first-search
         through descendants within company boundaries (stop at entities flagged ``is_company``)
@@ -1031,6 +1039,15 @@ class Partner(models.Model):
     def _get_country_name(self):
         return self.country_id.name or ''
 
+    def _get_all_addr(self):
+        self.ensure_one()
+        return [{
+            'contact_type': self.street,
+            'street': self.street,
+            'zip': self.zip,
+            'city': self.city,
+            'country': self.country_id.code,
+        }]
 
 
 class ResPartnerIndustry(models.Model):

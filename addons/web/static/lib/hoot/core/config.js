@@ -3,6 +3,15 @@
 import { generateSeed } from "../mock/math";
 
 //-----------------------------------------------------------------------------
+// Global
+//-----------------------------------------------------------------------------
+
+const {
+    Number: { parseFloat: $parseFloat },
+    Object: { entries: $entries, fromEntries: $fromEntries, keys: $keys },
+} = globalThis;
+
+//-----------------------------------------------------------------------------
 // Internal
 //-----------------------------------------------------------------------------
 
@@ -12,14 +21,14 @@ import { generateSeed } from "../mock/math";
  * @returns {{ [key in keyof T]: ReturnType<T[key]["parse"]> }}
  */
 const getSchemaDefaults = (schema) =>
-    Object.fromEntries(Object.entries(schema).map(([key, value]) => [key, value.default]));
+    $fromEntries($entries(schema).map(([key, value]) => [key, value.default]));
 
 /**
  * @template {Record<string, any>} T
  * @param {T} schema
  * @returns {(keyof T)[]}
  */
-const getSchemaKeys = (schema) => Object.keys(schema);
+const getSchemaKeys = (schema) => $keys(schema);
 
 /**
  * @template T
@@ -31,7 +40,7 @@ const makeParser = (parse) => (valueIfEmpty) => (values) =>
 
 const parseBoolean = makeParser(([value]) => value === "true");
 
-const parseNumber = makeParser(([value]) => Number(value) || 0);
+const parseNumber = makeParser(([value]) => $parseFloat(value) || 0);
 
 /** @type {ReturnType<typeof makeParser<"first-fail" | "failed" | false>>} */
 const parseShowDetail = makeParser(([value]) => (value === "false" ? false : value));
@@ -66,7 +75,7 @@ export const CONFIG_SCHEMA = {
     },
     /**
      * Same as the {@link FILTER_SCHEMA.test} filter, while also putting the test
-     * runner in "debug" mode. See {@link TestRunner.debug} for more info.
+     * runner in "debug" mode. See {@link Runner.debug} for more info.
      * @default false
      */
     debugTest: {
@@ -126,6 +135,18 @@ export const CONFIG_SCHEMA = {
         parse: parseBoolean(true),
     },
     /**
+     * Determines the order of the tests execution.
+     *
+     * - fifo: tests will be run sequentially as declared in the file system.
+     * - lifo: tests will be run sequentially in the reverse order.
+     * - random: shuffles tests and suites within their parent suite.
+     * @default "fifo"
+     */
+    order: {
+        default: "fifo",
+        parse: parseString(""),
+    },
+    /**
      * Environment in which the test runner is running. This parameter is used to
      * determine the default value of other parameters, namely:
      *  - the user agent;
@@ -138,15 +159,7 @@ export const CONFIG_SCHEMA = {
         parse: parseString(""),
     },
     /**
-     * Determines the seed from which random numbers will be generated. If truthy,
-     * tests and suites will be shuffled within their parent suite.
-     *
-     * If set without a seed (= without URL value):
-     *  -> the seed will be randomly generated and tests/suites will be shuffled accordingly
-     * If set with a seed (= with a given URL value):
-     *  -> tests/suites will be shuffled using the seed
-     * If not set (= 0):
-     *  -> tests/suites will be run sequentially as declared in the file system
+     * Determines the seed from which random numbers will be generated.
      * @default 0
      */
     random: {
@@ -171,15 +184,6 @@ export const CONFIG_SCHEMA = {
     timeout: {
         default: 5_000,
         parse: parseNumber(5_000),
-    },
-    /**
-     * Monitors keys added on global objects if truthy. The value is a comma-separated
-     * list of white-listed keys. If left empty, no monitoring will be performed.
-     * @default ""
-     */
-    watchkeys: {
-        default: "",
-        parse: parseString(""),
     },
 };
 

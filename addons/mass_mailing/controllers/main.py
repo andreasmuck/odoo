@@ -95,6 +95,13 @@ class MassMailController(http.Controller):
             render_values
         )
 
+    # csrf is disabled here because it will be called by the MUA with unpredictable session at that time
+    @http.route(['/mailing/<int:mailing_id>/unsubscribe_oneclick'], type='http', website=True, auth='public',
+                methods=["POST"], csrf=False)
+    def mailing_unsubscribe_oneclick(self, mailing_id, document_id=None, email=None, hash_token=None, **post):
+        self.mailing_unsubscribe(mailing_id, document_id=document_id, email=email, hash_token=hash_token, **post)
+        return Response(status=200)
+
     @http.route(['/mailing/<int:mailing_id>/unsubscribe'], type='http', website=True, auth='public')
     def mailing_unsubscribe(self, mailing_id, document_id=None, email=None, hash_token=None):
         email_found, hash_token_found = self._fetch_user_information(email, hash_token)
@@ -321,6 +328,11 @@ class MassMailController(http.Controller):
     def mailing_unsubscribe_placeholder_link(self, **post):
         """Dummy route so placeholder is not prefixed by language, MUST have multilang=False"""
         return request.redirect('/mailing/my', code=301, local=True)
+
+    @http.route('/view', type='http', auth='user', website=True, sitemap=False)
+    def mailing_view_in_browser_placeholder_link(self):
+        """Route used to give an example of what would be when the user follows the placeholder links in the mailing editor."""
+        return request.render('mass_mailing.mailing_view_generic')
 
     # ------------------------------------------------------------
     # TRACKING

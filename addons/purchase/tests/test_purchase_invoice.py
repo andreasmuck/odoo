@@ -12,6 +12,7 @@ class TestPurchaseToInvoiceCommon(AccountTestInvoicingCommon):
     @classmethod
     def setUpClass(cls):
         super(TestPurchaseToInvoiceCommon, cls).setUpClass()
+        cls.other_currency = cls.setup_other_currency('EUR')
         uom_unit = cls.env.ref('uom.product_uom_unit')
         uom_hour = cls.env.ref('uom.product_uom_hour')
         cls.product_order = cls.env['product.product'].create({
@@ -127,7 +128,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
             'product_uom': self.product_deliver.uom_id.id,
             'price_unit': self.product_deliver.list_price,
             'order_id': purchase_order.id,
-            'taxes_id': False,
+            'tax_ids': False,
         })
         pol_serv_deliver = PurchaseOrderLine.create({
             'name': self.service_deliver.name,
@@ -136,7 +137,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
             'product_uom': self.service_deliver.uom_id.id,
             'price_unit': self.service_deliver.list_price,
             'order_id': purchase_order.id,
-            'taxes_id': False,
+            'tax_ids': False,
         })
         purchase_order.button_confirm()
 
@@ -171,7 +172,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
             'product_uom': self.product_order.uom_id.id,
             'price_unit': self.product_order.list_price,
             'order_id': purchase_order.id,
-            'taxes_id': False,
+            'tax_ids': False,
         })
         pol_serv_order = PurchaseOrderLine.create({
             'name': self.service_order.name,
@@ -180,7 +181,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
             'product_uom': self.service_order.uom_id.id,
             'price_unit': self.service_order.list_price,
             'order_id': purchase_order.id,
-            'taxes_id': False,
+            'tax_ids': False,
         })
         purchase_order.button_confirm()
 
@@ -215,7 +216,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
             'product_uom': self.product_deliver.uom_id.id,
             'price_unit': self.product_deliver.list_price,
             'order_id': purchase_order.id,
-            'taxes_id': False,
+            'tax_ids': False,
         })
         pol_serv_deliver = PurchaseOrderLine.create({
             'name': self.service_deliver.name,
@@ -224,7 +225,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
             'product_uom': self.service_deliver.uom_id.id,
             'price_unit': self.service_deliver.list_price,
             'order_id': purchase_order.id,
-            'taxes_id': False,
+            'tax_ids': False,
         })
         purchase_order.button_confirm()
 
@@ -260,7 +261,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
             'product_uom': self.product_order.uom_id.id,
             'price_unit': self.product_order.list_price,
             'order_id': purchase_order.id,
-            'taxes_id': False,
+            'tax_ids': False,
         })
         pol_serv_order = PurchaseOrderLine.create({
             'name': self.service_order.name,
@@ -269,7 +270,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
             'product_uom': self.service_order.uom_id.id,
             'price_unit': self.service_order.list_price,
             'order_id': purchase_order.id,
-            'taxes_id': False,
+            'tax_ids': False,
         })
         purchase_order.button_confirm()
 
@@ -313,7 +314,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
                 'product_uom': self.product_order.uom_id.id,
                 'price_unit': 1000,
                 'order_id': po.id,
-                'taxes_id': False,
+                'tax_ids': False,
             })
             po.button_confirm()
             pol_prod_order.write({'qty_received': 1})
@@ -355,7 +356,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
                 'product_qty': 12,
                 'product_uom': self.product_a.uom_id.id,
                 'price_unit': 0.001,
-                'taxes_id': False,
+                'tax_ids': False,
             })]
         })
         po.button_confirm()
@@ -476,7 +477,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
         po.button_confirm()
         po.order_line.qty_received = 1
         po.action_create_invoice()
-        self.assertRecordValues(po.invoice_ids.invoice_line_ids,
+        self.assertRecordValues(po.account_move_ids.invoice_line_ids,
                                 [{'analytic_distribution': analytic_distribution_model.analytic_distribution}])
 
     def test_sequence_invoice_lines_from_multiple_purchases(self):
@@ -492,7 +493,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
                     'product_qty': 10.0,
                     'product_uom': self.product_order.uom_id.id,
                     'price_unit': self.product_order.list_price,
-                    'taxes_id': False,
+                    'tax_ids': False,
                     'sequence': sequence_number,
                 }) for sequence_number in range(10, 13)]
             purchase_order = self.env['purchase.order'].with_context(tracking_disable=True).create({
@@ -526,7 +527,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
                     'product_qty': 10.0,
                     'product_uom': self.product_order.uom_id.id,
                     'price_unit': self.product_order.list_price,
-                    'taxes_id': False,
+                    'tax_ids': False,
                     'sequence': sequence_number,
                 }) for sequence_number in range(10, 13)]
             purchase_order = self.env['purchase.order'].with_context(tracking_disable=True).create({
@@ -568,7 +569,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
                     'product_qty': 20.0,
                     'product_uom': self.product_deliver.uom_id.id,
                     'price_unit': self.product_deliver.list_price,
-                    'taxes_id': False,
+                    'tax_ids': False,
                 }),
             ],
         })
@@ -578,7 +579,7 @@ class TestPurchaseToInvoice(TestPurchaseToInvoiceCommon):
         line.qty_received = 10
         purchase_order.action_create_invoice()
 
-        invoice = purchase_order.invoice_ids
+        invoice = purchase_order.account_move_ids
         invoice.invoice_date = invoice.date
         invoice.action_post()
 
@@ -714,7 +715,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         invoice._find_and_set_purchase_orders(
             [], invoice.partner_id.id, invoice.amount_total)
 
-        self.assertTrue(invoice.id in po.invoice_ids.ids)
+        self.assertTrue(invoice.id in po.account_move_ids.ids)
         self.assertEqual(invoice.amount_total, po.amount_total)
 
     def test_total_match_via_po_reference(self):
@@ -724,7 +725,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         invoice._find_and_set_purchase_orders(
             ['my_match_reference'], invoice.partner_id.id, invoice.amount_total)
 
-        self.assertTrue(invoice.id in po.invoice_ids.ids)
+        self.assertTrue(invoice.id in po.account_move_ids.ids)
         self.assertEqual(invoice.amount_total, po.amount_total)
 
     def test_subset_total_match_from_ocr(self):
@@ -735,7 +736,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
             ['my_match_reference'], invoice.partner_id.id, invoice.amount_total, from_ocr=True)
         additional_unmatch_po_line = po.order_line.filtered(lambda l: l.product_id == self.service_order)
 
-        self.assertTrue(invoice.id in po.invoice_ids.ids)
+        self.assertTrue(invoice.id in po.account_move_ids.ids)
         self.assertTrue(additional_unmatch_po_line.id in invoice.line_ids.purchase_line_id.ids)
         self.assertTrue(invoice.line_ids.filtered(lambda l: l.purchase_line_id == additional_unmatch_po_line).quantity == 0)
 
@@ -748,7 +749,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         invoice._find_and_set_purchase_orders(
             ['my_match_reference'], invoice.partner_id.id, invoice.amount_total, from_ocr=False)
 
-        self.assertTrue(invoice.id in po.invoice_ids.ids)
+        self.assertTrue(invoice.id in po.account_move_ids.ids)
         invoice_lines = invoice.line_ids.filtered(lambda l: l.price_unit)
         self.assertEqual(len(invoice_lines), 2)
         for line in invoice_lines:
@@ -764,7 +765,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         invoice._find_and_set_purchase_orders(
             ['my_match_reference'], invoice.partner_id.id, invoice.amount_total, from_ocr=False)
 
-        self.assertTrue(invoice.id in po.invoice_ids.ids)
+        self.assertTrue(invoice.id in po.account_move_ids.ids)
         invoice_lines = invoice.line_ids.filtered(lambda l: l.price_unit)
         self.assertEqual(len(invoice_lines), 2)
         for line in po.order_line:
@@ -779,7 +780,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         invoice._find_and_set_purchase_orders(
             ['my_match_reference'], invoice.partner_id.id, invoice.amount_total, from_ocr=False)
 
-        self.assertTrue(invoice.id in po.invoice_ids.ids)
+        self.assertTrue(invoice.id in po.account_move_ids.ids)
         invoice_lines = invoice.line_ids.filtered(lambda l: l.price_unit)
         self.assertEqual(len(invoice_lines), 1)
         for line in invoice_lines:
@@ -794,7 +795,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         invoice._find_and_set_purchase_orders(
             ['my_match_reference'], invoice.partner_id.id, invoice.amount_total, from_ocr=False)
 
-        self.assertTrue(invoice.id in po.invoice_ids.ids)
+        self.assertTrue(invoice.id in po.account_move_ids.ids)
         invoice_lines = invoice.line_ids.filtered(lambda l: l.price_unit)
         self.assertEqual(len(invoice_lines), 1)
         for line in invoice_lines:
@@ -809,7 +810,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         invoice._find_and_set_purchase_orders(
             ['my_match_reference'], invoice.partner_id.id, invoice.amount_total, from_ocr=False)
 
-        self.assertTrue(invoice.id in po.invoice_ids.ids)
+        self.assertTrue(invoice.id in po.account_move_ids.ids)
         invoice_lines = invoice.line_ids.filtered(lambda l: l.price_unit)
         self.assertEqual(len(invoice_lines), 2)
         for line in invoice_lines:
@@ -826,7 +827,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         invoice._find_and_set_purchase_orders(
             ['my_match_reference'], invoice.partner_id.id, invoice.amount_total, from_ocr=True)
 
-        self.assertTrue(invoice.id in po.invoice_ids.ids)
+        self.assertTrue(invoice.id in po.account_move_ids.ids)
 
     def test_no_match_same_reference(self):
         po = self.init_purchase(confirm=True, products=[self.product_order, self.service_order])
@@ -835,7 +836,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         invoice._find_and_set_purchase_orders(
             ['my_match_reference'], invoice.partner_id.id, invoice.amount_total, from_ocr=False)
 
-        self.assertTrue(invoice.id not in po.invoice_ids.ids)
+        self.assertTrue(invoice.id not in po.account_move_ids.ids)
 
     def test_no_match(self):
         po = self.init_purchase(confirm=True, products=[self.product_order, self.service_order])
@@ -844,7 +845,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         invoice._find_and_set_purchase_orders(
             ['other_reference'], invoice.partner_id.id, invoice.amount_total, from_ocr=False)
 
-        self.assertTrue(invoice.id not in po.invoice_ids.ids)
+        self.assertTrue(invoice.id not in po.account_move_ids.ids)
 
     def test_onchange_partner_currency(self):
         """
@@ -918,7 +919,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         self.assertEqual(bill.currency_id, self.env.ref('base.EUR'), "The currency of the Bill should be the one set on the Bill")
         self.assertEqual(bill.invoice_line_ids.currency_id, self.env.ref('base.EUR'), "The currency of the Bill lines should be the same as the currency of the Bill")
 
-        ctx['default_currency_id'] = self.currency_data['currency'].id
+        ctx['default_currency_id'] = self.other_currency.id
         move_form_currency_in_context = Form(self.env['account.move'].with_context(ctx))
         move_form_currency_in_context.currency_id = self.env.ref('base.EUR')
         with move_form_currency_in_context.invoice_line_ids.new() as line_form:
@@ -929,8 +930,8 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         move_form_currency_in_context.partner_id = vendor_a
         bill = move_form_currency_in_context.save()
 
-        self.assertEqual(bill.currency_id, self.currency_data['currency'], "The currency of the Bill should be the one of the context")
-        self.assertEqual(bill.invoice_line_ids.currency_id, self.currency_data['currency'], "The currency of the Bill lines should be the same as the currency of the Bill")
+        self.assertEqual(bill.currency_id, self.other_currency, "The currency of the Bill should be the one of the context")
+        self.assertEqual(bill.invoice_line_ids.currency_id, self.other_currency, "The currency of the Bill lines should be the same as the currency of the Bill")
 
     def test_payment_reference_autocomplete_invoice(self):
         """
@@ -960,7 +961,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
                         'product_id': self.product_order.id,
                         'product_qty': 1.0,
                         'price_unit': self.product_order.list_price,
-                        'taxes_id': False,
+                        'tax_ids': False,
                     }),
                 ]
             } for partner_ref in ('PO-001', False)
@@ -1011,7 +1012,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
                     'product_id': self.product_order.id,
                     'product_qty': 1.0,
                     'price_unit': self.product_order.list_price,
-                    'taxes_id': False,
+                    'tax_ids': False,
                 }),
             ]
         })
@@ -1021,7 +1022,7 @@ class TestInvoicePurchaseMatch(TestPurchaseToInvoiceCommon):
         # creating bill from PO
         po1.order_line.qty_received = 1
         po1.action_create_invoice()
-        invoice1 = po1.invoice_ids
+        invoice1 = po1.account_move_ids
         self.assertFalse(invoice1.invoice_user_id)
         # creating bill with Auto_complete feature
         move_form = Form(self.env['account.move'].with_context(default_move_type='in_invoice'))

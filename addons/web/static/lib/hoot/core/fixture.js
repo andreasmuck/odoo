@@ -26,23 +26,21 @@ const { customElements, document, getSelection, HTMLElement } = globalThis;
 // Internal
 //-----------------------------------------------------------------------------
 
-const FIXTURE_OFFSET = -10_000; // In pixels
-const FIXTURE_COMMON_STYLE = ["display: block", "height: 100vh", "position: fixed", "width: 100vw"];
+const FIXTURE_COMMON_STYLE = [
+    "position: fixed",
+    "height: 100vh",
+    "width: 100vw",
+    "left: 50%",
+    "top: 50%",
+    "transform: translate(-50%, -50%)",
+];
 const FIXTURE_DEBUG_STYLE = [
     ...FIXTURE_COMMON_STYLE,
     "background-color: inherit",
     "color: inherit",
-    "left: 50%",
-    "top: 50%",
-    "transform: translate(-50%, -50%)",
     "z-index: 3",
 ].join(";");
-const FIXTURE_STYLE = [
-    ...FIXTURE_COMMON_STYLE,
-    `left: ${FIXTURE_OFFSET}px`,
-    "opacity: 0",
-    `top: ${FIXTURE_OFFSET}px`,
-].join(";");
+const FIXTURE_STYLE = [...FIXTURE_COMMON_STYLE, "opacity: 0", "z-index: -1"].join(";");
 
 const destroyed = new WeakSet();
 
@@ -53,7 +51,19 @@ customElements.define("hoot-fixture", class HootFixture extends HTMLElement {});
 //-----------------------------------------------------------------------------
 
 /**
- * @param {import("./runner").TestRunner} runner
+ * @param {App | Component} target
+ */
+export function destroy(target) {
+    const app = target instanceof App ? target : target.__owl__.app;
+    if (destroyed.has(app)) {
+        return;
+    }
+    destroyed.add(app);
+    app.destroy();
+}
+
+/**
+ * @param {import("./runner").Runner} runner
  */
 export function makeFixtureManager(runner) {
     const cleanupFixture = () => {
@@ -64,18 +74,6 @@ export function makeFixtureManager(runner) {
         shouldPrepareNextFixture = true;
         fixture.remove();
         fixture = null;
-    };
-
-    /**
-     * @param {App | Component} target
-     */
-    const destroy = (target) => {
-        const app = target instanceof App ? target : target.__owl__.app;
-        if (destroyed.has(app)) {
-            return;
-        }
-        destroyed.add(app);
-        app.destroy();
     };
 
     const getFixture = () => {
@@ -163,6 +161,5 @@ export function makeFixtureManager(runner) {
         setup: setupFixture,
         get: getFixture,
         mount: mountOnFixture,
-        destroy,
     };
 }

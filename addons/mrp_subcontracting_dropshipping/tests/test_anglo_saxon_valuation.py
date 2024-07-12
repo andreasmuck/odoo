@@ -9,8 +9,8 @@ from odoo.tests import tagged, Form
 class TestSubcontractingDropshippingValuation(ValuationReconciliationTestCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
         categ_form = Form(cls.env['product.category'])
         categ_form.name = 'fifo auto'
@@ -19,7 +19,7 @@ class TestSubcontractingDropshippingValuation(ValuationReconciliationTestCommon)
         categ_form.property_valuation = 'real_time'
         cls.categ_fifo_auto = categ_form.save()
 
-        (cls.product_a | cls.product_b).type = 'product'
+        (cls.product_a | cls.product_b).is_storable = True
 
         cls.bom_a = cls.env['mrp.bom'].create({
             'product_tmpl_id': cls.product_a.product_tmpl_id.id,
@@ -63,7 +63,7 @@ class TestSubcontractingDropshippingValuation(ValuationReconciliationTestCommon)
                 'name': self.product_a.name,
                 'product_qty': 2.0,
                 'price_unit': 100,
-                'taxes_id': False,
+                'tax_ids': False,
             })],
         })
         po.button_confirm()
@@ -101,8 +101,7 @@ class TestSubcontractingDropshippingValuation(ValuationReconciliationTestCommon)
         with return_form.product_return_moves.edit(0) as line:
             line.quantity = 1
         return_wizard = return_form.save()
-        return_id, _ = return_wizard._create_returns()
-        return_picking = self.env['stock.picking'].browse(return_id)
+        return_picking = return_wizard._create_return()
         return_picking.move_ids.quantity = 1
         return_picking.move_ids.picked = True
         return_picking.button_validate()
@@ -123,8 +122,7 @@ class TestSubcontractingDropshippingValuation(ValuationReconciliationTestCommon)
         with return_form.product_return_moves.edit(0) as line:
             line.quantity = 1
         return_wizard = return_form.save()
-        return_id, _ = return_wizard._create_returns()
-        return_picking = self.env['stock.picking'].browse(return_id)
+        return_picking = return_wizard._create_return()
         return_picking.move_ids.quantity = 1
         return_picking.move_ids.picked = True
         return_picking.button_validate()

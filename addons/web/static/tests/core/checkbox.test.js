@@ -1,8 +1,8 @@
 import { expect, test } from "@odoo/hoot";
 import { check, uncheck } from "@odoo/hoot-dom";
 import { Component, useState, xml } from "@odoo/owl";
+import { contains, defineParams, mountWithCleanup } from "@web/../tests/web_test_helpers";
 
-import { contains, makeMockServer, mountWithCleanup } from "@web/../tests/web_test_helpers";
 import { CheckBox } from "@web/core/checkbox/checkbox";
 
 test("can be rendered", async () => {
@@ -13,7 +13,7 @@ test("can be rendered", async () => {
 });
 
 test("has a slot for translatable text", async () => {
-    await makeMockServer({ translations: { ragabadabadaba: "rugubudubudubu" } });
+    defineParams({ translations: { ragabadabadaba: "rugubudubudubu" } });
 
     class Parent extends Component {
         static components = { CheckBox };
@@ -129,5 +129,5 @@ test.tags("desktop")("toggling through multiple ways", async () => {
     await contains(".o-checkbox input").press(" ");
 
     expect(`.o-checkbox input`).not.toBeChecked();
-    expect(["true", "false", "true", "false"]).toVerifySteps();
+    expect.verifySteps(["true", "false", "true", "false"]);
 });

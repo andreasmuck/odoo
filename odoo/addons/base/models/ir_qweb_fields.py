@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import base64
+import binascii
 from datetime import time
 import logging
 import re
@@ -7,7 +8,7 @@ from io import BytesIO
 
 import babel
 import babel.dates
-from markupsafe import Markup, escape
+from markupsafe import Markup, escape, escape_silent
 from PIL import Image
 from lxml import etree, html
 
@@ -15,26 +16,26 @@ from odoo import api, fields, models, _, _lt, tools
 from odoo.tools import posix_to_ldml, float_utils, format_date, format_duration, pycompat
 from odoo.tools.mail import safe_attrs
 from odoo.tools.misc import get_lang, babel_locale_parse
+from odoo.tools.mimetypes import guess_mimetype
 
 _logger = logging.getLogger(__name__)
 
 
-def nl2br(string):
-    """ Converts newlines to HTML linebreaks in ``string``. returns
-    the unicode result
-
-    :param str string:
-    :rtype: unicode
+def nl2br(string: str) -> Markup:
+    """ Converts newlines to HTML linebreaks in ``string`` after HTML-escaping
+    it.
     """
-    return pycompat.to_text(string).replace('\n', Markup('<br>\n'))
+    return escape_silent(string).replace('\n', Markup('<br>\n'))
 
 
-def nl2br_enclose(string, enclosure_tag='div'):
+def nl2br_enclose(string: str, enclosure_tag: str = 'div') -> Markup:
     """ Like nl2br, but returns enclosed Markup allowing to better manipulate
     trusted and untrusted content. New lines added by use are trusted, other
     content is escaped. """
-    converted = nl2br(escape(string))
-    return Markup(f'<{enclosure_tag}>{converted}</{enclosure_tag}>')
+    return Markup('<{enclosure_tag}>{converted}</{enclosure_tag}>').format(
+        enclosure_tag=enclosure_tag,
+        converted=nl2br(string),
+    )
 
 #--------------------------------------------------------------------
 # QWeb Fields converters
@@ -157,7 +158,7 @@ class IntegerConverter(models.AbstractModel):
     @api.model
     def value_to_html(self, value, options):
         if options.get('format_decimalized_number'):
-            return tools.format_decimalized_number(value, options.get('precision_digits', 1))
+            return tools.misc.format_decimalized_number(value, options.get('precision_digits', 1))
         return pycompat.to_text(self.user_lang().format('%d', value, grouping=True).replace(r'-', '-\N{ZERO WIDTH NO-BREAK SPACE}'))
 
 
@@ -295,7 +296,7 @@ class TextConverter(models.AbstractModel):
         """
         Escapes the value and converts newlines to br. This is bullshit.
         """
-        return nl2br(escape(value)) if value else ''
+        return nl2br(value) if value else ''
 
 
 class SelectionConverter(models.AbstractModel):
@@ -339,7 +340,7 @@ class ManyToOneConverter(models.AbstractModel):
         value = value.sudo().display_name
         if not value:
             return False
-        return nl2br(escape(value))
+        return nl2br(value)
 
 
 class ManyToManyConverter(models.AbstractModel):
@@ -352,7 +353,7 @@ class ManyToManyConverter(models.AbstractModel):
         if not value:
             return False
         text = ', '.join(value.sudo().mapped('display_name'))
-        return nl2br(escape(text))
+        return nl2br(text)
 
 
 class HTMLConverter(models.AbstractModel):
@@ -390,13 +391,21 @@ class ImageConverter(models.AbstractModel):
 
     @api.model
     def _get_src_data_b64(self, value, options):
-        try: # FIXME: maaaaaybe it could also take raw bytes?
-            image = Image.open(BytesIO(base64.b64decode(value)))
+        try:
+            img_b64 = base64.b64decode(value)
+        except binascii.Error:
+            raise ValueError("Invalid image content") from None
+
+        if img_b64 and guess_mimetype(img_b64, '') == 'image/webp':
+            return self.env["ir.qweb"]._get_converted_image_data_uri(value)
+
+        try:
+            image = Image.open(BytesIO(img_b64))
             image.verify()
         except IOError:
-            raise ValueError("Non-image binary fields can not be converted to HTML")
+            raise ValueError("Non-image binary fields can not be converted to HTML") from None
         except: # image.verify() throws "suitable exceptions", I have no idea what they are
-            raise ValueError("Invalid image content")
+            raise ValueError("Invalid image content") from None
 
         return "data:%s;base64,%s" % (Image.MIME[image.format], value.decode('ascii'))
 

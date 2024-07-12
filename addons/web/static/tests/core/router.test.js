@@ -1,29 +1,36 @@
-import { after, describe, expect, test } from "@odoo/hoot";
+import { describe, expect, getFixture, test } from "@odoo/hoot";
+import { click, on } from "@odoo/hoot-dom";
+import { tick } from "@odoo/hoot-mock";
+import { patchWithCleanup } from "@web/../tests/web_test_helpers";
 
 import { browser } from "@web/core/browser/browser";
 import {
     parseHash,
     parseSearchQuery,
-    stateToUrl,
-    urlToState,
     router,
     routerBus,
     startRouter,
+    stateToUrl,
+    urlToState,
 } from "@web/core/browser/router";
 import { redirect } from "@web/core/utils/urls";
-import { tick } from "@odoo/hoot-mock";
-import { patchWithCleanup } from "../web_test_helpers";
 
-const _urlToState = (url) => urlToState(new URL(url, browser.location.origin));
+const _urlToState = (url) => urlToState(new URL(url));
 
-async function createRouter(params = {}) {
+function createRouter(params = {}) {
     if (params.onPushState) {
-        const onPushState = params.onPushState;
-        delete params.onPushState;
         patchWithCleanup(browser.history, {
             pushState() {
                 super.pushState(...arguments);
-                onPushState(...arguments);
+                params.onPushState(...arguments);
+            },
+        });
+    }
+    if (params.onReplaceState) {
+        patchWithCleanup(browser.history, {
+            replaceState() {
+                super.replaceState(...arguments);
+                params.onReplaceState(...arguments);
             },
         });
     }
@@ -61,10 +68,9 @@ describe("parseHash", () => {
     });
 
     test("can parse a realistic hash", () => {
-        expect(parseHash("#action=114&active_id=mail.box_inbox&cids=1&menu_id=91")).toEqual({
+        expect(parseHash("#action=114&active_id=mail.box_inbox&menu_id=91")).toEqual({
             action: 114,
             active_id: "mail.box_inbox",
-            cids: 1,
             menu_id: 91,
         });
     });
@@ -110,7 +116,15 @@ describe("stateToUrl", () => {
         // action
         expect(stateToUrl({ action: "some-path" })).toBe("/odoo/some-path");
         expect(stateToUrl({ active_id: 5, action: "some-path" })).toBe("/odoo/5/some-path");
+        expect(stateToUrl({ active_id: "some-active_id", action: "some-path" })).toBe(
+            "/odoo/some-path?active_id=some-active_id",
+            { message: "only numeric active_id are encoded in path" }
+        );
         expect(stateToUrl({ action: "some-path", resId: 2 })).toBe("/odoo/some-path/2");
+        expect(stateToUrl({ action: "some-path", resId: "some-resId" })).toBe(
+            "/odoo/some-path?resId=some-resId",
+            { message: "only numeric resId are encoded in path" }
+        );
         expect(stateToUrl({ active_id: 5, action: "some-path", resId: 2 })).toBe(
             "/odoo/5/some-path/2"
         );
@@ -465,7 +479,9 @@ describe("stateToUrl", () => {
                     { active_id: 5, action: "module.xml_id", resId: 2 },
                 ],
             })
-        ).toBe("/odoo/action-module.xml_id/5/action-module.xml_id/2", { message: "actions as xml_ids" });
+        ).toBe("/odoo/action-module.xml_id/5/action-module.xml_id/2", {
+            message: "actions as xml_ids",
+        });
         // model
         expect(
             stateToUrl({ actionStack: [{ model: "some.model" }, { model: "other.model" }] })
@@ -1328,7 +1344,7 @@ describe("urlToState", () => {
 
 describe("pushState", () => {
     test("can push in same timeout", async () => {
-        await createRouter();
+        createRouter();
 
         expect(router.current).toEqual({});
 
@@ -1341,8 +1357,24 @@ describe("pushState", () => {
         expect(router.current).toEqual({ k1: 3 });
     });
 
+    test("can push state directly", async () => {
+        createRouter();
+
+        expect(router.current).toEqual({});
+
+        router.pushState({ k1: 2 }, { sync: true });
+        expect(router.current).toEqual({ k1: 2 });
+
+        router.pushState({ k1: 3 }, { sync: true });
+        expect(router.current).toEqual({ k1: 3 });
+
+        router.pushState({ k1: 4 });
+        router.pushState({ k2: 1 }, { sync: true });
+        expect(router.current).toEqual({ k1: 4, k2: 1 });
+    });
+
     test("can lock keys", async () => {
-        await createRouter();
+        createRouter();
 
         router.addLockedKey(["k1"]);
 
@@ -1364,7 +1396,7 @@ describe("pushState", () => {
     });
 
     test("can re-lock keys in same final call", async () => {
-        await createRouter();
+        createRouter();
 
         router.addLockedKey(["k1"]);
 
@@ -1377,7 +1409,7 @@ describe("pushState", () => {
     });
 
     test("can replace search state", async () => {
-        await createRouter();
+        createRouter();
 
         router.pushState({ k1: 2 });
         await tick();
@@ -1389,7 +1421,7 @@ describe("pushState", () => {
     });
 
     test("can replace search state with locked keys", async () => {
-        await createRouter();
+        createRouter();
 
         router.addLockedKey("k1");
 
@@ -1403,7 +1435,7 @@ describe("pushState", () => {
     });
 
     test("can merge hash", async () => {
-        await createRouter();
+        createRouter();
 
         router.pushState({ k1: 2 });
         await tick();
@@ -1417,16 +1449,16 @@ describe("pushState", () => {
     test("undefined keys are not pushed", async () => {
         redirect("/odoo");
         const onPushState = () => expect.step("pushed state");
-        await createRouter({ onPushState });
+        createRouter({ onPushState });
 
         router.pushState({ k1: undefined });
         await tick();
-        expect([]).toVerifySteps();
+        expect.verifySteps([]);
         expect(router.current).toEqual({});
     });
 
     test("undefined keys destroy previous non locked keys", async () => {
-        await createRouter();
+        createRouter();
 
         router.pushState({ k1: 1 });
         await tick();
@@ -1439,32 +1471,32 @@ describe("pushState", () => {
 
     test("do not re-push when hash is same", async () => {
         const onPushState = () => expect.step("pushed state");
-        await createRouter({ onPushState });
+        createRouter({ onPushState });
 
         router.pushState({ k1: 1, k2: 2 });
         await tick();
-        expect(["pushed state"]).toVerifySteps();
+        expect.verifySteps(["pushed state"]);
 
         router.pushState({ k2: 2, k1: 1 });
         await tick();
-        expect([]).toVerifySteps();
+        expect.verifySteps([]);
     });
 
     test("do not re-push when hash is same (with integers as strings)", async () => {
         const onPushState = () => expect.step("pushed state");
-        await createRouter({ onPushState });
+        createRouter({ onPushState });
 
         router.pushState({ k1: 1, k2: "2" });
         await tick();
-        expect(["pushed state"]).toVerifySteps();
+        expect.verifySteps(["pushed state"]);
 
         router.pushState({ k2: 2, k1: "1" });
         await tick();
-        expect([]).toVerifySteps();
+        expect.verifySteps([]);
     });
 
     test("pushState adds action-related keys to last entry in actionStack", async () => {
-        await createRouter();
+        createRouter();
 
         router.pushState({ action: 1, resId: 2, actionStack: [{ action: 1, resId: 2 }] });
         await tick();
@@ -1500,15 +1532,23 @@ describe("pushState", () => {
             ],
         });
     });
+    test("can hide keys", async () => {
+        createRouter();
+
+        router.hideKeyFromUrl("k1");
+
+        router.pushState({ k1: 2, k2: 3 });
+        await tick();
+        expect(router.current).toEqual({ k1: 2, k2: 3 });
+        expect(browser.location.href).toBe("https://www.hoot.test/odoo?k2=3");
+    });
 });
 
 describe("History", () => {
     test("properly handles history.back and history.forward", async () => {
         redirect("/");
-        const stepFn = () => expect.step("ROUTE_CHANGE");
-        routerBus.addEventListener("ROUTE_CHANGE", stepFn);
-        after(() => routerBus.removeEventListener("ROUTE_CHANGE", stepFn));
-        await createRouter();
+        on(routerBus, "ROUTE_CHANGE", () => expect.step("ROUTE_CHANGE"));
+        createRouter();
 
         router.pushState({ k1: 1 });
         await tick();
@@ -1538,12 +1578,12 @@ describe("History", () => {
         await tick();
         expect(browser.location.href).toBe("https://www.hoot.test/odoo?k4=3");
 
-        expect(["ROUTE_CHANGE", "ROUTE_CHANGE", "ROUTE_CHANGE"]).toVerifySteps();
+        expect.verifySteps(["ROUTE_CHANGE", "ROUTE_CHANGE", "ROUTE_CHANGE"]);
     });
 
     test("unserialized parts of action stack are preserved when going back/forward", async () => {
         redirect("/odoo");
-        await createRouter();
+        createRouter();
         expect(router.current).toEqual({});
         router.pushState({
             actionStack: [{ action: "some-path", displayName: "A cool display name" }],
@@ -1574,13 +1614,37 @@ describe("History", () => {
             actionStack: [{ action: "other-path", displayName: "A different display name" }],
         });
     });
+    test("properly handles history.back with hidden keys", async () => {
+        redirect("/");
+        on(routerBus, "ROUTE_CHANGE", () => expect.step("ROUTE_CHANGE"));
+        createRouter();
+
+        router.hideKeyFromUrl("k1");
+
+        router.pushState({ k1: 1, k2: 2 });
+        await tick();
+        expect(router.current).toEqual({ k1: 1, k2: 2 });
+        expect(browser.location.href).toBe("https://www.hoot.test/odoo?k2=2");
+
+        router.pushState({ k3: 3 }, { replace: true }); // Click on a link
+        await tick();
+        expect(router.current).toEqual({ k3: 3 });
+        expect(browser.location.href).toBe("https://www.hoot.test/odoo?k3=3");
+
+        browser.history.back(); // Click on back button
+        await tick();
+        expect(router.current).toEqual({ k1: 1, k2: 2 });
+        expect(browser.location.href).toBe("https://www.hoot.test/odoo?k2=2");
+
+        expect.verifySteps(["ROUTE_CHANGE"]);
+    });
 });
 
 describe("Retrocompatibility", () => {
     test("parse an url with hash (key/values)", async () => {
         Object.assign(browser.location, { pathname: "/web" });
         browser.location.hash = "#a=114&k=c.e&f=1&g=91";
-        await createRouter();
+        createRouter();
         expect(browser.location.search).toBe("?a=114&k=c.e&f=1&g=91");
         expect(browser.location.hash).toBe("");
         expect(router.current).toEqual({ a: 114, k: "c.e", f: 1, g: 91 });
@@ -1591,7 +1655,7 @@ describe("Retrocompatibility", () => {
         Object.assign(browser.location, { pathname: "/web" });
         browser.location.hash = "#g=91";
         browser.location.search = "?a=114&t=c.e&f=1";
-        await createRouter();
+        createRouter();
         expect(browser.location.search).toBe("?a=114&t=c.e&f=1&g=91");
         expect(browser.location.hash).toBe("");
         expect(router.current).toEqual({ a: 114, t: "c.e", f: 1, g: 91 });
@@ -1601,7 +1665,7 @@ describe("Retrocompatibility", () => {
     test("parse an url with hash (anchor link)", async () => {
         redirect("/odoo#anchor");
         browser.location.hash = "#anchor";
-        await createRouter();
+        createRouter();
         expect(browser.location.search).toBe("");
         expect(browser.location.hash).toBe("#anchor");
         expect(browser.location.pathname).toBe("/odoo");
@@ -1612,10 +1676,188 @@ describe("Retrocompatibility", () => {
         redirect("/odoo?a=114&g=c.e&f=1#anchor");
         browser.location.hash = "#anchor";
         browser.location.search = "?a=114&g=c.e&f=1";
-        await createRouter();
+        createRouter();
         expect(browser.location.search).toBe("?a=114&g=c.e&f=1");
         expect(browser.location.hash).toBe("#anchor");
         expect(router.current).toEqual({ a: 114, g: "c.e", f: 1 });
         expect(browser.location.pathname).toBe("/odoo");
+    });
+});
+
+describe("internal links", () => {
+    test("click on internal link does a loadState instead of a full reload", async () => {
+        redirect("/odoo");
+        createRouter({ onPushState: () => expect.step("pushState") });
+        const fixture = getFixture();
+        const link = document.createElement("a");
+        link.href = "/odoo/some-action/2";
+        fixture.appendChild(link);
+
+        expect(router.current).toEqual({});
+
+        let defaultPrevented;
+        browser.addEventListener("click", (ev) => {
+            expect.step("click");
+            defaultPrevented = ev.defaultPrevented;
+            ev.preventDefault();
+        });
+        click("a");
+        await tick();
+        expect.verifySteps(["click"]);
+        expect(router.current).toEqual({
+            action: "some-action",
+            actionStack: [
+                {
+                    action: "some-action",
+                },
+                {
+                    action: "some-action",
+                    resId: 2,
+                },
+            ],
+            resId: 2,
+        });
+        expect(defaultPrevented).toBe(true);
+    });
+
+    test("click on internal link with children does a loadState instead of a full reload", async () => {
+        redirect("/odoo");
+        createRouter({ onPushState: () => expect.step("pushState") });
+        const fixture = getFixture();
+        const link = document.createElement("a");
+        const span = document.createElement("span");
+        link.appendChild(span);
+        link.href = "/odoo/some-action/2";
+        fixture.appendChild(link);
+
+        expect(router.current).toEqual({});
+
+        let defaultPrevented;
+        browser.addEventListener("click", (ev) => {
+            expect.step("click");
+            defaultPrevented = ev.defaultPrevented;
+            ev.preventDefault();
+        });
+        click("span");
+        await tick();
+        expect.verifySteps(["click"]);
+        expect(router.current).toEqual({
+            action: "some-action",
+            actionStack: [
+                {
+                    action: "some-action",
+                },
+                {
+                    action: "some-action",
+                    resId: 2,
+                },
+            ],
+            resId: 2,
+        });
+        expect(defaultPrevented).toBe(true);
+    });
+
+    test("click on internal link with different protocol does a loadState", async () => {
+        redirect("/odoo");
+        createRouter({ onPushState: () => expect.step("pushState") });
+        const fixture = getFixture();
+        const link = document.createElement("a");
+        link.href = "http://" + browser.location.host + "/odoo/some-action/2";
+        fixture.appendChild(link);
+
+        expect(router.current).toEqual({});
+        expect(browser.location.protocol).not.toBe(link.protocol, {
+            message:
+                "should have different protocols between the current location and the clicked link",
+        });
+
+        let defaultPrevented;
+        browser.addEventListener("click", (ev) => {
+            expect.step("click");
+            defaultPrevented = ev.defaultPrevented;
+            ev.preventDefault();
+        });
+        click("a");
+        await tick();
+        expect.verifySteps(["click"]);
+        expect(router.current).toEqual({
+            action: "some-action",
+            actionStack: [
+                {
+                    action: "some-action",
+                },
+                {
+                    action: "some-action",
+                    resId: 2,
+                },
+            ],
+            resId: 2,
+        });
+        expect(defaultPrevented).toBe(true);
+    });
+
+    test("click on internal link with hash (key/values)", async () => {
+        redirect("/odoo");
+        createRouter({
+            onPushState: () => expect.step("pushState"),
+            onReplaceState: () => expect.step("replaceState"),
+        });
+        const fixture = getFixture();
+        const link = document.createElement("a");
+        link.href = "/web#action=114&active_id=1&id=22";
+        fixture.appendChild(link);
+
+        expect(router.current).toEqual({});
+
+        let defaultPrevented;
+        browser.addEventListener("click", (ev) => {
+            expect.step("click");
+            defaultPrevented = ev.defaultPrevented;
+            ev.preventDefault();
+        });
+        click("a");
+        await tick();
+        expect.verifySteps(["click"]);
+        expect(router.current).toEqual({
+            action: 114,
+            active_id: 1,
+            actionStack: [
+                {
+                    active_id: 1,
+                    action: 114,
+                },
+                {
+                    active_id: 1,
+                    resId: 22,
+                    action: 114,
+                },
+            ],
+            resId: 22,
+        });
+        expect(defaultPrevented).toBe(true);
+    });
+
+    test("click on internal link with target _blank doesn't do a loadState", async () => {
+        redirect("/odoo");
+        createRouter({ onPushState: () => expect.step("pushState") });
+        const fixture = getFixture();
+        const link = document.createElement("a");
+        link.href = "/odoo/some-action/2";
+        link.target = "_blank";
+        fixture.appendChild(link);
+
+        expect(router.current).toEqual({});
+
+        let defaultPrevented;
+        link.addEventListener("click", (ev) => {
+            expect.step("click");
+            defaultPrevented = ev.defaultPrevented;
+            ev.preventDefault();
+        });
+        click("a");
+        await tick();
+        expect.verifySteps(["click"]);
+        expect(router.current).toEqual({});
+        expect(defaultPrevented).toBe(false);
     });
 });

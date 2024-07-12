@@ -45,13 +45,9 @@ class Users(models.Model):
             user.res_users_settings_id.livechat_lang_ids = user.livechat_lang_ids
 
     def _compute_has_access_livechat(self):
-        for user in self:
+        for user in self.sudo():
             user.has_access_livechat = user.has_group('im_livechat.im_livechat_group_user')
 
     def _init_store_data(self, store):
         super()._init_store_data(store)
-        store.add({
-            "Store": {
-                "has_access_livechat": self.env.user.has_access_livechat,
-            },
-        })
+        store.add({"has_access_livechat": self.env.user.has_access_livechat})

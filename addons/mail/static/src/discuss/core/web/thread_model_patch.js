@@ -44,11 +44,18 @@ patch(Thread.prototype, {
         super.setup(...arguments);
         this.foldStateCount = 0;
     },
-    incrementUnreadCounter() {
-        super.incrementUnreadCounter();
-        if (this.model === "discuss.channel") {
-            // initChannelsUnreadCounter becomes unreliable
-            this._store.channels.fetch();
+    onPinStateUpdated() {
+        super.onPinStateUpdated();
+        if (!this.displayToSelf && !this.isLocallyPinned && this.eq(this.store.discuss.thread)) {
+            if (this.store.discuss.isActive) {
+                const newThread =
+                    this.store.discuss.channels.threads.find(
+                        (thread) => thread.displayToSelf || thread.isLocallyPinned
+                    ) || this.store.inbox;
+                newThread.setAsDiscussThread();
+            } else {
+                this.store.discuss.thread = undefined;
+            }
         }
     },
 });

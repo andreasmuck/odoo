@@ -16,12 +16,12 @@ import { session } from "@web/session";
 // -----------------------------------------------------------------------------
 
 async function createFileInput({ mockPost, mockAdd, props }) {
-    mockService("notification", () => ({
+    mockService("notification", {
         add: mockAdd || (() => {}),
-    }));
-    mockService("http", () => ({
+    });
+    mockService("http", {
         post: mockPost || (() => {}),
-    }));
+    });
     await mountWithCleanup(FileInput, { props });
 }
 
@@ -61,7 +61,7 @@ test("Upload a file: default props", async () => {
     expect(".o_file_input input").not.toHaveAttribute("multiple", null, {
         message: "'multiple' attribute should not be set",
     });
-    expect(["/web/binary/upload_attachment"]).toVerifySteps();
+    expect.verifySteps(["/web/binary/upload_attachment"]);
 });
 
 test("Upload a file: custom attachment", async () => {
@@ -75,7 +75,7 @@ test("Upload a file: custom attachment", async () => {
             resModel: "res.model",
             route: "/web/binary/upload",
             onUpload(files) {
-                expect(files.length).toBe(0, {
+                expect(files).toHaveLength(0, {
                     message: "'files' property should be an empty array",
                 });
             },
@@ -103,7 +103,7 @@ test("Upload a file: custom attachment", async () => {
         message: "'multiple' attribute should be set",
     });
 
-    expect(["/web/binary/upload"]).toVerifySteps();
+    expect.verifySteps(["/web/binary/upload"]);
 });
 
 test("Hidden file input", async () => {
@@ -130,12 +130,12 @@ test("uploading the same file twice triggers the onChange twice", async () => {
     await contains(".o_file_input input", { visible: false }).click();
     setInputFiles([file]);
     await animationFrame();
-    expect(["fake_file.txt"]).toVerifySteps({ message: "file has been initially uploaded" });
+    expect.verifySteps(["fake_file.txt"]);
 
     await contains(".o_file_input input", { visible: false }).click();
     setInputFiles([file]);
     await animationFrame();
-    expect(["fake_file.txt"]).toVerifySteps({ message: "file has been uploaded a second time" });
+    expect.verifySteps(["fake_file.txt"]);
 });
 
 test("uploading a file that is too heavy will send a notification", async () => {
@@ -154,7 +154,7 @@ test("uploading a file that is too heavy will send a notification", async () => 
             expect.step("notification");
             // Message is a bit weird because values (2 and 4 bytes) are simplified to 2 decimals in regards to megabytes
             expect(message).toBe(
-                "The selected file (4B) is over the maximum allowed file size (2B)."
+                "The selected file (4B) is larger than the maximum allowed file size (2B)."
             );
         },
     });
@@ -163,9 +163,7 @@ test("uploading a file that is too heavy will send a notification", async () => 
     await contains(".o_file_input input", { visible: false }).click();
     setInputFiles([file]);
     await animationFrame();
-    expect(["notification"]).toVerifySteps({
-        message: "Only the notification will be triggered and the file won't be uploaded.",
-    });
+    expect.verifySteps(["notification"]);
 });
 
 test("Upload button is disabled if attachment upload is not finished", async () => {

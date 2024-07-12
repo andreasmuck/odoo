@@ -9,21 +9,22 @@ registry.category("web_tour.tours").add('totportal_tour_setup', {
     steps: () => [{
     content: "Open totp wizard",
     trigger: 'button#auth_totp_portal_enable',
+    run: "click",
 }, {
     content: "Check that we have to enter enhanced security mode",
-    trigger: 'div:contains("enter your password")',
-    run: () => {},
+    trigger: ".modal div:contains(enter your password)",
+    in_modal: false,
 }, {
     content: "Input password",
     trigger: '[name=password]',
-    run: 'text portal', // FIXME: better way to do this?
+    run: "edit portal", // FIXME: better way to do this?
 }, {
     content: "Confirm",
     trigger: "button:contains(Confirm Password)",
+    run: "click",
 }, {
     content: "Check the wizard has opened",
     trigger: 'li:contains("scan the barcode below")',
-    run: () => {}
 }, {
     content: "Get secret from collapsed div",
     trigger: 'a:contains("Cannot scan it?")',
@@ -34,13 +35,12 @@ registry.category("web_tour.tours").add('totportal_tour_setup', {
         const token = await rpc('/totphook', {
             secret
         });
-        helpers.text(token, 'input[name="code"]');
+        helpers.edit(token, 'input[name="code"]');
         helpers.click("button.btn-primary:contains(Activate)");
     }
 }, {
     content: "Check that the button has changed",
     trigger: 'button:contains(Disable two-factor authentication)',
-    run: () => {}
 }]});
 
 registry.category("web_tour.tours").add('totportal_login_enabled', {
@@ -48,27 +48,30 @@ registry.category("web_tour.tours").add('totportal_login_enabled', {
     url: '/',
     steps: () => [{
     content: "check that we're on the login page or go to it",
-    trigger: 'input#login, a:contains(Sign in)'
+    trigger: 'input#login, a:contains(Sign in)',
+    run: "click",
 }, {
     content: "input login",
     trigger: 'input#login',
-    run: 'text portal',
+    run: "edit portal",
 }, {
     content: 'input password',
     trigger: 'input#password',
-    run: 'text portal',
+    run: "edit portal",
 }, {
     content: "click da button",
     trigger: 'button:contains("Log in")',
+    run: "click",
 }, {
     content: "expect totp screen",
     trigger: 'label:contains(Authentication Code)',
+    run: "click",
 }, {
     content: "input code",
     trigger: 'input[name=totp_token]',
     run: async function (helpers) {
         const token = await rpc('/totphook');
-        helpers.text(token);
+        helpers.edit(token);
         // FIXME: is there a way to put the button as its own step trigger without
         //        the tour straight blowing through and not waiting for this?
         helpers.click('button:contains("Log in")');
@@ -76,28 +79,29 @@ registry.category("web_tour.tours").add('totportal_login_enabled', {
 }, {
     content: "check we're logged in",
     trigger: "h3:contains(My account)",
-    run: () => {}
 }, {
     content: "go back to security",
     trigger: "a:contains(Security)",
+    run: "click",
 },{
     content: "Open totp wizard",
     trigger: 'button#auth_totp_portal_disable',
+    run: "click",
 }, {
     content: "Check that we have to enter enhanced security mode",
-    trigger: 'div:contains("enter your password")',
-    run: () => {},
+    trigger: ".modal div:contains(enter your password)",
+    in_modal: false,
 }, {
     content: "Input password",
     trigger: '[name=password]',
-    run: 'text portal', // FIXME: better way to do this?
+    run: "edit portal", // FIXME: better way to do this?
 }, {
     content: "Confirm",
     trigger: "button:contains(Confirm Password)",
+    run: "click",
 }, {
     content: "Check that the button has changed",
     trigger: 'button:contains(Enable two-factor authentication)',
-    run: () => {}
 }]});
 
 registry.category("web_tour.tours").add('totportal_login_disabled', {
@@ -105,20 +109,21 @@ registry.category("web_tour.tours").add('totportal_login_disabled', {
     url: '/',
     steps: () => [{
     content: "check that we're on the login page or go to it",
-    trigger: 'input#login, a:contains(Sign in)'
+    trigger: 'input#login, a:contains(Sign in)',
+    run: "click",
 }, {
     content: "input login",
     trigger: 'input#login',
-    run: 'text portal',
+    run: "edit portal",
 }, {
     content: 'input password',
     trigger: 'input#password',
-    run: 'text portal',
+    run: "edit portal",
 }, {
     content: "click da button",
     trigger: 'button:contains("Log in")',
+    run: "click",
 }, {
     content: "check we're logged in",
     trigger: "h3:contains(My account)",
-    run: () => {}
 }]});

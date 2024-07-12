@@ -13,25 +13,31 @@
                 </div>
                 <div class="default-view d-flex flex-lg-row flex-column overflow-hidden flex-grow-1">
                     <div class="actions d-flex flex-column justify-content-between flex-lg-grow-1 flex-grow-0 flex-shrink-1 flex-basis-0">
-                        <div class="d-flex flex-column m-4">
+                        <div class="o_payment_successful d-flex flex-column m-4">
                             <h1>Payment Successful</h1>
                             <div class="buttons my-3">
-                                <button class="button print btn btn-lg btn-secondary w-100 py-3" t-on-click="() => this.pos.printReceipt()">
-                                    <i t-attf-class="fa {{printer.state.isPrinting ? 'fa-fw fa-spin fa-circle-o-notch' : 'fa-print'}} me-1" />Print Receipt
+                                <button class="button print btn btn-lg btn-secondary w-100 py-3" t-on-click="() => doPrint.call()">
+                                    <i t-attf-class="fa {{doPrint.status === 'loading' ? 'fa-fw fa-spin fa-circle-o-notch' : 'fa-print'}} me-1" />Print Receipt
                                 </button>
                             </div>
-                            <form t-on-submit.prevent="onSendEmail" class="send-email d-flex">
-                                <div class="input-email input-group">
-                                    <input type="email" class="form-control py-3 bg-view" t-attf-placeholder="Email: {{currentOrder.getEmailItems().join(', ')}}" t-model="orderUiState.inputEmail" />
-                                    <button class="send btn px-5" t-att-class="isValidEmail() ? 'highlight btn btn-primary' : 'btn-secondary disabled'" type="submit">
-                                        <i class="fa fa-paper-plane" aria-hidden="true" t-ref="order-mail-receipt-button" />
+                            <div class="d-flex gap-1" t-att-class="{'flex-column-reverse': this.ui.isSmall}">
+                                <div class="flex-grow-1 p-0 border-0 position-relative send-receipt-input">
+                                    <input type="text" class="border p-3 bg-view w-100 pe-5" t-attf-placeholder="{{ state.mode === 'email' ? 'e.g. john.doe@mail.com' : 'e.g. 0123456789' }}" t-model="state.input" />
+                                    <div t-att-class="{'opacity-25': !isValidInput}"  t-on-click="() => this.actionSendReceipt()" class="position-absolute end-0 top-0 h-100 d-flex align-items-center text-primary cursor-pointer">
+                                        <i class="fa fa-arrow-circle-right fs-1 pe-3" aria-hidden="true" />
+                                    </div>
+                                </div>
+                                <div t-att-class="{'mt-1': this.ui.isSmall}" class="gap-1 d-flex sending-receipt-management justify-content-center">
+                                    <button t-att-class="{'opacity-50': state.mode !== 'email', 'py-3': this.ui.isSmall, 'px-5': !this.ui.isSmall}" t-on-click="() => this.changeMode('email')" class="btn btn-primary flex-grow-1 d-flex align-items-center justify-content-center" >
+                                        <i t-attf-class="fa {{sendReceipt.status === 'loading' and sendReceipt.lastArgs?.[0]?.name === 'Email' ?  'fa-fw fa-spin fa-circle-o-notch' : 'fa-envelope'}}" aria-hidden="true" />
                                     </button>
                                 </div>
-                            </form>
+                            </div>
                             <div class="notice mt-2">
-                                <div t-if="orderUiState.emailSuccessful !== null" t-attf-class="{{ orderUiState.emailSuccessful ? 'successful text-success' : 'failed text-danger' }}">
-                                    <t t-esc="orderUiState.emailNotice"></t>
-                                </div>
+                                <t t-set="usedMethod" t-value="sendReceipt.lastArgs?.[0]?.name" />
+                                <div t-if="sendReceipt.status === 'loading'" class="text-info">Sending <t t-esc="usedMethod"/> in progress</div>
+                                <div t-if="sendReceipt.status === 'success'" class="text-success"><t t-esc="usedMethod"/> is sent successfully</div>
+                                <div t-if="sendReceipt.status === 'error'" class="text-danger">Sending <t t-esc="usedMethod"/> failed. Please try again</div>
                             </div>
                         </div>
                         <t t-set="splittedOrder" t-value="this.currentOrder.originalSplittedOrder and !this.currentOrder.originalSplittedOrder.finalized"/>
@@ -52,7 +58,7 @@
                         </div>
                     </div>
                 </div>
-                <div  id="action_btn_mobile" t-if="ui.isSmall" class="switchpane d-flex h-12">
+                <div  id="action_btn_mobile" t-if="ui.isSmall" class="switchpane d-flex h-12 gap-1">
                     <div class="btn-switchpane validation-button btn btn-primary flex-fill d-flex justify-content-center align-items-center rounded-0 fw-bolder fs-1" t-att-class="{ highlight: !locked }" t-if="!splittedOrder" t-on-click="orderDone" name="done">
                                 New Order
                     </div>

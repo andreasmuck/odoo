@@ -27,15 +27,15 @@ class Lead(models.Model):
                 lead.show_enrich_button = True
 
     @api.model
-    def _iap_enrich_leads_cron(self):
-        timeDelta = fields.datetime.now() - datetime.timedelta(hours=1)
+    def _iap_enrich_leads_cron(self, enrich_hours_delay=1, leads_batch_size=1000):
+        timeDelta = self.env.cr.now() - datetime.timedelta(hours=enrich_hours_delay)
         # Get all leads not lost nor won (lost: active = False)
         leads = self.search([
             ('iap_enrich_done', '=', False),
             ('reveal_id', '=', False),
             '|', ('probability', '<', 100), ('probability', '=', False),
             ('create_date', '>', timeDelta)
-        ])
+        ], limit=leads_batch_size)
         leads.iap_enrich(from_cron=True)
 
     @api.model_create_multi
@@ -76,7 +76,7 @@ class Lead(models.Model):
 
                         email_domain = normalized_email.split('@')[1]
                         # Discard domains of generic email providers as it won't return relevant information
-                        if email_domain in iap_tools._MAIL_DOMAIN_BLACKLIST:
+                        if email_domain in iap_tools._MAIL_PROVIDERS:
                             lead.write({'iap_enrich_done': True})
                             lead.message_post_with_source(
                                 'crm_iap_enrich.mail_message_lead_enrich_notfound',

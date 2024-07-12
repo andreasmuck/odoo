@@ -150,6 +150,10 @@
                                     <div class="o_row">
                                         <field name="power"/><span>kW</span>
                                     </div>
+                                    <label for="vehicle_range"/>
+                                    <div class="o_row">
+                                        <field name="vehicle_range"/><span>km</span>
+                                    </div>
                                     <field name="fuel_type"/>
                                     <label for="co2"/>
                                     <div class="o_row" name="co2">
@@ -208,12 +212,10 @@
             <search string="All vehicles">
                 <field string="Vehicle" name="name" filter_domain="['|', ('name', 'ilike', self), ('license_plate', 'ilike', self)]"/>
                 <field string="Drivers" name="log_drivers" filter_domain="[
-                    '|', '|','|','|',
+                    '|', '|',
                     ('log_drivers.driver_id', 'ilike', self),
                     ('driver_id', 'ilike', self),
                     ('future_driver_id', 'ilike', self),
-                    ('driver_employee_id', 'ilike', self),
-                    ('future_driver_employee_id', 'ilike', self),
                 ]"/>
                 <field string="Model" name="model_id"/>
                 <field string="License Plate" name="license_plate"/>
@@ -524,6 +526,21 @@
                 <field name="sequence" widget="handle"/>
                 <field name="name" />
             </tree>
+        </field>
+    </record>
+
+    <record id='fleet_vehicle_state_view_form' model='ir.ui.view'>
+        <field name="name">fleet.vehicle.state.form</field>
+        <field name="model">fleet.vehicle.state</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <field name="name" />
+                        <field name="sequence"/>
+                    </group>
+                </sheet>
+            </form>
         </field>
     </record>
 

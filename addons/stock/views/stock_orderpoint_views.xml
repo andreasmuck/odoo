@@ -44,7 +44,7 @@
                 <field name="product_category_id" column_invisible="True"/>
                 <field name="product_tmpl_id" column_invisible="True"/>
                 <field name="unwanted_replenish" column_invisible="True"/>
-                <field name="product_id" readonly="product_id" force_save="1" context="{'default_detailed_type': 'product'}"/>
+                <field name="product_id" readonly="product_id" force_save="1" context="{'default_is_storable': True}"/>
                 <field name="location_id" options="{'no_create': True}" groups="stock.group_stock_multi_locations"/>
                 <field name="warehouse_id" options="{'no_create': True}" groups="stock.group_stock_multi_warehouses" optional="hide"/>
                 <field name="qty_on_hand" force_save="1"/>
@@ -60,6 +60,9 @@
                 <field name="product_max_qty" string="Max" optional="show"/>
                 <field name="qty_multiple" optional="hide"/>
                 <field name="qty_to_order"/>
+                <field name="qty_to_order_manual" column_invisible="True"/>
+                <button name="action_remove_manual_qty_to_order" type="object" icon="fa-undo" title="Remove manually entered value and replace by the quantity to order based on the forecasted quantities" invisible="not qty_to_order_manual"/>
+                <button name="action_remove_manual_qty_to_order" type="object" icon="fa-undo" title="-" class="disabled opacity-0" invisible="qty_to_order_manual"/>
                 <field name="product_uom_name" string="UoM" groups="uom.group_uom"/>
                 <field name="company_id" optional="hide" readonly="1" groups="base.group_multi_company"/>
                 <button name="action_replenish" string="Order" type="object" class="o_replenish_buttons" icon="fa-truck"
@@ -179,7 +182,7 @@
     <record id="action_orderpoint_replenish" model="ir.actions.act_window">
         <field name="name">Replenishment</field>
         <field name="res_model">stock.warehouse.orderpoint</field>
-        <field name="view_mode">tree</field>
+        <field name="view_mode">tree,kanban,form</field>
         <field name="view_id" ref="view_warehouse_orderpoint_tree_editable"/>
         <field name="search_view_id" ref="stock_reorder_report_search"/>
         <field name="help" type="html">
@@ -229,8 +232,4 @@
         action="action_replenishment"
         name="Replenishment" parent="menu_stock_procurement" sequence="5"
         groups="stock.group_stock_manager"/>
-    <menuitem
-        id="menu_reordering_rules_config"
-        action="action_orderpoint"
-        name="Reordering Rules" parent="menu_product_in_config_stock" sequence="10"/>
 </odoo>

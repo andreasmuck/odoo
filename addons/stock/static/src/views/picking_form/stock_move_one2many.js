@@ -1,23 +1,11 @@
 /** @odoo-module **/
 
 import { registry } from "@web/core/registry";
-import { ListRenderer } from "@web/views/list/list_renderer";
+import { AutoColumnWidthListRenderer } from "@stock/views/list/auto_column_width_list_renderer";
 import { X2ManyField, x2ManyField } from "@web/views/fields/x2many/x2many_field";
-import { useEffect } from "@odoo/owl";
 
-export class MovesListRenderer extends ListRenderer {
+export class MovesListRenderer extends AutoColumnWidthListRenderer {
     static recordRowTemplate = "stock.MovesListRenderer.RecordRow";
-    static props = [...ListRenderer.props, "stockMoveOpen?"];
-
-    setup() {
-        super.setup();
-        useEffect(
-            () => {
-                this.keepColumnWidths = false;
-            },
-            () => [this.columns]
-        );
-    }
 
     processAllColumn(allColumns, list) {
         let cols = super.processAllColumn(...arguments);
@@ -32,7 +20,6 @@ export class MovesListRenderer extends ListRenderer {
     }
 }
 
-
 export class StockMoveX2ManyField extends X2ManyField {
     static components = { ...X2ManyField.components, ListRenderer: MovesListRenderer };
     setup() {
@@ -44,13 +31,15 @@ export class StockMoveX2ManyField extends X2ManyField {
         return false;
     }
 
-
-
     async openRecord(record) {
-        if (this.canOpenRecord) {
+        if (this.canOpenRecord && !record.isNew) {
             const dirty = await record.isDirty();
             if (dirty && 'quantity' in record._changes) {
                 await record.model.root.save({ reload: true });
+                record = record.model.root.data[this.props.name].records.find(e => e.resId === record.resId);
+                if (!record) {
+                    return;
+                }
             }
         }
         return super.openRecord(record);

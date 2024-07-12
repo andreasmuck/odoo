@@ -285,6 +285,9 @@ export class Many2XAutocomplete extends Component {
             this.props.setInputFloats(true);
         }
     }
+    onCancel() {
+        this.props.setInputFloats(false);
+    }
 
     onSelect(option, params = {}) {
         if (option.action) {
@@ -297,6 +300,13 @@ export class Many2XAutocomplete extends Component {
         this.props.update([record], params);
     }
 
+    abortableSearch(name) {
+        const originalPromise = this.search(name);
+        return {
+            promise: originalPromise,
+            abort: originalPromise.abort ? originalPromise.abort.bind(originalPromise) : () => {},
+        };
+    }
     search(name) {
         return this.orm.call(this.props.resModel, "name_search", [], {
             name: name,
@@ -317,8 +327,8 @@ export class Many2XAutocomplete extends Component {
         if (this.lastProm) {
             this.lastProm.abort(false);
         }
-        this.lastProm = this.search(request);
-        const records = await this.lastProm;
+        this.lastProm = this.abortableSearch(request);
+        const records = await this.lastProm.promise;
 
         const options = records.map((result) => this.mapRecordToOption(result));
 
@@ -345,7 +355,7 @@ export class Many2XAutocomplete extends Component {
 
         if (!this.props.noSearchMore && records.length > 0) {
             options.push({
-                label: _t("Search More..."),
+                label: this.SearchMoreButtonLabel,
                 action: this.onSearchMore.bind(this, request),
                 classList: "o_m2o_dropdown_option o_m2o_dropdown_option_search_more",
             });
@@ -381,6 +391,10 @@ export class Many2XAutocomplete extends Component {
         }
 
         return options;
+    }
+
+    get SearchMoreButtonLabel() {
+        return _t("Search More...");
     }
 
     async onBarcodeSearch() {
@@ -537,7 +551,7 @@ export class X2ManyFieldDialog extends Component {
 
         const reload = () => this.record.load();
 
-        useViewButtons(this.props.record.model, this.modalRef, {
+        useViewButtons(this.modalRef, {
             reload,
             beforeExecuteAction: this.beforeExecuteActionButton.bind(this),
         }); // maybe pass the model directly in props
@@ -545,15 +559,13 @@ export class X2ManyFieldDialog extends Component {
         this.canCreate = !this.record.resId;
 
         if (this.archInfo.xmlDoc.querySelector("footer:not(field footer)")) {
+            this.archInfo = { ...this.archInfo, xmlDoc: this.archInfo.xmlDoc.cloneNode(true) };
             this.footerArchInfo = Object.assign({}, this.archInfo);
             this.footerArchInfo.xmlDoc = createElement("t");
             this.footerArchInfo.xmlDoc.append(
-                ...[...this.archInfo.xmlDoc.querySelectorAll("footer:not(field footer)")]
+                ...this.archInfo.xmlDoc.querySelectorAll("footer:not(field footer)")
             );
             this.footerArchInfo.arch = this.footerArchInfo.xmlDoc.outerHTML;
-            [...this.archInfo.xmlDoc.querySelectorAll("footer:not(field footer)")].forEach((x) =>
-                x.remove()
-            );
             this.archInfo.arch = this.archInfo.xmlDoc.outerHTML;
         }
 
@@ -629,7 +641,7 @@ export class X2ManyFieldDialog extends Component {
     }
 }
 
-async function getFormViewInfo({ list, activeField, viewService, env }) {
+async function getFormViewInfo({ list, context, activeField, viewService, env }) {
     let formArchInfo = activeField.views.form;
     let fields = activeField.fields;
     const comodel = list.resModel;
@@ -639,7 +651,7 @@ async function getFormViewInfo({ list, activeField, viewService, env }) {
             relatedModels,
             views,
         } = await viewService.loadViews({
-            context: list.context,
+            context: makeContext([list.context, context]),
             resModel: comodel,
             views: [[false, "form"]],
         });
@@ -702,6 +714,7 @@ export function useOpenX2ManyRecord({
         const list = getList();
         const { archInfo, fields: _fields } = await getFormViewInfo({
             list,
+            context,
             activeField,
             viewService,
             env,

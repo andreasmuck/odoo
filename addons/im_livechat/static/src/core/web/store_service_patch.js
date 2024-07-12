@@ -1,4 +1,5 @@
 import { Store } from "@mail/core/common/store_service";
+import { compareDatetime } from "@mail/utils/common/misc";
 
 import { patch } from "@web/core/utils/patch";
 
@@ -16,6 +17,25 @@ patch(Store.prototype, {
         if (this.discuss.isActive && this.has_access_livechat) {
             this.livechatChannels.fetch();
         }
+    },
+    /** @returns {boolean} Whether the livechat thread changed. */
+    goToOldestUnreadLivechatThread() {
+        const [oldestUnreadThread] = this.discuss.livechats
+            .filter((thread) => thread.isUnread)
+            .sort(
+                (t1, t2) => compareDatetime(t1.lastInterestDt, t2.lastInterestDt) || t1.id - t2.id
+            );
+        if (!oldestUnreadThread) {
+            return false;
+        }
+        if (this.discuss.isActive) {
+            oldestUnreadThread.setAsDiscussThread();
+            return true;
+        }
+        const chatWindow = this.ChatWindow.insert({ thread: oldestUnreadThread });
+        chatWindow.open();
+        chatWindow.focus();
+        return true;
     },
     /**
      * @override

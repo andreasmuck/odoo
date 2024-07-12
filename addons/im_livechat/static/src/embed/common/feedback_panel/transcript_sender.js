@@ -1,8 +1,8 @@
 import { isValidEmail } from "@im_livechat/embed/common/misc";
+import { rpc } from "@web/core/network/rpc";
 
 import { Component, useState } from "@odoo/owl";
 
-import { rpc } from "@web/core/network/rpc";
 import { useService } from "@web/core/utils/hooks";
 
 /**

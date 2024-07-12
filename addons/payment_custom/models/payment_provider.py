@@ -3,6 +3,8 @@
 from odoo import _, api, fields, models
 from odoo.osv.expression import AND
 
+from odoo.addons.payment_custom import const
+
 
 class PaymentProvider(models.Model):
     _inherit = 'payment.provider'
@@ -29,20 +31,6 @@ class PaymentProvider(models.Model):
         providers = super().create(values_list)
         providers.filtered(lambda p: p.custom_mode == 'wire_transfer').pending_msg = None
         return providers
-
-    @api.depends('code')
-    def _compute_view_configuration_fields(self):
-        """ Override of payment to hide the credentials page.
-
-        :return: None
-        """
-        super()._compute_view_configuration_fields()
-        self.filtered(lambda p: p.code == 'custom').update({
-            'show_credentials_page': False,
-            'show_pre_msg': False,
-            'show_done_msg': False,
-            'show_cancel_msg': False,
-        })
 
     def action_recompute_pending_msg(self):
         """ Recompute the pending message to include the existing bank accounts. """
@@ -83,3 +71,10 @@ class PaymentProvider(models.Model):
         )
         if transfer_providers_without_msg:
             transfer_providers_without_msg.action_recompute_pending_msg()
+
+    def _get_default_payment_method_codes(self):
+        """ Override of `payment` to return the default payment method codes. """
+        default_codes = super()._get_default_payment_method_codes()
+        if self.code != 'custom' or self.custom_mode != 'wire_transfer':
+            return default_codes
+        return const.DEFAULT_PAYMENT_METHOD_CODES

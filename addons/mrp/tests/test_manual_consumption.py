@@ -16,11 +16,11 @@ class TestTourManualConsumption(HttpCase):
         Product = self.env['product.product']
         product_finish = Product.create({
             'name': 'finish',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'none',})
         product_nt = Product.create({
             'name': 'No tracking',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'none',})
         bom = self.env['mrp.bom'].create({
             'product_id': product_finish.id,
@@ -118,6 +118,39 @@ class TestManualConsumption(TestMrpCommon):
         self.assertTrue(mo.move_raw_ids.filtered(lambda m: m.product_id == p1).manual_consumption)
         self.assertFalse(mo.move_raw_ids.filtered(lambda m: m.product_id == p2).manual_consumption)
 
+    def test_manual_consumption_with_different_component_price(self):
+        """
+        Test that the moves are merged correctly, even if the products have been used with different prices:
+        - Create a product with a price of $10 and use it in a BoM with 1 unit.
+        - Create a MO with this BoM and confirm it.
+        - Update the price of the component to $20 and adjust the consumed quantity to 2.
+        - Mark the MO as done.
+        - Another move should be created and merged with the first move.
+        """
+        self.bom_4.consumption = 'warning'
+        component = self.bom_4.bom_line_ids.product_id
+        component.write({
+            'is_storable': True,
+            'standard_price': 10,
+        })
+        self.env['stock.quant']._update_available_quantity(component, self.stock_location, 2)
+        mo = self.env['mrp.production'].create({
+            'product_qty': 1,
+            'bom_id': self.bom_4.id,
+        })
+        mo.action_confirm()
+        self.assertEqual(mo.state, 'confirmed')
+        component.standard_price = 20
+        mo.move_raw_ids.quantity = 2.0
+        mo.move_raw_ids.picked = True
+        mo.move_raw_ids.manual_consumption = True
+        self.assertEqual(mo.state, 'progress')
+        action = mo.button_mark_done()
+        consumption_warning = Form(self.env['mrp.consumption.warning'].with_context(**action['context']))
+        action = consumption_warning.save().action_confirm()
+        self.assertEqual(len(mo.move_raw_ids), 1)
+        self.assertEqual(mo.move_raw_ids.quantity, 2)
+
     def test_manual_consumption_quantity_change(self):
         """Test manual consumption mechanism.
         1. Test when a move is manual consumption but NOT picked, quantity will be updated automatically.
@@ -127,15 +160,15 @@ class TestManualConsumption(TestMrpCommon):
         Product = self.env['product.product']
         product_finish = Product.create({
             'name': 'finish',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'none'})
         product_auto_consumption = Product.create({
             'name': 'Automatic',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'none'})
         product_manual_consumption = Product.create({
             'name': 'Manual',
-            'type': 'product',
+            'is_storable': True,
             'tracking': 'none'})
         bom = self.env['mrp.bom'].create({
             'product_id': product_finish.id,
@@ -197,3 +230,50 @@ class TestManualConsumption(TestMrpCommon):
         move_auto, move_manual = get_moves(backorder)
         self.assertEqual(move_auto.manual_consumption, False)
         self.assertEqual(move_manual.manual_consumption, True)
+
+    def test_update_manual_consumption_00(self):
+        """
+        Check that the manual consumption is set to true when the quantity is manualy set.
+        """
+        bom = self.bom_1
+        components = bom.bom_line_ids.product_id
+        self.env['stock.quant']._update_available_quantity(components[0], self.stock_location, 10)
+        mo_form = Form(self.env['mrp.production'])
+        mo_form.bom_id = bom
+        mo_form.product_qty = 4
+        mo = mo_form.save()
+        mo.action_confirm()
+        self.assertEqual(mo.move_raw_ids.mapped('manual_consumption'), [False, False])
+        self.assertEqual(components[0].stock_quant_ids.reserved_quantity, 2.0)
+        with Form(mo) as fmo:
+            with fmo.move_raw_ids.edit(0) as line_0:
+                line_0.quantity = 3.0
+                line_0.picked = True
+        self.assertEqual(mo.move_raw_ids.mapped('manual_consumption'), [True, False])
+        self.assertEqual(components[0].stock_quant_ids.reserved_quantity, 3.0)
+        mo.button_mark_done()
+        self.assertRecordValues(mo.move_raw_ids, [{'quantity': 3.0, 'picked': True}, {'quantity': 4.0, 'picked': True}])
+
+    def test_update_manual_consumption_01(self):
+        """
+        Check that the quantity of a raw line that is manually consumed is not updated
+        when the qty producing is changed and that others are.
+        """
+        bom = self.bom_1
+        components = bom.bom_line_ids.product_id
+        self.env['stock.quant']._update_available_quantity(components[0], self.stock_location, 10)
+        mo_form = Form(self.env['mrp.production'])
+        mo_form.bom_id = bom
+        mo_form.product_qty = 4
+        mo = mo_form.save()
+        mo.action_confirm()
+        self.assertEqual(mo.move_raw_ids.mapped('manual_consumption'), [False, False])
+        self.assertEqual(components[0].stock_quant_ids.reserved_quantity, 2.0)
+        with Form(mo) as fmo:
+            with fmo.move_raw_ids.edit(0) as line_0:
+                line_0.quantity = 3.0
+                line_0.picked = True
+            fmo.qty_producing = 2.0
+        self.assertEqual(mo.move_raw_ids.mapped('manual_consumption'), [True, False])
+        self.assertEqual(components[0].stock_quant_ids.reserved_quantity, 3.0)
+        self.assertRecordValues(mo.move_raw_ids, [{'quantity': 3.0, 'picked': True}, {'quantity': 2.0, 'picked': True}])

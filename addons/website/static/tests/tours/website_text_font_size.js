@@ -36,58 +36,73 @@ function checkComputedFontSize(fontSizeClass, stage) {
 
 function getFontSizeTestSteps(fontSizeClass) {
     return [
-        wTourUtils.dragNDrop({id: "s_text_block", name: "Text"}),
+        ...wTourUtils.dragNDrop({id: "s_text_block", name: "Text"}),
         {
             content: `[${fontSizeClass}] Click on the text block first paragraph (to auto select)`,
             trigger: ":iframe .s_text_block p",
+            run: "click",
         }, {
             content: `Open the font size dropdown to select ${fontSizeClass}`,
             trigger: "#font-size button",
+            run: "click",
         }, {
             content: `Select ${fontSizeClass} in the dropdown`,
             trigger: `a[data-apply-class="${fontSizeClass}"]:contains(${classNameInfo.get(fontSizeClass).start})`,
+            run: "click",
         },
         checkComputedFontSize(fontSizeClass, "start"),
-        wTourUtils.goToTheme(),
+        ...wTourUtils.goToTheme(),
         {
             content: `Open the collapse to see the font size of ${fontSizeClass}`,
             trigger: `we-collapse:has(we-input[data-variable="` +
             `${classNameInfo.get(fontSizeClass).scssVariableName}"]) we-toggler`,
+            run: "click",
         }, {
             content: `Check that the setting for ${fontSizeClass} is correct`,
             trigger: `we-input[data-variable="${classNameInfo.get(fontSizeClass).scssVariableName}"]`
                 + ` input:value("${classNameInfo.get(fontSizeClass).start}")`,
-            isCheck: true,
         }, {
             content: `Change the setting value of ${fontSizeClass}`,
             trigger: `[data-variable="${classNameInfo.get(fontSizeClass).scssVariableName}"] input`,
-            run: `text_blur ${classNameInfo.get(fontSizeClass).end}`,
+            // TODO: Remove "&& click body"
+            run: `edit ${classNameInfo.get(fontSizeClass).end} && click body`,
         }, {
             content: `[${fontSizeClass}] Go to blocks tab`,
             trigger: ".o_we_add_snippet_btn",
+            run: "click",
         }, {
             content: `[${fontSizeClass}] Wait to be in blocks tab`,
             trigger: ".o_we_add_snippet_btn.active",
+            run: "click",
         },
-        wTourUtils.goToTheme(),
+        ...wTourUtils.goToTheme(),
         {
             content: `Check that the setting of ${fontSizeClass} has been updated`,
             trigger: `we-input[data-variable="${classNameInfo.get(fontSizeClass).scssVariableName}"]`
                 + ` input:value("${classNameInfo.get(fontSizeClass).end}")`,
-            isCheck: true,
-        }, {
+        }, 
+        {
+            trigger: `body:not(:has(.o_we_ui_loading))`,
+        },
+        {
             content: `Close the collapse to hide the font size of ${fontSizeClass}`,
             trigger: `we-collapse:has(we-input[data-variable=` +
                 `"${classNameInfo.get(fontSizeClass).scssVariableName}"]) we-toggler`,
-            extra_trigger: `body:not(:has(.o_we_ui_loading))`,
+            run: "click",
         },
         checkComputedFontSize(fontSizeClass, "end"),
         {
             content: `Click again on the text with class ${fontSizeClass}`,
             trigger: `:iframe #wrap .s_text_block .${fontSizeClass}`,
+            run: "click",
         }, {
             content: `Remove the text snippet containing the text with class ${fontSizeClass}`,
             trigger: `.oe_snippet_remove`,
+            async run(helpers) {
+                helpers.click();
+                // TODO: Remove the below setTimeout or understand why it should be required.
+                await new Promise((r) => setTimeout(r, 300));
+            },
         }
     ];
 }
@@ -118,6 +133,5 @@ wTourUtils.registerWebsitePreviewTour("website_text_font_size", {
     {
         content: "Verify that the text block has been deleted",
         trigger: ":iframe #wrap:not(:has(.s_text_block))",
-        isCheck: true,
     },
 ]);

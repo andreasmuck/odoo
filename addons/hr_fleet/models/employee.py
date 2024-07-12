@@ -13,7 +13,7 @@ class Employee(models.Model):
         'fleet.vehicle', 'driver_employee_id', string='Vehicles (private)',
         groups="fleet.fleet_group_manager,hr.group_hr_user",
     )
-    license_plate = fields.Char(compute="_compute_license_plate", search="_search_license_plate")
+    license_plate = fields.Char(compute="_compute_license_plate", search="_search_license_plate", groups="hr.group_hr_user")
     mobility_card = fields.Char(groups="fleet.fleet_group_user")
 
     def action_open_employee_cars(self):
@@ -32,9 +32,9 @@ class Employee(models.Model):
     def _compute_license_plate(self):
         for employee in self:
             if employee.private_car_plate and employee.car_ids.license_plate:
-                employee.license_plate = ' '.join([employee.car_ids.license_plate, employee.private_car_plate])
+                employee.license_plate = ' '.join(employee.car_ids.filtered('license_plate').mapped('license_plate') + [employee.private_car_plate])
             else:
-                employee.license_plate = employee.car_ids.license_plate or employee.private_car_plate
+                employee.license_plate = ' '.join(employee.car_ids.filtered('license_plate').mapped('license_plate')) or employee.private_car_plate
 
     def _search_license_plate(self, operator, value):
         employees = self.env['hr.employee'].search(['|', ('car_ids.license_plate', operator, value), ('private_car_plate', operator, value)])
@@ -58,8 +58,9 @@ class Employee(models.Model):
         if car_ids:
             raise ValidationError(_('Cannot remove address from employees with linked cars.'))
 
-
     def write(self, vals):
+        if 'user_id' in vals:
+            self._sync_employee_cars(self.env['res.users'].browse(vals['user_id']))
         res = super().write(vals)
         #Update car partner when it is changed on the employee
         if 'work_contact_id' in vals:
@@ -74,6 +75,16 @@ class Employee(models.Model):
             vehicles = self.env['fleet.vehicle'].search([('driver_id', 'in', (self.user_id.partner_id | self.sudo().work_contact_id).ids)])
             vehicles._compute_mobility_card()
         return res
+
+    def _sync_employee_cars(self, user):
+        if self.work_contact_id and self.work_contact_id != user.partner_id:
+            cars = self.env['fleet.vehicle'].search(['|', ('future_driver_id', '=', self.work_contact_id.id), ('driver_id', '=', self.work_contact_id.id), ('company_id', '=', self.company_id.id)])
+            for car in cars:
+                if car.future_driver_id == self.work_contact_id:
+                    car.future_driver_id = user.partner_id
+                if car.driver_id == self.work_contact_id:
+                    car.driver_id = user.partner_id
+
 
 class EmployeePublic(models.Model):
     _inherit = 'hr.employee.public'

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 from odoo.addons.account.tests.common import AccountTestInvoicingCommon
 from odoo.fields import Command
 from odoo.tests import tagged
@@ -9,32 +7,38 @@ from odoo.tests import tagged
 class TestTaxTotals(AccountTestInvoicingCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.other_currency = cls.setup_other_currency('EUR')
         cls.maxDiff = None
 
         cls.tax_group1 = cls.env['account.tax.group'].create({
             'name': '1',
-            'sequence': 1
+            'sequence': 1,
+            'pos_receipt_label': 'A',
         })
         cls.tax_group2 = cls.env['account.tax.group'].create({
             'name': '2',
-            'sequence': 2
+            'sequence': 2,
+            'pos_receipt_label': 'B',
         })
         cls.tax_group_sub1 = cls.env['account.tax.group'].create({
             'name': 'subtotals 1',
             'preceding_subtotal': "PRE GROUP 1",
-            'sequence': 3
+            'sequence': 3,
+            'pos_receipt_label': 'A',
         })
         cls.tax_group_sub2 = cls.env['account.tax.group'].create({
             'name': 'subtotals 2',
             'preceding_subtotal': "PRE GROUP 2",
-            'sequence': 4
+            'sequence': 4,
+            'pos_receipt_label': 'B',
         })
         cls.tax_group_sub3 = cls.env['account.tax.group'].create({
             'name': 'subtotals 3',
             'preceding_subtotal': "PRE GROUP 1", # same as sub1, on purpose
-            'sequence': 5
+            'sequence': 5,
+            'pos_receipt_label': 'C',
         })
 
         cls.tax_10 = cls.env['account.tax'].create({
@@ -129,6 +133,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'Untaxed Amount': [
                     {
                         'tax_group_name': self.tax_group1.name,
+                        'tax_group_label': self.tax_group1.pos_receipt_label,
                         'tax_group_amount': 200.0,
                         'tax_group_base_amount': 2000.0,
                         'tax_group_id': self.tax_group1.id,
@@ -136,6 +141,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
 
                     {
                         'tax_group_name': self.tax_group2.name,
+                        'tax_group_label': self.tax_group2.pos_receipt_label,
                         'tax_group_amount': 400.0,
                         'tax_group_base_amount': 2000.0,
                         'tax_group_id': self.tax_group2.id,
@@ -163,6 +169,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'Untaxed Amount': [
                     {
                         'tax_group_name': self.tax_group1.name,
+                        'tax_group_label': self.tax_group1.pos_receipt_label,
                         'tax_group_amount': 600,
                         'tax_group_base_amount': 3000,
                         'tax_group_id': self.tax_group1.id,
@@ -197,6 +204,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'Untaxed Amount': [
                     {
                         'tax_group_name': tax_0.tax_group_id.name,
+                        'tax_group_label': tax_0.tax_group_id.pos_receipt_label,
                         'tax_group_amount': 0,
                         'tax_group_base_amount': 1000,
                         'tax_group_id': tax_0.tax_group_id.id,
@@ -243,6 +251,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'Untaxed Amount': [
                     {
                         'tax_group_name': self.tax_group1.name,
+                        'tax_group_label': self.tax_group1.pos_receipt_label,
                         'tax_group_amount': 200,
                         'tax_group_base_amount': 2000,
                         'tax_group_id': self.tax_group1.id,
@@ -250,6 +259,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
 
                     {
                         'tax_group_name': self.tax_group2.name,
+                        'tax_group_label': self.tax_group2.pos_receipt_label,
                         'tax_group_amount': 420,
                         'tax_group_base_amount': 2100,
                         'tax_group_id': self.tax_group2.id,
@@ -277,6 +287,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'Untaxed Amount': [
                     {
                         'tax_group_name': self.tax_group1.name,
+                        'tax_group_label': self.tax_group1.pos_receipt_label,
                         'tax_group_amount': 620,
                         'tax_group_base_amount': 3000,
                         'tax_group_id': self.tax_group1.id,
@@ -332,6 +343,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'Untaxed Amount': [
                     {
                         'tax_group_name': self.tax_group1.name,
+                        'tax_group_label': self.tax_group1.pos_receipt_label,
                         'tax_group_amount': 450,
                         'tax_group_base_amount': 2300,
                         'tax_group_id': self.tax_group1.id,
@@ -339,6 +351,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
 
                     {
                         'tax_group_name': self.tax_group2.name,
+                        'tax_group_label': self.tax_group2.pos_receipt_label,
                         'tax_group_amount': 300,
                         'tax_group_base_amount': 1000,
                         'tax_group_id': self.tax_group2.id,
@@ -366,6 +379,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'Untaxed Amount': [
                     {
                         'tax_group_name': self.tax_group1.name,
+                        'tax_group_label': self.tax_group1.pos_receipt_label,
                         'tax_group_amount': 750,
                         'tax_group_base_amount': 2000,
                         'tax_group_id': self.tax_group1.id,
@@ -418,6 +432,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'Untaxed Amount': [
                     {
                         'tax_group_name': self.tax_group1.name,
+                        'tax_group_label': self.tax_group1.pos_receipt_label,
                         'tax_group_amount': 126,
                         'tax_group_base_amount': 300,
                         'tax_group_id': self.tax_group1.id,
@@ -426,6 +441,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'PRE GROUP 1': [
                     {
                         'tax_group_name': self.tax_group_sub1.name,
+                        'tax_group_label': self.tax_group_sub1.pos_receipt_label,
                         'tax_group_amount': 120,
                         'tax_group_base_amount': 1200,
                         'tax_group_id': self.tax_group_sub1.id,
@@ -434,6 +450,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'PRE GROUP 2': [
                     {
                         'tax_group_name': self.tax_group_sub2.name,
+                        'tax_group_label': self.tax_group_sub2.pos_receipt_label,
                         'tax_group_amount': 300,
                         'tax_group_base_amount': 1200,
                         'tax_group_id': self.tax_group_sub2.id,
@@ -504,6 +521,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'Untaxed Amount': [
                     {
                         'tax_group_name': self.tax_group1.name,
+                        'tax_group_label': self.tax_group1.pos_receipt_label,
                         'tax_group_amount': 360,
                         'tax_group_base_amount': 1200,
                         'tax_group_id': self.tax_group1.id,
@@ -513,6 +531,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'PRE GROUP 1': [
                     {
                         'tax_group_name': self.tax_group_sub1.name,
+                        'tax_group_label': self.tax_group_sub1.pos_receipt_label,
                         'tax_group_amount': 42,
                         'tax_group_base_amount': 100,
                         'tax_group_id': self.tax_group_sub1.id,
@@ -520,6 +539,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
 
                     {
                         'tax_group_name': self.tax_group_sub3.name,
+                        'tax_group_label': self.tax_group_sub3.pos_receipt_label,
                         'tax_group_amount': 40,
                         'tax_group_base_amount': 400,
                         'tax_group_id': self.tax_group_sub3.id,
@@ -529,6 +549,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'PRE GROUP 2': [
                     {
                         'tax_group_name': self.tax_group_sub2.name,
+                        'tax_group_label': self.tax_group_sub2.pos_receipt_label,
                         'tax_group_amount': -75,
                         'tax_group_base_amount': 300,
                         'tax_group_id': self.tax_group_sub2.id,
@@ -592,12 +613,14 @@ class TestTaxTotals(AccountTestInvoicingCommon):
             'groups_by_subtotal': {
                 'Untaxed Amount': [{
                     'tax_group_name': self.tax_group1.name,
+                    'tax_group_label': self.tax_group1.pos_receipt_label,
                     'tax_group_amount': 10,
                     'tax_group_base_amount': 100,
                     'tax_group_id': self.tax_group1.id,
                 }],
                 "Tax withholding": [{
                     'tax_group_name': self.tax_group_sub1.name,
+                    'tax_group_label': self.tax_group_sub1.pos_receipt_label,
                     'tax_group_amount': -47,
                     'tax_group_base_amount': 100,
                     'tax_group_id': self.tax_group_sub1.id,
@@ -661,10 +684,10 @@ class TestTaxTotals(AccountTestInvoicingCommon):
             (-500, self.tax_10),
         ]
         run_case('round_per_line', lines, [15.45])
-        # 5.445 + 60 - 50 = 15.444999999999993 ~= 15.44
+        # 5.445 + 60 - 50 = 15.444999999999993 ~= 15.45
         # 5.445 - 50 + 60 = 15.445 ~= 15.45
         # 5.445 + 10 = 15.445 ~= 15.45
-        run_case('round_globally', lines, [15.44])
+        run_case('round_globally', lines, [15.45])
 
         lines = [
             (94.7, self.tax_23_1),
@@ -677,7 +700,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
         self.env['res.currency.rate'].create({
             'name': '2018-01-01',
             'rate': 0.2,
-            'currency_id': self.currency_data['currency'].id,
+            'currency_id': self.other_currency.id,
             'company_id': self.env.company.id,
         })
 
@@ -699,7 +722,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
             'move_type': 'out_invoice',
             'partner_id': self.partner_a.id,
             'invoice_date': '2019-01-01',
-            'currency_id': self.currency_data['currency'].id,
+            'currency_id': self.other_currency.id,
         })
 
         lines_data = [(100, tax_10), (300, tax_20)]
@@ -718,12 +741,14 @@ class TestTaxTotals(AccountTestInvoicingCommon):
 
         self.assert_document_tax_totals(invoice, {
             'amount_total': 470,
+            'amount_total_company_currency': 2350,
             'amount_untaxed': 400,
             'display_tax_base': True,
             'groups_by_subtotal': {
                 'Untaxed Amount': [
                     {
                         'tax_group_name': self.tax_group1.name,
+                        'tax_group_label': self.tax_group1.pos_receipt_label,
                         'tax_group_amount': 10,
                         'tax_group_base_amount': 100,
                         'tax_group_id': self.tax_group1.id,
@@ -732,6 +757,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                     },
                     {
                         'tax_group_name': self.tax_group2.name,
+                        'tax_group_label': self.tax_group2.pos_receipt_label,
                         'tax_group_amount': 60,
                         'tax_group_base_amount': 300,
                         'tax_group_id': self.tax_group2.id,
@@ -745,6 +771,68 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                     'name': "Untaxed Amount",
                     'amount': 400,
                     'amount_company_currency': 2000,
+                }
+            ],
+            'subtotals_order': ["Untaxed Amount"],
+        })
+
+    def test_round_globally_price_included_tax(self):
+        self.env.company.tax_calculation_rounding_method = 'round_globally'
+        tax_1 = self.env['account.tax'].create({
+            'name': "tax_1",
+            'amount_type': 'fixed',
+            'tax_group_id': self.tax_group1.id,
+            'amount': 1.0,
+            'include_base_amount': True,
+            'price_include': True,
+        })
+        tax_21 = self.env['account.tax'].create({
+            'name': "tax_21",
+            'amount_type': 'percent',
+            'tax_group_id': self.tax_group2.id,
+            'amount': 21.0,
+            'price_include': True,
+        })
+        invoice = self.env['account.move'].create({
+            'move_type': 'out_invoice',
+            'partner_id': self.partner_a.id,
+            'invoice_date': '2019-01-01',
+            'invoice_line_ids': [
+                Command.create({
+                    'name': f'line{i}',
+                    'display_type': 'product',
+                    'price_unit': 21.53,
+                    'tax_ids': [Command.set((tax_1 + tax_21).ids)],
+                })
+                for i in range(2)
+            ],
+        })
+        self.assert_document_tax_totals(invoice, {
+            'amount_total': 43.05,
+            'amount_untaxed': 33.58,
+            'display_tax_base': True,
+            'groups_by_subtotal': {
+                'Untaxed Amount': [
+                    {
+                        'tax_group_name': self.tax_group1.name,
+                        'tax_group_label': self.tax_group1.pos_receipt_label,
+                        'tax_group_amount': 2,
+                        'tax_group_base_amount': 33.59,
+                        'tax_group_id': self.tax_group1.id,
+                    },
+                    {
+                        'tax_group_name': self.tax_group2.name,
+                        'tax_group_label': self.tax_group2.pos_receipt_label,
+                        'tax_group_amount': 7.47,
+                        'tax_group_base_amount': 35.59,
+                        'tax_group_id': self.tax_group2.id,
+                    }
+                ]
+            },
+            'subtotals': [
+                {
+                    'name': "Untaxed Amount",
+                    'amount': 33.58,
                 }
             ],
             'subtotals_order': ["Untaxed Amount"],
@@ -860,7 +948,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
         self.env['res.currency.rate'].create({
             'name': '2023-01-01',
             'rate': 0.2,
-            'currency_id': self.currency_data['currency'].id,
+            'currency_id': self.other_currency.id,
             'company_id': self.env.company.id,
         })
         for move_type in ['out_invoice', 'in_invoice']:
@@ -868,7 +956,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                 'move_type': move_type,
                 'partner_id': self.partner_a.id,
                 'invoice_date': '2023-01-01',
-                'currency_id': self.currency_data['currency'].id,
+                'currency_id': self.other_currency.id,
                 'invoice_line_ids': [
                     Command.create({
                         'name': 'line',
@@ -912,6 +1000,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                     "Untaxed Amount": [
                         {
                             'tax_group_name': taxes.tax_group_id.name,
+                            'tax_group_label': taxes.tax_group_id.pos_receipt_label,
                             'tax_group_amount': 15.67,
                             'tax_group_base_amount': 32.33,
                             'tax_group_id': taxes.tax_group_id.id,
@@ -939,30 +1028,35 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                     "Untaxed Amount": [
                         {
                             'tax_group_name': tax_groups[0].name,
+                            'tax_group_label': tax_groups[0].pos_receipt_label,
                             'tax_group_amount': 2.4,
                             'tax_group_base_amount': 32.33,
                             'tax_group_id': tax_groups[0].id,
                         },
                         {
                             'tax_group_name': tax_groups[1].name,
+                            'tax_group_label': tax_groups[1].pos_receipt_label,
                             'tax_group_amount': 1.44,
                             'tax_group_base_amount': 32.33,
                             'tax_group_id': tax_groups[1].id,
                         },
                         {
                             'tax_group_name': tax_groups[2].name,
+                            'tax_group_label': tax_groups[2].pos_receipt_label,
                             'tax_group_amount': 0.31,
                             'tax_group_base_amount': 32.33,
                             'tax_group_id': tax_groups[2].id,
                         },
                         {
                             'tax_group_name': tax_groups[3].name,
+                            'tax_group_label': tax_groups[3].pos_receipt_label,
                             'tax_group_amount': 4.32,
                             'tax_group_base_amount': 32.33,
                             'tax_group_id': tax_groups[3].id,
                         },
                         {
                             'tax_group_name': tax_groups[4].name,
+                            'tax_group_label': tax_groups[4].pos_receipt_label,
                             'tax_group_amount': 7.2,
                             'tax_group_base_amount': 32.33,
                             'tax_group_id': tax_groups[4].id,
@@ -992,30 +1086,35 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                     "Untaxed Amount": [
                         {
                             'tax_group_name': tax_groups[0].name,
+                            'tax_group_label': tax_groups[0].pos_receipt_label,
                             'tax_group_amount': 2.4,
                             'tax_group_base_amount': 48.0,
                             'tax_group_id': tax_groups[0].id,
                         },
                         {
                             'tax_group_name': tax_groups[1].name,
+                            'tax_group_label': tax_groups[1].pos_receipt_label,
                             'tax_group_amount': 1.44,
                             'tax_group_base_amount': 48.0,
                             'tax_group_id': tax_groups[1].id,
                         },
                         {
                             'tax_group_name': tax_groups[2].name,
+                            'tax_group_label': tax_groups[2].pos_receipt_label,
                             'tax_group_amount': 0.31,
                             'tax_group_base_amount': 48.0,
                             'tax_group_id': tax_groups[2].id,
                         },
                         {
                             'tax_group_name': tax_groups[3].name,
+                            'tax_group_label': tax_groups[3].pos_receipt_label,
                             'tax_group_amount': 4.32,
                             'tax_group_base_amount': 48.0,
                             'tax_group_id': tax_groups[3].id,
                         },
                         {
                             'tax_group_name': tax_groups[4].name,
+                            'tax_group_label': tax_groups[4].pos_receipt_label,
                             'tax_group_amount': 7.2,
                             'tax_group_base_amount': 48.0,
                             'tax_group_id': tax_groups[4].id,
@@ -1042,6 +1141,7 @@ class TestTaxTotals(AccountTestInvoicingCommon):
                     "Untaxed Amount": [
                         {
                             'tax_group_name': taxes.tax_group_id.name,
+                            'tax_group_label': taxes.tax_group_id.pos_receipt_label,
                             'tax_group_amount': 15.67,
                             'tax_group_base_amount': 48.0,
                             'tax_group_id': taxes.tax_group_id.id,

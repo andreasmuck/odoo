@@ -1,3 +1,5 @@
+import { mailDataHelpers } from "@mail/../tests/mock_server/mail_mock_server";
+
 import { Command, fields, models, serverState } from "@web/../tests/web_test_helpers";
 
 export class WebsiteVisitor extends models.ServerModel {
@@ -49,7 +51,9 @@ export class WebsiteVisitor extends models.ServerModel {
             BusBus._sendone(
                 partner,
                 "website_livechat.send_chat_request",
-                DiscussChannel._channel_info([livechatId])[0]
+                new mailDataHelpers.Store(
+                    DiscussChannel.browse(livechatId).map((record) => record.id)
+                ).get_result()
             );
         }
     }

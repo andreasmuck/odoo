@@ -38,12 +38,12 @@ class ProductTemplate(models.Model):
 
                 # Empty out the stock with the current cost method.
                 description = _(
-                    "Due to a change of product category (from %s to %s), the costing method has changed for product template %s: from %s to %s.",
-                    product_template.categ_id.display_name,
-                    new_product_category.display_name,
-                    product_template.display_name,
-                    product_template.cost_method,
-                    new_product_category.property_cost_method)
+                    "Due to a change of product category (from %(old_category)s to %(new_category)s), the costing method has changed for product %(product)s: from %(old_method)s to %(new_method)s.",
+                    old_category=product_template.categ_id.display_name,
+                    new_category=new_product_category.display_name,
+                    product=product_template.display_name,
+                    old_method=product_template.cost_method,
+                    new_method=new_product_category.property_cost_method)
                 out_svl_vals_list, products_orig_quantity_svl, products = Product\
                     ._svl_empty_stock(description, product_template=product_template)
                 out_stock_valuation_layers = SVL.create(out_svl_vals_list)
@@ -81,7 +81,7 @@ class ProductTemplate(models.Model):
         accounts.update({
             'stock_input': res['stock_input'] or self.categ_id.property_stock_account_input_categ_id,
             'stock_output': res['stock_output'] or self.categ_id.property_stock_account_output_categ_id,
-            'stock_valuation': self.categ_id.property_stock_valuation_account_id or False,
+            'stock_valuation': self.categ_id.property_stock_valuation_account_id,
         })
         return accounts
 
@@ -252,7 +252,11 @@ class ProductProduct(models.Model):
             svl_vals = {
                 'company_id': company_id.id,
                 'product_id': product.id,
-                'description': _('Product value manually modified (from %s to %s)', product.standard_price, rounded_new_price),
+                'description': _(
+                    'Product value manually modified (from %(original_price)s to %(new_price)s)',
+                    original_price=product.standard_price,
+                    new_price=rounded_new_price,
+                ),
                 'value': value,
                 'quantity': 0,
             }
@@ -266,7 +270,7 @@ class ProductProduct(models.Model):
             product = stock_valuation_layer.product_id
             value = stock_valuation_layer.value
 
-            if product.type != 'product' or product.valuation != 'real_time':
+            if not product.is_storable or product.valuation != 'real_time':
                 continue
 
             # Sanity check.
@@ -320,16 +324,23 @@ class ProductProduct(models.Model):
         if account_moves:
             account_moves._post()
 
+    def _get_fifo_candidates_domain(self, company):
+        return [
+            ("product_id", "=", self.id),
+            ("remaining_qty", ">", 0),
+            ("company_id", "=", company.id),
+        ]
+
+    def _get_fifo_candidates(self, company):
+        candidates_domain = self._get_fifo_candidates_domain(company)
+        return self.env["stock.valuation.layer"].sudo().search(candidates_domain)
+
     def _run_fifo(self, quantity, company):
         self.ensure_one()
 
         # Find back incoming stock valuation layers (called candidates here) to value `quantity`.
         qty_to_take_on_candidates = quantity
-        candidates = self.env['stock.valuation.layer'].sudo().search([
-            ('product_id', '=', self.id),
-            ('remaining_qty', '>', 0),
-            ('company_id', '=', company.id),
-        ])
+        candidates = self._get_fifo_candidates(company)
         new_standard_price = 0
         tmp_value = 0  # to accumulate the value taken on the candidates
         for candidate in candidates:
@@ -554,7 +565,7 @@ class ProductProduct(models.Model):
         products_orig_quantity_svl = {}
 
         # get the impacted products
-        domain = [('type', '=', 'product')]
+        domain = [('is_storable', '=', True)]
         if product_category is not None:
             domain += [('categ_id', '=', product_category.id)]
         elif product_template is not None:
@@ -644,9 +655,20 @@ class ProductProduct(models.Model):
                 raise UserError(_('You don\'t have any input valuation account defined on your product category. You must define one before processing this operation.'))
             if not product_accounts[product.id].get('stock_valuation'):
                 raise UserError(_('You don\'t have any stock valuation account defined on your product category. You must define one before processing this operation.'))
+            if not product_accounts[product.id].get('stock_output'):
+                raise UserError(
+                    _('You don\'t have any output valuation account defined on your product '
+                      'category. You must define one before processing this operation.')
+                )
 
-            debit_account_id = product_accounts[product.id]['stock_valuation'].id
-            credit_account_id = product_accounts[product.id]['stock_input'].id
+            precision = self.env['decimal.precision'].precision_get('Product Unit of Measure')
+            if float_compare(out_stock_valuation_layer.quantity, 0, precision_digits=precision) == 1:
+                debit_account_id = product_accounts[product.id]['stock_valuation'].id
+                credit_account_id = product_accounts[product.id]['stock_input'].id
+            else:
+                debit_account_id = product_accounts[product.id]['stock_output'].id
+                credit_account_id = product_accounts[product.id]['stock_valuation'].id
+
             value = out_stock_valuation_layer.value
             move_vals = {
                 'journal_id': product_accounts[product.id]['stock_journal'].id,
@@ -866,12 +888,12 @@ class ProductCategory(models.Model):
                 # Empty out the stock with the current cost method.
                 if new_cost_method:
                     description = _(
-                        "Costing method change for product category %s: from %s to %s.",
-                        product_category.display_name, product_category.property_cost_method, new_cost_method)
+                        "Costing method change for product category %(category)s: from %(old_method)s to %(new_method)s.",
+                        category=product_category.display_name, old_method=product_category.property_cost_method, new_method=new_cost_method)
                 else:
                     description = _(
-                        "Valuation method change for product category %s: from %s to %s.",
-                        product_category.display_name, product_category.property_valuation, new_valuation)
+                        "Valuation method change for product category %(category)s: from %(old_method)s to %(new_method)s.",
+                        category=product_category.display_name, old_method=product_category.property_valuation, new_method=new_valuation)
                 out_svl_vals_list, products_orig_quantity_svl, products = Product\
                     ._svl_empty_stock(description, product_category=product_category)
                 out_stock_valuation_layers = SVL.sudo().create(out_svl_vals_list)

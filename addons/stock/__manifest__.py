@@ -73,9 +73,9 @@
         'views/stock_quant_views.xml',
         'views/stock_warehouse_views.xml',
         'views/stock_move_line_views.xml',
+        'views/stock_move_views.xml',
         'views/stock_picking_views.xml',
         'views/stock_picking_type_views.xml',
-        'views/stock_move_views.xml',
         'views/product_views.xml',
         'views/stock_location_views.xml',
         'views/stock_orderpoint_views.xml',
@@ -97,12 +97,16 @@
         'web.report_assets_common': [
             'stock/static/src/scss/report_stock_reception.scss',
             'stock/static/src/scss/report_stock_rule.scss',
+            'stock/static/src/scss/report_stockpicking_operations.scss',
         ],
         'web.assets_backend': [
             'stock/static/src/**/*.js',
             'stock/static/src/**/*.xml',
-            'stock/static/src/scss/*.scss',
-            'stock/static/src/views/**/*',
+            'stock/static/src/**/*.scss',
+            ('remove', 'stock/static/src/stock_forecasted/forecasted_graph.*'),
+        ],
+        'web.assets_backend_lazy': [
+            'stock/static/src/stock_forecasted/forecasted_graph.*',
         ],
         'web.assets_frontend': [
             'stock/static/src/scss/stock_traceability_report.scss',
@@ -114,6 +118,7 @@
             'stock/static/tests/inventory_report_list_tests.js',
             'stock/static/tests/popover_widget_tests.js',
             'stock/static/tests/stock_traceability_report_backend_tests.js',
+            'stock/static/tests/stock_move_one2many_tests.js',
         ],
     },
     'license': 'LGPL-3',

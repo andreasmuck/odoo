@@ -1,29 +1,25 @@
 /** @odoo-module */
 
-import { makeMockEnv, getService } from "@web/../tests/web_test_helpers";
+import { beforeEach, describe, expect, test } from "@odoo/hoot";
 import { mockFetch } from "@odoo/hoot-mock";
-import { after, expect, test, beforeEach } from "@odoo/hoot";
+import { getService, makeMockEnv } from "@web/../tests/web_test_helpers";
 
-let installPrompt;
+describe.current.tags("headless");
 
-beforeEach(async () => {
-    await makeMockEnv();
-    installPrompt = await getService("installPrompt");
-});
+beforeEach(makeMockEnv);
 
-test.tags("headless")("install prompt fetch the application name", async () => {
-    const restoreFetch = mockFetch((route) => {
+test("install prompt fetch the application name", async () => {
+    mockFetch((route) => {
         expect.step(route);
-        return new Response('{"name": "Odoo PWA"}', { status: 200 });
+        return { name: "Odoo PWA" };
     });
-    after(restoreFetch);
-    let appName = await installPrompt.getAppName();
-    expect(appName).toBe("Odoo PWA");
-    expect(["/web/manifest.webmanifest"]).toVerifySteps();
 
-    appName = await installPrompt.getAppName();
+    let appName = await getService("installPrompt").getAppName();
     expect(appName).toBe("Odoo PWA");
-    expect([], {
-        message: "the manifest is only fetched once to get the app name",
-    }).toVerifySteps();
+    expect.verifySteps(["/web/manifest.webmanifest"]);
+
+    appName = await getService("installPrompt").getAppName();
+    expect(appName).toBe("Odoo PWA");
+    // the manifest is only fetched once to get the app name
+    expect.verifySteps([]);
 });

@@ -10,7 +10,6 @@ import {
     isMany,
     isOne,
     isRecord,
-    isRecordList,
     isRelation,
     modelRegistry,
 } from "./misc";
@@ -215,7 +214,7 @@ export class Record {
      * @template {keyof import("models").Models} M
      * @param {M} targetModel
      * @param {Object} [param1={}]
-     * @param {Function} [param1.compute] if set, the value of this relational field is declarative and
+     * @param {(this: Record) => any} [param1.compute] if set, the value of this relational field is declarative and
      *   is computed automatically. All reactive accesses recalls that function. The context of
      *   the function is the record. Returned value is new value assigned to this field.
      * @param {boolean} [param1.eager=false] when field is computed, determines whether the computation
@@ -224,11 +223,11 @@ export class Record {
      *   the field is immediately (re-)computed when dependencies changes, which matches the built-in
      *   behaviour of OWL reactive.
      * @param {string} [param1.inverse] if set, the name of field in targetModel that acts as the inverse.
-     * @param {(r: import("models").Models[M]) => void} [param1.onAdd] function that is called when a record is added
+     * @param {(this: Record, r: import("models").Models[M]) => void} [param1.onAdd] function that is called when a record is added
      *   in the relation.
-     * @param {(r: import("models").Models[M]) => void} [param1.onDelete] function that is called when a record is removed
+     * @param {(this: Record, r: import("models").Models[M]) => void} [param1.onDelete] function that is called when a record is removed
      *   from the relation.
-     * @param {() => void} [param1.onUpdate] function that is called when the field value is updated.
+     * @param {(this: Record) => void} [param1.onUpdate] function that is called when the field value is updated.
      *   This is called at least once at record creation.
      * @returns {import("models").Models[M]}
      */
@@ -239,7 +238,7 @@ export class Record {
      * @template {keyof import("models").Models} M
      * @param {M} targetModel
      * @param {Object} [param1={}]
-     * @param {Function} [param1.compute] if set, the value of this relational field is declarative and
+     * @param {(this: Record) => any} [param1.compute] if set, the value of this relational field is declarative and
      *   is computed automatically. All reactive accesses recalls that function. The context of
      *   the function is the record. Returned value is new value assigned to this field.
      * @param {boolean} [param1.eager=false] when field is computed, determines whether the computation
@@ -248,13 +247,13 @@ export class Record {
      *   the field is immediately (re-)computed when dependencies changes, which matches the built-in
      *   behaviour of OWL reactive.
      * @param {string} [param1.inverse] if set, the name of field in targetModel that acts as the inverse.
-     * @param {(r: import("models").Models[M]) => void} [param1.onAdd] function that is called when a record is added
+     * @param {(this: Record, r: import("models").Models[M]) => void} [param1.onAdd] function that is called when a record is added
      *   in the relation.
-     * @param {(r: import("models").Models[M]) => void} [param1.onDelete] function that is called when a record is removed
+     * @param {(this: Record, r: import("models").Models[M]) => void} [param1.onDelete] function that is called when a record is removed
      *   from the relation.
-     * @param {() => void} [param1.onUpdate] function that is called when the field value is updated.
+     * @param {(this: Record) => void} [param1.onUpdate] function that is called when the field value is updated.
      *   This is called at least once at record creation.
-     * @param {(r1: import("models").Models[M], r2: import("models").Models[M]) => number} [param1.sort] if defined, this field
+     * @param {(this: Record, r1: import("models").Models[M], r2: import("models").Models[M]) => number} [param1.sort] if defined, this field
      *   is automatically sorted by this function.
      * @returns {import("models").Models[M][]}
      */
@@ -265,7 +264,7 @@ export class Record {
      * @template T
      * @param {T} def
      * @param {Object} [param1={}]
-     * @param {Function} [param1.compute] if set, the value of this attr field is declarative and
+     * @param {(this: Record) => any} [param1.compute] if set, the value of this attr field is declarative and
      *   is computed automatically. All reactive accesses recalls that function. The context of
      *   the function is the record. Returned value is new value assigned to this field.
      * @param {boolean} [param1.eager=false] when field is computed, determines whether the computation
@@ -275,9 +274,9 @@ export class Record {
      *   behaviour of OWL reactive.
      * @param {boolean} [param1.html] if set, the field value contains html value.
      *   Useful to automatically markup when the insert is trusted.
-     * @param {() => void} [param1.onUpdate] function that is called when the field value is updated.
+     * @param {(this: Record) => void} [param1.onUpdate] function that is called when the field value is updated.
      *   This is called at least once at record creation.
-     * @param {(Object, Object) => number} [param1.sort] if defined, this field is automatically sorted
+     * @param {(this: Record, Object, Object) => number} [param1.sort] if defined, this field is automatically sorted
      *   by this function.
      * @param {'datetime'|'date'} [param1.type] if defined, automatically transform to a
      * specific type.
@@ -326,10 +325,8 @@ export class Record {
         return Model.get.call(ModelFullProxy, data) ?? Model.new(data);
     }
 
-    /** @type {Map<string, RecordList>} */
-    _fieldsValue = new Map();
     /** @returns {import("models").Store} */
-    get _store() {
+    get store() {
         return toRaw(this)._raw.Model._rawStore._proxy;
     }
     /** @returns {import("models").Store} */
@@ -361,10 +358,6 @@ export class Record {
     _proxyInternal;
     /** @type {this} */
     _proxy;
-
-    constructor() {
-        this.setup();
-    }
 
     setup() {}
 
@@ -408,10 +401,6 @@ export class Record {
         if (!collection) {
             return false;
         }
-        if (isRecordList(collection)) {
-            return collection.includes(this);
-        }
-        // Array
         return collection.some((record) => toRaw(record)._raw.eq(this));
     }
 
@@ -427,18 +416,19 @@ export class Record {
         const data = { ...recordProxy };
         for (const name of Model._.fields.keys()) {
             if (isMany(Model, name)) {
-                data[name] = record[name].map((recordProxy) => {
+                data[name] = record._proxyInternal[name].map((recordProxy) => {
                     const record = toRaw(recordProxy)._raw;
                     return record.toIdData.call(record._proxyInternal);
                 });
             } else if (isOne(Model, name)) {
-                const otherRecord = toRaw(record[name])?._raw;
+                const otherRecord = toRaw(record._proxyInternal[name])?._raw;
                 data[name] = otherRecord?.toIdData.call(record._proxyInternal);
             } else {
                 data[name] = recordProxy[name]; // Record.attr()
             }
         }
         delete data._;
+        delete data._fieldsValue;
         delete data._proxy;
         delete data._proxyInternal;
         delete data._raw;

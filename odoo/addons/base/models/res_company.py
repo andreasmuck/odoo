@@ -3,6 +3,7 @@
 
 import base64
 import logging
+import threading
 import warnings
 
 from odoo import api, fields, models, tools, _, Command, SUPERUSER_ID
@@ -16,6 +17,7 @@ class Company(models.Model):
     _name = "res.company"
     _description = 'Companies'
     _order = 'sequence, name'
+    _inherit = ['format.address.mixin', 'format.vat.label.mixin']
     _parent_store = True
 
     def copy(self, default=None):
@@ -114,8 +116,7 @@ class Company(models.Model):
             company.parent_ids = self.browse(int(id) for id in company.parent_path.split('/') if id) if company.parent_path else company
             company.root_id = company.parent_ids[0]
 
-    # TODO @api.depends(): currently now way to formulate the dependency on the
-    # partner's contact address
+    @api.depends(lambda self: [f'partner_id.{fname}' for fname in self._get_company_address_field_names()])
     def _compute_address(self):
         for company in self.filtered(lambda company: company.partner_id):
             address_data = company.partner_id.sudo().address_get(adr_pref=['contact'])
@@ -223,7 +224,15 @@ class Company(models.Model):
             company.uninstalled_l10n_module_ids = self.env['ir.module.module'].browse(mapping.get(company.country_id.id))
 
     def install_l10n_modules(self):
-        return self.uninstalled_l10n_module_ids.button_immediate_install()
+        uninstalled_modules = self.uninstalled_l10n_module_ids
+        is_ready_and_not_test = (
+            not tools.config['test_enable']
+            and (self.env.registry.ready or not self.env.registry._init)
+            and not getattr(threading.current_thread(), 'testing', False)
+        )
+        if uninstalled_modules and is_ready_and_not_test:
+            return uninstalled_modules.button_immediate_install()
+        return is_ready_and_not_test
 
     @api.model
     def _get_view(self, view_id=None, view_type='form', **options):
@@ -231,7 +240,7 @@ class Company(models.Model):
         arch, view = super()._get_view(view_id, view_type, **options)
         for f in arch.iter("field"):
             if f.get('name') in delegated_fnames:
-                f.set('attrs', "{'readonly': [('parent_id', '!=', False)]}")
+                f.set('readonly', "parent_id != False")
         return arch, view
 
     @api.model
@@ -311,6 +320,10 @@ class Company(models.Model):
         # Make sure that the selected currencies are enabled
         companies.currency_id.sudo().filtered(lambda c: not c.active).active = True
 
+        companies_needs_l10n = companies.filtered('country_id')
+        if companies_needs_l10n:
+            companies_needs_l10n.install_l10n_modules()
+
         return companies
 
     def cache_invalidation_fields(self):
@@ -323,6 +336,12 @@ class Company(models.Model):
     def write(self, values):
         invalidation_fields = self.cache_invalidation_fields()
         asset_invalidation_fields = {'font', 'primary_color', 'secondary_color', 'external_report_layout_id'}
+
+        companies_needs_l10n = (
+            values.get('country_id')
+            and self.filtered(lambda company: not company.country_id)
+            or self.browse()
+        )
         if not invalidation_fields.isdisjoint(values):
             self.env.registry.clear_cache()
 
@@ -341,6 +360,10 @@ class Company(models.Model):
 
         res = super(Company, self).write(values)
 
+        # Archiving a company should also archive all of its branches
+        if values.get('active') is False:
+            self.child_ids.active = False
+
         for company in self:
             # Copy modified delegated fields from root to branches
             if (changed := set(values) & set(self._get_company_root_delegated_field_names())) and not company.parent_id:
@@ -350,6 +373,9 @@ class Company(models.Model):
                 ])
                 for fname in sorted(changed):
                     branches[fname] = company[fname]
+
+        if companies_needs_l10n:
+            companies_needs_l10n.install_l10n_modules()
 
         # invalidate company cache to recompute address based on updated partner
         company_address_fields = self._get_company_address_field_names()

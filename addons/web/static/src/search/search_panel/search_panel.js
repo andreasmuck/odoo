@@ -1,7 +1,17 @@
-import { useBus } from "@web/core/utils/hooks";
 import { Dropdown } from "@web/core/dropdown/dropdown";
+import { useBus } from "@web/core/utils/hooks";
 
-import { Component, onMounted, onWillUpdateProps, onWillStart, useRef, useState } from "@odoo/owl";
+import {
+    Component,
+    onMounted,
+    onWillStart,
+    onWillUpdateProps,
+    reactive,
+    useEffect,
+    useRef,
+    useState,
+} from "@odoo/owl";
+import { useSetupAction } from "@web/webclient/actions/action_hook";
 
 //-------------------------------------------------------------------------
 // Helpers
@@ -35,9 +45,7 @@ const nameOfCheckedValues = (values) => {
  */
 export class SearchPanel extends Component {
     static template = "web.SearchPanel";
-    static props = {
-        importedState: { type: String, optional: true },
-    };
+    static props = {};
     static components = {
         Dropdown,
     };
@@ -52,18 +60,38 @@ export class SearchPanel extends Component {
             active: {},
             expanded: {},
             showMobileSearch: false,
-            sidebarExpanded: true,
+            sidebarExpanded: !this.env.searchModel.searchPanelInfo.fold,
         });
+        this.hasImportedState = false;
         this.root = useRef("root");
         this.scrollTop = 0;
-        this.hasImportedState = false;
+        this.dropdownStates = {};
+        this.width = "10px";
 
-        this.importState(this.props.importedState);
+        this.importState(this.env.searchPanelState);
 
         useBus(this.env.searchModel, "update", async () => {
             await this.env.searchModel.sectionsPromise;
             this.updateActiveValues();
             this.render();
+        });
+
+        useEffect(
+            (el) => {
+                if (el && this.hasImportedState) {
+                    el.style["min-width"] = this.width;
+                    el.scroll({ top: this.scrollTop });
+                }
+            },
+            () => [this.root.el]
+        );
+
+        useSetupAction({
+            getGlobalState: () => {
+                return {
+                    searchPanel: this.exportState(),
+                };
+            },
         });
 
         onWillStart(async () => {
@@ -79,9 +107,6 @@ export class SearchPanel extends Component {
 
         onMounted(() => {
             this.updateGroupHeadersChecked();
-            if (this.hasImportedState) {
-                this.root.el.scroll({ top: this.scrollTop });
-            }
         });
     }
 
@@ -100,23 +125,38 @@ export class SearchPanel extends Component {
     exportState() {
         const exported = {
             expanded: this.state.expanded,
-            scrollTop: this.root.el.scrollTop,
+            scrollTop: this.root.el?.scrollTop || 0,
+            sidebarExpanded: this.state.sidebarExpanded,
+            width: this.width,
         };
         return JSON.stringify(exported);
     }
 
-    importState(stringifiedState) {
-        this.hasImportedState = Boolean(stringifiedState);
+    importState(state) {
+        this.hasImportedState = Boolean(state);
         if (this.hasImportedState) {
-            const state = JSON.parse(stringifiedState);
             this.state.expanded = state.expanded;
             this.scrollTop = state.scrollTop;
+            this.state.sidebarExpanded = state.sidebarExpanded;
+            this.width = state.width;
         }
     }
 
     //---------------------------------------------------------------------
     // Protected
     //---------------------------------------------------------------------
+
+    getDropdownState(sectionId) {
+        if (!this.dropdownStates[sectionId]) {
+            const state = reactive({
+                isOpen: false,
+                open: () => (state.isOpen = true),
+                close: () => (state.isOpen = false),
+            });
+            this.dropdownStates[sectionId] = reactive(state);
+        }
+        return this.dropdownStates[sectionId];
+    }
 
     /**
      * Expands category values holding the default value of a category.
@@ -234,6 +274,8 @@ export class SearchPanel extends Component {
             } else {
                 categoryState[value.id] = true;
             }
+        } else {
+            this.getDropdownState(category.id).close();
         }
         if (category.activeValueId !== value.id) {
             this.env.searchModel.toggleCategoryValue(category.id, value.id);
@@ -336,7 +378,8 @@ export class SearchPanel extends Component {
             const maxWidth = Math.max(0.5 * window.innerWidth, initialWidth);
             const delta = ev.pageX - initialX;
             const newWidth = Math.min(maxWidth, Math.max(10, initialWidth + delta));
-            this.root.el.style["min-width"] = `${newWidth}px`;
+            this.width = `${newWidth}px`;
+            this.root.el.style["min-width"] = this.width;
         };
         document.addEventListener("pointermove", resizePanel, true);
 

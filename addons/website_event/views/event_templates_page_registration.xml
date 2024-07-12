@@ -19,6 +19,8 @@
     <t t-set="edition_cover_only" t-value="opt_event_description_cover_hidden and request.env.user.has_group('event.group_event_manager')"/>
 
     <t t-call="website_event.event_details">
+        <div t-if="toast_message" class="o_wevent_register_toaster d-none" t-att-data-message="toast_message"/>
+
         <t t-if="opt_event_description_cover_top" t-call="website.record_cover">
             <t t-set="_record" t-value="event"/>
             <t t-set="use_filters" t-value="True"/>
@@ -45,8 +47,10 @@
                     <div class="col pe-xxl-5">
                         <t t-call="website_event.navbar"/>
                         <!-- Show the button tickets only on mobile -->
-                        <div class="o_wevent_event_main_cta_block d-lg-none  mb-3">
-                            <t t-call="website_event.registration_template"/>
+                        <div class="o_wevent_event_main_cta_block d-lg-none mb-3">
+                            <t t-call="website_event.registration_template">
+                                <t t-set="cta_additional_classes">w-100 py-sm-3 mt-sm-2</t>
+                            </t>
                         </div>
                         <!-- Description -->
                         <div id="o_wevent_event_main_col">
@@ -79,26 +83,30 @@
                     <aside id="o_wevent_event_main_sidebar" class="col-lg-4 my-3 mb-lg-0 d-print-none">
                         <!-- CTA (desktop only) -->
                         <div class="d-none d-lg-block mb-3">
-                            <t t-call="website_event.registration_template"/>
+                            <t t-call="website_event.registration_template">
+                                <t t-set="cta_additional_classes">w-100</t>
+                            </t>
                         </div>
                         <!-- Date & Time (desktop only) -->
                         <div class="d-none d-lg-block border-bottom pb-2 mb-3">
+                            <meta itemprop="startDate" t-att-content="event.date_begin.isoformat()" />
+                            <meta itemprop="endDate" t-att-content="event.date_end.isoformat()" />
                             <t t-call="website_event.event_description_dates"/>
                         </div>
                         <header class="d-lg-none mt-4 mb-2 py-3 border-top">
                             <h5 class="my-0">Event Info</h5>
+                            <meta itemprop="eventStatus" content="https://schema.org/EventScheduled" />
                         </header>
                         <!-- Location -->
-                        <div t-if="event.address_id" class="o_wevent_sidebar_block border-bottom pb-3 mb-4">
+                        <meta itemprop="eventAttendanceMode" t-attf-content="https://schema.org/{{'Offline' if event.address_id else 'Online'}}EventAttendanceMode"/>
+                        <div t-if="event.address_id" class="o_wevent_sidebar_block border-bottom pb-3 mb-4" itemprop="location" itemscope="itemscope" itemtype="https://schema.org/Place">
                             <h6 class="o_wevent_sidebar_title">Location</h6>
-                            <div class="mb-1" t-field="event.address_id" t-options='{
-                                "widget": "contact",
-                                "fields": ["name"]
-                            }'/>
-                            <small itemprop="location" class="d-block mb-2" t-field="event.address_id" t-options='{
+                            <div itemprop="name" class="mb-1" t-field="event.address_id"/>
+                            <small class="d-block mb-2" t-field="event.address_id" t-options='{
                                 "widget": "contact",
                                 "fields": ["address"],
-                                "no_marker": True
+                                "no_marker": True,
+                                "with_microdata": True,
                             }'/>
                             <small t-field="event.address_id" class="d-block mb-2" t-options='{
                                 "widget": "contact",
@@ -117,10 +125,10 @@
                             <i class="fa fa-map-marker" title="Location"/> Online event
                         </div>
                         <!-- Organizer -->
-                        <div t-if="event.organizer_id" class="o_wevent_sidebar_block border-bottom pb-3 mb-4">
+                        <div t-if="event.organizer_id" class="o_wevent_sidebar_block border-bottom pb-3 mb-4" itemprop="organizer" itemscope="itemscope" itemtype="http://schema.org/Organization">
                             <h6 class="o_wevent_sidebar_title">Organizer</h6>
-                            <div class="mb-1" t-field="event.organizer_id"/>
-                            <small itemprop="location" t-field="event.organizer_id" t-options="{'widget': 'contact', 'fields': ['phone', 'mobile', 'email']}"/>
+                            <div itemprop="name" class="mb-1" t-field="event.organizer_id"/>
+                            <small t-field="event.organizer_id" t-options="{'widget': 'contact', 'fields': ['phone', 'mobile', 'email'], 'with_microdata': True,}"/>
                         </div>
                         <!-- Social -->
                         <div class="o_wevent_sidebar_block">
@@ -136,14 +144,13 @@
                 </div>
             </div>
         </section>
-        <t t-call="website_event.modal_ticket_registration"/>
     </t>
 </template>
 
 <!-- Event - Registration -->
+<!-- cta_additional_classes {string} - classes applied to the main CTA   -->
 <template id="registration_template" name="Registration">
-    <button t-if="event.event_registrations_open" type="button" data-bs-toggle="modal" data-bs-target="#modal_ticket_registration" class="btn btn-primary w-100">Register</button>
-    <div t-if="toast_message" class="o_wevent_register_toaster d-none" t-att-data-message="toast_message"/>
+    <button t-if="event.event_registrations_open" type="button" data-bs-toggle="modal" data-bs-target="#modal_ticket_registration" t-attf-class="btn btn-primary {{cta_additional_classes}}">Register</button>
     <t t-if="not event.event_registrations_open">
         <!-- Delayed registration time -->
         <div t-if="not event.event_registrations_started and not event.event_registrations_sold_out" class="alert alert-info mb-3 small" role="status">
@@ -348,7 +355,7 @@
                             <b>Start</b>
                         </div>
                         <div class="col ps-0">
-                            <span itemprop="startDate" t-out="event.date_begin_located"/>
+                            <span t-out="event.date_begin_located"/>
                             (<span t-out="event.date_tz"/>)
                         </div>
                     </div>
@@ -357,7 +364,7 @@
                             <b>End</b>
                         </div>
                         <div class="col ps-0">
-                            <span itemprop="endDate" t-out="event.date_end_located"/>
+                            <span t-out="event.date_end_located"/>
                             (<span t-out="event.date_tz"/>)
                         </div>
                     </div>
@@ -366,11 +373,11 @@
                             "widget": "contact",
                             "fields": ["name"]
                             }'/>
-                        <a itemprop="location" t-att-href="event.google_map_link()" target="_BLANK" temprop="location" t-field="event.address_id" t-options='{
+                        <a t-att-href="event.google_map_link()" target="_BLANK" t-field="event.address_id" t-options='{
                             "widget": "contact",
                             "fields": ["address"]
                             }'/>
-                        <div itemprop="contactInfo" t-field="event.organizer_id" t-options='{
+                        <div t-field="event.organizer_id" t-options='{
                             "widget": "contact",
                             "fields": ["phone", "mobile", "email"]
                             }'/>
@@ -469,9 +476,9 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="modal-footer flex-lg-row-reverse border-top">
+                        <div class="modal-footer flex-lg-row border-top">
                             <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
-                            <button type="submit" class="btn btn-primary o_wait_lazy_js a-submit" disabled="" t-attf-id="#{event.id}">
+                            <button type="submit" class="btn btn-primary a-submit" disabled="" t-attf-id="#{event.id}">
                                 Register
                                 <t t-if="event.seats_limited and event.seats_max and event.seats_available &lt;= (event.seats_max * 0.2)">
                                     (only <t t-out="event.seats_available"/> available)
@@ -519,9 +526,9 @@
                                 </t>
                             </div>
                         </div>
-                        <div class="modal-footer flex-lg-row-reverse border-top">
+                        <div class="modal-footer flex-lg-row border-top">
                             <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
-                            <button type="submit" class="btn btn-primary o_wait_lazy_js a-submit" t-attf-id="#{event.id}" disabled="disabled">
+                            <button type="submit" class="btn btn-primary a-submit" t-attf-id="#{event.id}" disabled="disabled">
                                 Register
                                 <t t-if="event.seats_limited and event.seats_max and event.seats_available &lt;= (event.seats_max * 0.2)">
                                     (only <t t-out="event.seats_available"/> available)

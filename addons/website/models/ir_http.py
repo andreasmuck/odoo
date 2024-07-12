@@ -90,7 +90,7 @@ class Http(models.AbstractModel):
         website_id = request.website_routing
         logger.debug("_generate_routing_rules for website: %s", website_id)
         rewrites = self._get_rewrites(website_id)
-        self._rewrite_len.cache.add_value(self, website_id, cache_value=len(rewrites))
+        self._rewrite_len.__cache__.add_value(self, website_id, cache_value=len(rewrites))
 
         for url, endpoint in super()._generate_routing_rules(modules, converters):
             if url in rewrites:
@@ -168,7 +168,7 @@ class Http(models.AbstractModel):
     @classmethod
     def _match(cls, path):
         if not hasattr(request, 'website_routing'):
-            website = request.env['website'].get_current_website()
+            website = request.env['website'].with_context(lang=None).get_current_website()
             request.website_routing = website.id
 
         return super()._match(path)
@@ -287,7 +287,17 @@ class Http(models.AbstractModel):
                 path += '?' + request.httprequest.query_string.decode('utf-8')
             return request.redirect(path, code=301)
 
-        if page and (request.env.user.has_group('website.group_website_designer') or page.is_visible):
+        if (
+            page
+            and (request.env.user.has_group('website.group_website_designer') or page.is_visible)
+            and (
+                # If a generic page (niche case) has been COWed and that COWed
+                # page received a URL change, it should not let you access the
+                # generic page anymore, despite having a different URL.
+                page.website_id
+                or not page.view_id._get_specific_views().filtered(lambda view: view.website_id == request.website)
+            )
+        ):
             _, ext = os.path.splitext(req_page)
             response = request.render(page.view_id.id, {
                 'main_object': page,

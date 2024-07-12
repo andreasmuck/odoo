@@ -37,7 +37,7 @@
                         <page string="Capacity by Product" name="product_capacity">
                             <field name="product_capacity_ids" context="{'default_storage_category_id': id, 'default_company_id': company_id}">
                                 <tree editable="bottom">
-                                    <field name="product_id" required="1" context="{'default_detailed_type': 'product'}"/>
+                                    <field name="product_id" required="1" context="{'default_is_storable': True}"/>
                                     <field name="quantity"/>
                                     <field name="product_uom_id" groups="uom.group_uom" options="{'no_create': True, 'no_open': True}"/>
                                     <field name="company_id" column_invisible="True"/>
@@ -97,6 +97,6 @@
         <field name="view_mode">tree</field>
     </record>
 
-    <menuitem id="menu_storage_categoty_config" action="action_storage_category" name="Storage Categories" parent="menu_warehouse_config" sequence="6" groups="stock.group_stock_storage_categories"/>
+    <menuitem id="menu_storage_categoty_config" action="action_storage_category" name="Storage Categories" parent="menu_warehouse_config" sequence="6" groups="stock.group_stock_multi_locations"/>
 
 </odoo>

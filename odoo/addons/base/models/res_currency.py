@@ -27,6 +27,7 @@ class Currency(models.Model):
 
     # Note: 'code' column was removed as of v6.0, the 'name' should now hold the ISO code.
     name = fields.Char(string='Currency', size=3, required=True, help="Currency Code (ISO 4217)")
+    iso_numeric = fields.Integer(string="Currency numeric code.", help="Currency Numeric Code (ISO 4217).")
     full_name = fields.Char(string='Name')
     symbol = fields.Char(help="Currency sign, to be used when printing amounts.", required=True)
     rate = fields.Float(compute='_compute_current_rate', string='Current Rate', digits=0,
@@ -71,12 +72,12 @@ class Currency(models.Model):
 
     def write(self, vals):
         res = super().write(vals)
-        if 'active' not in vals:
-            return res
-        if set(vals.keys()) & {'active', 'digits', 'position', 'symbol'}:
+        if vals.keys() & {'active', 'digits', 'position', 'symbol'}:
             # Currency info is cached to reduce the number of SQL queries when building the session
             # info. See `ir_http.get_currencies`.
             self.env.registry.clear_cache()
+        if 'active' not in vals:
+            return res
         self._toggle_group_multi_currency()
         return res
 
@@ -114,7 +115,7 @@ class Currency(models.Model):
             return
 
         currencies = self.filtered(lambda c: not c.active)
-        if self.env['res.company'].search([('currency_id', 'in', currencies.ids)]):
+        if self.env['res.company'].search_count([('currency_id', 'in', currencies.ids)], limit=1):
             raise UserError(_("This currency is set on a company and therefore cannot be deactivated."))
 
     def _get_rates(self, company, date):
@@ -148,7 +149,7 @@ class Currency(models.Model):
         # the subquery selects the last rate before 'date' for the given currency/company
         currency_rates = (self + to_currency)._get_rates(self.env.company, date)
         for currency in self:
-            currency.rate = currency_rates.get(to_currency.id) / currency_rates.get(currency.id)
+            currency.rate = (currency_rates.get(currency.id) or 1.0) / currency_rates.get(to_currency.id)
             currency.inverse_rate = 1 / currency.rate
             if currency != company.currency_id:
                 currency.rate_string = '1 %s = %.6f %s' % (to_currency.name, currency.rate, currency.name)
@@ -261,7 +262,7 @@ class Currency(models.Model):
             return 1
         company = company or self.env.company
         date = date or fields.Date.context_today(self)
-        return from_currency.with_company(company).with_context(to_currency=to_currency.id, date=str(date)).rate
+        return from_currency.with_company(company).with_context(to_currency=to_currency.id, date=str(date)).inverse_rate
 
     def _convert(self, from_amount, to_currency, company=None, date=None, round=True):  # noqa: A002 builtin-argument-shadowing
         """Returns the converted amount of ``from_amount``` from the currency
@@ -313,9 +314,14 @@ class Currency(models.Model):
         arch, view = super()._get_view(view_id, view_type, **options)
         if view_type in ('tree', 'form'):
             currency_name = (self.env['res.company'].browse(self._context.get('company_id')) or self.env.company.root_id).currency_id.name
-            for name, label in [['company_rate', _('Unit per %s', currency_name)],
-                                ['inverse_company_rate', _('%s per Unit', currency_name)]]:
-                if node := arch.xpath("//tree//field[@name=$name]", name=name):
+            fields_maps = [
+                [['company_rate', 'rate'], _('Unit per %s', currency_name)],
+                [['inverse_company_rate', 'inverse_rate'], _('%s per Unit', currency_name)],
+            ]
+            for fnames, label in fields_maps:
+                xpath_expression = '//tree//field[' + " or ".join(f"@name='{f}'" for f in fnames) + "][1]"
+                node = arch.xpath(xpath_expression)
+                if node:
                     node[0].set('string', label)
         return arch, view
 
@@ -365,12 +371,12 @@ class CurrencyRate(models.Model):
         return vals
 
     def write(self, vals):
-        self.env['res.currency'].invalidate_model(['rate'])
+        self.env['res.currency'].invalidate_model(['inverse_rate'])
         return super().write(self._sanitize_vals(vals))
 
     @api.model_create_multi
     def create(self, vals_list):
-        self.env['res.currency'].invalidate_model(['rate'])
+        self.env['res.currency'].invalidate_model(['inverse_rate'])
         return super().create([self._sanitize_vals(vals) for vals in vals_list])
 
     def _get_latest_rate(self):

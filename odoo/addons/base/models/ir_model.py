@@ -17,7 +17,7 @@ from psycopg2.sql import Identifier, SQL, Placeholder
 from odoo import api, fields, models, tools, _, _lt, Command
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.osv import expression
-from odoo.tools import pycompat, unique, OrderedSet
+from odoo.tools import format_list, pycompat, unique, OrderedSet, sql as sqltools
 from odoo.tools.safe_eval import safe_eval, datetime, dateutil, time
 
 _logger = logging.getLogger(__name__)
@@ -291,10 +291,10 @@ class IrModel(models.Model):
                     continue
 
                 table = current_model._table
-                kind = tools.table_kind(self._cr, table)
-                if kind == tools.TableKind.View:
+                kind = sqltools.table_kind(self._cr, table)
+                if kind == sqltools.TableKind.View:
                     self._cr.execute(sql.SQL('DROP VIEW {}').format(sql.Identifier(table)))
-                elif kind == tools.TableKind.Regular:
+                elif kind == sqltools.TableKind.Regular:
                     self._cr.execute(sql.SQL('DROP TABLE {} CASCADE').format(sql.Identifier(table)))
                 elif kind is not None:
                     _logger.warning(
@@ -310,7 +310,7 @@ class IrModel(models.Model):
         # Prevent manual deletion of module tables
         for model in self:
             if model.state != 'manual':
-                raise UserError(_("Model %r contains module data and cannot be removed.", model.name))
+                raise UserError(_("Model “%s” contains module data and cannot be removed.", model.name))
 
     def unlink(self):
         # prevent screwing up fields that depend on these models' fields
@@ -469,8 +469,8 @@ class IrModel(models.Model):
         for model_data in cr.dictfetchall():
             model_class = self._instanciate(model_data)
             Model = model_class._build_model(self.pool, cr)
-            kind = tools.table_kind(cr, Model._table)
-            if kind not in (tools.TableKind.Regular, None):
+            kind = sqltools.table_kind(cr, Model._table)
+            if kind not in (sqltools.TableKind.Regular, None):
                 _logger.info(
                     "Model %r is backed by table %r which is not a regular table (%r), disabling automatic schema management",
                     Model._name, Model._table, kind,
@@ -523,9 +523,9 @@ class IrModelFields(models.Model):
     copied = fields.Boolean(string='Copied',
                             compute='_compute_copied', store=True, readonly=False,
                             help="Whether the value is copied when duplicating a record.")
-    related = fields.Char(string='Related Field', help="The corresponding related field, if any. This must be a dot-separated list of field names.")
+    related = fields.Char(string='Related Field Definition', help="The corresponding related field, if any. This must be a dot-separated list of field names.")
     related_field_id = fields.Many2one('ir.model.fields', compute='_compute_related_field_id',
-                                       store=True, string="Related field", ondelete='cascade')
+                                       store=True, string="Related Field", ondelete='cascade')
     required = fields.Boolean()
     readonly = fields.Boolean()
     index = fields.Boolean(string='Indexed')
@@ -645,10 +645,18 @@ class IrModelFields(models.Model):
         for index, name in enumerate(names):
             field = self._get(model_name, name)
             if not field:
-                raise UserError(_("Unknown field name %r in related field %r", name, self.related))
+                raise UserError(_(
+                    'Unknown field name "%(field_name)s" in related field "%(related_field)s"',
+                    field_name=name,
+                    related_field=self.related,
+                ))
             model_name = field.relation
             if index < last and not field.relation:
-                raise UserError(_("Non-relational field name %r in related field %r", name, self.related))
+                raise UserError(_(
+                    'Non-relational field name "%(field_name)s" in related field "%(related_field)s"',
+                    field_name=name,
+                    related_field=self.related,
+                ))
         return field
 
     @api.constrains('related')
@@ -657,9 +665,17 @@ class IrModelFields(models.Model):
             if rec.state == 'manual' and rec.related:
                 field = rec._related_field()
                 if field.ttype != rec.ttype:
-                    raise ValidationError(_("Related field %r does not have type %r", rec.related, rec.ttype))
+                    raise ValidationError(_(
+                        'Related field "%(related_field)s" does not have type "%(type)s"',
+                        related_field=rec.related,
+                        type=rec.ttype,
+                    ))
                 if field.relation != rec.relation:
-                    raise ValidationError(_("Related field %r does not have comodel %r", rec.related, rec.relation))
+                    raise ValidationError(_(
+                        'Related field "%(related_field)s" does not have comodel "%(comodel)s"',
+                        related_field=rec.related,
+                        comodel=rec.relation,
+                    ))
 
     @api.onchange('related')
     def _onchange_related(self):
@@ -693,7 +709,7 @@ class IrModelFields(models.Model):
                 continue
             for seq in record.depends.split(","):
                 if not seq.strip():
-                    raise UserError(_("Empty dependency in %r", record.depends))
+                    raise UserError(_("Empty dependency in “%s”", record.depends))
                 model = self.env[record.model]
                 names = seq.strip().split(".")
                 last = len(names) - 1
@@ -702,9 +718,17 @@ class IrModelFields(models.Model):
                         raise UserError(_("Compute method cannot depend on field 'id'"))
                     field = model._fields.get(name)
                     if field is None:
-                        raise UserError(_("Unknown field %r in dependency %r", name, seq.strip()))
+                        raise UserError(_(
+                            'Unknown field “%(field)s” in dependency “%(dependency)s”',
+                            field=name,
+                            dependency=seq.strip(),
+                        ))
                     if index < last and not field.relational:
-                        raise UserError(_("Non-relational field %r in dependency %r", name, seq.strip()))
+                        raise UserError(_(
+                            'Non-relational field “%(field)s” in dependency “%(dependency)s”',
+                            field=name,
+                            dependency=seq.strip(),
+                        ))
                     model = model[name]
 
     @api.onchange('compute')
@@ -729,7 +753,7 @@ class IrModelFields(models.Model):
                 else:
                     currency_field = self._get(rec.model, rec.currency_field)
                     if not currency_field:
-                        raise ValidationError(_("Unknown field name %r in currency_field", rec.currency_field))
+                        raise ValidationError(_("Unknown field specified “%s” in currency_field", rec.currency_field))
 
                 if currency_field.ttype != 'many2one':
                     raise ValidationError(_("Currency field does not have type many2one"))
@@ -775,17 +799,17 @@ class IrModelFields(models.Model):
                         return
                 return {'warning': {
                     'title': _("Warning"),
-                    'message': _("The table %r if used for other, possibly incompatible fields.", self.relation_table),
+                    'message': _("The table “%s” is used by another, possibly incompatible field(s).", self.relation_table),
                 }}
 
-    @api.onchange('required', 'ttype', 'on_delete')
-    def _onchange_required(self):
+    @api.constrains('required', 'ttype', 'on_delete')
+    def _check_on_delete_required_m2o(self):
         for rec in self:
             if rec.ttype == 'many2one' and rec.required and rec.on_delete == 'set null':
-                return {'warning': {'title': _("Warning"), 'message': _(
+                raise ValidationError(_(
                     "The m2o field %s is required but declares its ondelete policy "
                     "as being 'set null'. Only 'restrict' and 'cascade' make sense.", rec.name,
-                )}}
+                ))
 
     def _get(self, model_name, name):
         """ Return the (sudoed) `ir.model.fields` record with the given model and name.
@@ -810,8 +834,8 @@ class IrModelFields(models.Model):
             is_model = model is not None
             if field.store:
                 # TODO: Refactor this brol in master
-                if is_model and tools.column_exists(self._cr, model._table, field.name) and \
-                        tools.table_kind(self._cr, model._table) == tools.TableKind.Regular:
+                if is_model and sqltools.column_exists(self._cr, model._table, field.name) and \
+                        sqltools.table_kind(self._cr, model._table) == sqltools.TableKind.Regular:
                     self._cr.execute(sql.SQL('ALTER TABLE {} DROP COLUMN {} CASCADE').format(
                         sql.Identifier(model._table), sql.Identifier(field.name),
                     ))
@@ -871,8 +895,8 @@ class IrModelFields(models.Model):
             if not uninstalling:
                 field, dep = failed_dependencies[0]
                 raise UserError(_(
-                    "The field '%s' cannot be removed because the field '%s' depends on it.",
-                    field, dep,
+                    "The field '%(field)s' cannot be removed because the field '%(other_field)s' depends on it.",
+                    field=field, other_field=dep,
                 ))
             else:
                 self = self.union(*[
@@ -902,9 +926,9 @@ class IrModelFields(models.Model):
         except Exception:
             if not uninstalling:
                 raise UserError(_(
-                    "Cannot rename/delete fields that are still present in views:\nFields: %s\nView: %s",
-                    ", ".join(str(f) for f in fields),
-                    view.name,
+                    "Cannot rename/delete fields that are still present in views:\nFields: %(fields)s\nView: %(view)s",
+                    fields=format_list(self.env, [str(f) for f in fields]),
+                    view=view.name,
                 ))
             else:
                 # uninstall mode
@@ -940,7 +964,7 @@ class IrModelFields(models.Model):
 
         # discard the removed fields from fields to compute
         for field in fields:
-            self.env.all.tocompute.pop(field, None)
+            self.env.transaction.tocompute.pop(field, None)
 
         model_names = self.mapped('model')
         self._drop_column()
@@ -984,7 +1008,7 @@ class IrModelFields(models.Model):
                     ('model', '=', vals['relation']),
                     ('name', '=', vals['relation_field']),
                 ]):
-                    raise UserError(_("Many2one %s on model %s does not exist!", vals['relation_field'], vals['relation']))
+                    raise UserError(_("Many2one %(field)s on model %(model)s does not exist!", field=vals['relation_field'], model=vals['relation']))
 
         if any(model in self.pool for model in models):
             # setup models; this re-initializes model in registry
@@ -1709,8 +1733,8 @@ class IrModelSelection(models.Model):
             else:
                 # this shouldn't happen... simply a sanity check
                 raise ValueError(_(
-                    "The ondelete policy %r is not valid for field %r",
-                    ondelete, selection
+                    'The ondelete policy "%(policy)s" is not valid for field "%(field)s"',
+                    policy=ondelete, field=selection,
                 ))
 
     def _get_records(self):
@@ -1751,13 +1775,9 @@ class IrModelConstraint(models.Model):
          'Constraints with the same name are unique per module.'),
     ]
 
-    def _module_data_uninstall(self):
-        """
-        Delete PostgreSQL foreign keys and constraints tracked by this model.
-        """
-        if not self.env.is_system():
-            raise AccessError(_('Administrator access is required to uninstall a module'))
-
+    def unlink(self):
+        self.check_access_rights('unlink')
+        self.check_access_rule('unlink')
         ids_set = set(self.ids)
         for data in self.sorted(key='id', reverse=True):
             name = tools.ustr(data.name)
@@ -1788,7 +1808,7 @@ class IrModelConstraint(models.Model):
                     _logger.info('Dropped FK CONSTRAINT %s@%s', name, data.model.model)
 
             if typ == 'u':
-                hname = tools.make_identifier(name)
+                hname = sqltools.make_identifier(name)
                 # test if constraint exists
                 # Since type='u' means any "other" constraint, to avoid issues we limit to
                 # 'c' -> check, 'u' -> unique, 'x' -> exclude constraints, effective leaving
@@ -1802,7 +1822,7 @@ class IrModelConstraint(models.Model):
                         sql.Identifier(table), sql.Identifier(hname)))
                     _logger.info('Dropped CONSTRAINT %s@%s', name, data.model.model)
 
-        self.unlink()
+        return super().unlink()
 
     def copy_data(self, default=None):
         vals_list = super().copy_data(default=default)
@@ -1872,9 +1892,11 @@ class IrModelConstraint(models.Model):
             conname = '%s_%s' % (model._table, key)
             module = constraint_module.get(key)
             record = self._reflect_constraint(model, conname, 'u', cons_text(definition), module, message)
+            xml_id = '%s.constraint_%s' % (module, conname)
             if record:
-                xml_id = '%s.constraint_%s' % (module, conname)
                 data_list.append(dict(xml_id=xml_id, record=record))
+            else:
+                self.env['ir.model.data']._load_xmlid(xml_id)
         if data_list:
             self.env['ir.model.data']._update_xmlids(data_list)
 
@@ -1914,7 +1936,7 @@ class IrModelRelation(models.Model):
                 # as installed modules have defined this element we must not delete it!
                 continue
 
-            if tools.table_exists(self._cr, name):
+            if sqltools.table_exists(self._cr, name):
                 to_drop.add(name)
 
         self.unlink()
@@ -1964,6 +1986,7 @@ class IrModelAccess(models.Model):
     def group_names_with_access(self, model_name, access_mode):
         """ Return the names of visible groups which have been granted
             ``access_mode`` on the model ``model_name``.
+
            :rtype: list
         """
         assert access_mode in ('read', 'write', 'create', 'unlink'), 'Invalid access mode'
@@ -1980,6 +2003,25 @@ class IrModelAccess(models.Model):
           ORDER BY c.name, g.name NULLS LAST
         """, [lang, lang, model_name])
         return [('%s/%s' % x) if x[0] else x[1] for x in self._cr.fetchall()]
+
+    @api.model
+    @tools.ormcache('model_name', 'access_mode')
+    def _get_access_groups(self, model_name, access_mode='read'):
+        """ Return the group expression object that represents the users who
+        have ``access_mode`` to the model ``model_name``.
+        """
+        assert access_mode in ('read', 'write', 'create', 'unlink'), 'Invalid access mode'
+        model = self.env['ir.model']._get(model_name)
+        accesses = self.sudo().search([
+            (f'perm_{access_mode}', '=', True), ('model_id', '=', model.id),
+        ])
+
+        group_definitions = self.env['res.groups']._get_group_definitions()
+        if not accesses:
+            return group_definitions.empty
+        if not all(access.group_id for access in accesses):  # there is some global access
+            return group_definitions.universe
+        return group_definitions.from_ids(accesses.group_id.ids)
 
     # The context parameter is useful when the method translates error messages.
     # But as the method raises an exception in that case,  the key 'lang' might
@@ -2146,9 +2188,9 @@ class IrModelData(models.Model):
 
     def _auto_init(self):
         res = super(IrModelData, self)._auto_init()
-        tools.create_unique_index(self._cr, 'ir_model_data_module_name_uniq_index',
+        sqltools.create_unique_index(self._cr, 'ir_model_data_module_name_uniq_index',
                                   self._table, ['module', 'name'])
-        tools.create_index(self._cr, 'ir_model_data_model_res_id_index',
+        sqltools.create_index(self._cr, 'ir_model_data_model_res_id_index',
                            self._table, ['model', 'res_id'])
         return res
 
@@ -2204,7 +2246,7 @@ class IrModelData(models.Model):
         if self.env[model].search([('id', '=', res_id)]):
             return model, res_id
         if raise_on_access_error:
-            raise AccessError(_('Not enough access rights on the external ID %r', '%s.%s', (module, xml_id)))
+            raise AccessError(_('Not enough access rights on the external ID "%(module)s.%(xml_id)s"', module=module, xml_id=xml_id))
         return model, False
 
     def copy_data(self, default=None):
@@ -2214,13 +2256,25 @@ class IrModelData(models.Model):
             vals['name'] = "%s_%s" % (model.name, rand)
         return vals_list
 
+    @api.model_create_multi
+    def create(self, vals_list):
+        res = super().create(vals_list)
+        if any(vals.get('model') == 'res.groups' for vals in vals_list):
+            self.env.registry.clear_cache('groups')
+        return res
+
     def write(self, values):
         self.env.registry.clear_cache()  # _xmlid_lookup
-        return super().write(values)
+        res = super().write(values)
+        if values.get('model') == 'res.groups':
+            self.env.registry.clear_cache('groups')
+        return res
 
     def unlink(self):
         """ Regular unlink method, but make sure to clear the caches. """
         self.env.registry.clear_cache()  # _xmlid_lookup
+        if self and any(data.model == 'res.groups' for data in self.exists()):
+            self.env.registry.clear_cache('groups')
         return super(IrModelData, self).unlink()
 
     def _lookup_xmlids(self, xml_ids, model):
@@ -2277,7 +2331,7 @@ class IrModelData(models.Model):
                     for module, name, model, res_id, create_date, write_date in result:
                         # small optimisation: during install a lot of xmlid are created/updated.
                         # Instead of clearing the cache, set the correct value in the cache to avoid a bunch of query
-                        self._xmlid_lookup.cache.add_value(self, f"{module}.{name}", cache_value=(model, res_id))
+                        self._xmlid_lookup.__cache__.add_value(self, f"{module}.{name}", cache_value=(model, res_id))
                         if create_date != write_date:
                             # something was updated, notify other workers
                             # it is possible that create_date and write_date
@@ -2292,6 +2346,9 @@ class IrModelData(models.Model):
 
         # update loaded_xmlids
         self.pool.loaded_xmlids.update("%s.%s" % row[:2] for row in rows)
+
+        if any(row[2] == 'res.groups' for row in rows):
+            self.env.registry.clear_cache('groups')
 
     # NOTE: this method is overriden in web_studio; if you need to make another
     #  override, make sure it is compatible with the one that is there.
@@ -2445,8 +2502,6 @@ class IrModelData(models.Model):
         modules._remove_copied_views()
 
         # remove constraints
-        constraints = self.env['ir.model.constraint'].search([('module', 'in', modules.ids)])
-        constraints._module_data_uninstall()
         delete(self.env['ir.model.constraint'].browse(unique(constraint_ids)))
 
         # If we delete a selection field, and some of its values have ondelete='cascade',

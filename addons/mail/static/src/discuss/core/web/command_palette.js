@@ -40,32 +40,31 @@ commandProviderRegistry.add("mail.partner", {
      * @param {import("@web/env").OdooEnv} env
      */
     async provide(env, options) {
-        const messaging = env.services["mail.messaging"];
-        await messaging.store.channels.fetch();
-        const threadService = env.services["mail.thread"];
+        const store = env.services["mail.store"];
+        await store.channels.fetch();
         const suggestionService = env.services["mail.suggestion"];
         const commands = [];
-        const mentionedChannels = threadService.getNeedactionChannels();
+        const mentionedChannels = store.getNeedactionChannels();
         // We don't want to display the same channel twice in the command palette.
         const displayedPartnerIds = new Set();
         if (!options.searchValue) {
             mentionedChannels.slice(0, 3).map((channel) => {
                 if (channel.channel_type === "chat") {
-                    displayedPartnerIds.add(channel.correspondent.id);
+                    displayedPartnerIds.add(channel.correspondent.persona.id);
                 }
                 commands.push({
                     Component: DiscussCommand,
                     async action() {
                         switch (channel.channel_type) {
                             case "chat":
-                                threadService.openChat({ partnerId: channel.correspondent.id });
+                                store.openChat({ partnerId: channel.correspondent.persona.id });
                                 break;
                             case "group":
-                                threadService.open(channel);
+                                channel.open();
                                 break;
                             case "channel": {
-                                await threadService.joinChannel(channel.id, channel.name);
-                                threadService.open(channel);
+                                await store.joinChannel(channel.id, channel.name);
+                                channel.open();
                             }
                         }
                     },
@@ -74,22 +73,24 @@ commandProviderRegistry.add("mail.partner", {
                     props: {
                         imgUrl: channel.avatarUrl,
                         persona:
-                            channel.channel_type === "chat" ? channel.correspondent : undefined,
+                            channel.channel_type === "chat"
+                                ? channel.correspondent.persona
+                                : undefined,
                         counter: channel.importantCounter,
                     },
                 });
             });
         }
-        const searchResults = await messaging.searchPartners(options.searchValue);
+        const searchResults = await store.searchPartners(options.searchValue);
         suggestionService
             .sortPartnerSuggestions(searchResults, options.searchValue)
             .filter((partner) => !displayedPartnerIds.has(partner.id))
             .map((partner) => {
-                const chat = threadService.searchChat(partner);
+                const chat = partner.searchChat();
                 commands.push({
                     Component: DiscussCommand,
                     action() {
-                        threadService.openChat({ partnerId: partner.id });
+                        store.openChat({ partnerId: partner.id });
                     },
                     name: partner.name,
                     props: {
@@ -120,11 +121,10 @@ commandProviderRegistry.add("discuss.channel", {
      * @param {import("@web/env").OdooEnv} env
      */
     async provide(env, options) {
-        const messaging = env.services["mail.messaging"];
-        await messaging.store.channels.fetch();
-        const threadService = env.services["mail.thread"];
+        const store = env.services["mail.store"];
+        await store.channels.fetch();
         const commands = [];
-        const recentChannels = threadService.getRecentChannels();
+        const recentChannels = store.getRecentChannels();
         // We don't want to display the same thread twice in the command palette.
         const shownChannels = new Set();
         if (!options.searchValue) {
@@ -136,8 +136,8 @@ commandProviderRegistry.add("discuss.channel", {
                     commands.push({
                         Component: DiscussCommand,
                         async action() {
-                            await threadService.joinChannel(channel.id, channel.name);
-                            threadService.open(channel);
+                            await store.joinChannel(channel.id, channel.name);
+                            channel.open();
                         },
                         name: channel.displayName,
                         category: "discuss_recent",
@@ -152,7 +152,7 @@ commandProviderRegistry.add("discuss.channel", {
             ["channel_type", "=", "channel"],
             ["name", "ilike", cleanTerm(options.searchValue)],
         ];
-        const channelsData = await messaging.orm.searchRead(
+        const channelsData = await env.services.orm.searchRead(
             "discuss.channel",
             domain,
             ["channel_type", "name", "avatar_cache_key"],
@@ -164,8 +164,8 @@ commandProviderRegistry.add("discuss.channel", {
                 commands.push({
                     Component: DiscussCommand,
                     async action() {
-                        const channel = await threadService.joinChannel(data.id, data.name);
-                        threadService.open(channel);
+                        const channel = await store.joinChannel(data.id, data.name);
+                        channel.open();
                     },
                     name: data.name,
                     props: {
@@ -185,7 +185,7 @@ commandProviderRegistry.add("discuss.channel", {
             commands.push({
                 Component: DiscussCommand,
                 async action() {
-                    threadService.open(channel);
+                    channel.open();
                 },
                 name: channel.displayName,
                 props: {

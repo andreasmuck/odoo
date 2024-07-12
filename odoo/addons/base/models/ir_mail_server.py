@@ -22,7 +22,7 @@ from urllib3.contrib.pyopenssl import PyOpenSSLContext
 
 from odoo import api, fields, models, tools, _
 from odoo.exceptions import UserError
-from odoo.tools import ustr, pycompat, formataddr, email_normalize, encapsulate_email, email_domain_extract, email_domain_normalize
+from odoo.tools import ustr, pycompat, formataddr, email_normalize, encapsulate_email, email_domain_extract, email_domain_normalize, human_size
 
 
 _logger = logging.getLogger(__name__)
@@ -33,6 +33,31 @@ SMTP_TIMEOUT = 60
 
 class MailDeliveryException(Exception):
     """Specific exception subclass for mail delivery errors"""
+
+
+def make_wrap_property(name):
+    return property(
+        lambda self: getattr(self.__obj__, name),
+        lambda self, value: setattr(self.__obj__, name, value),
+    )
+
+
+class SMTPConnection:
+    """Wrapper around smtplib.SMTP and smtplib.SMTP_SSL"""
+    def __init__(self, server, port, encryption, context=None):
+        if encryption == 'ssl':
+            self.__obj__ = smtplib.SMTP_SSL(server, port, timeout=SMTP_TIMEOUT, context=context)
+        else:
+            self.__obj__ = smtplib.SMTP(server, port, timeout=SMTP_TIMEOUT)
+
+
+SMTP_ATTRIBUTES = [
+    'auth', 'auth_cram_md5', 'auth_login', 'auth_plain', 'close', 'data', 'docmd', 'ehlo', 'ehlo_or_helo_if_needed',
+    'expn', 'from_filter', 'getreply', 'has_extn', 'login', 'mail', 'noop', 'putcmd', 'quit', 'rcpt', 'rset',
+    'send_message', 'sendmail', 'set_debuglevel', 'smtp_from', 'starttls', 'verify', '_host',
+]
+for name in SMTP_ATTRIBUTES:
+    setattr(SMTPConnection, name, make_wrap_property(name))
 
 
 # Python 3: patch SMTP's internal printer/debugger
@@ -131,9 +156,18 @@ class IrMailServer(models.Model):
     smtp_debug = fields.Boolean(string='Debugging', help="If enabled, the full output of SMTP sessions will "
                                                          "be written to the server log at DEBUG level "
                                                          "(this is very verbose and may include confidential info!)")
+    max_email_size = fields.Float(string="Max Email Size")
     sequence = fields.Integer(string='Priority', default=10, help="When no specific mail server is requested for a mail, the highest priority one "
                                                                   "is used. Default priority is 10 (smaller number = higher priority)")
     active = fields.Boolean(default=True)
+
+    _sql_constraints = [
+        (
+            'certificate_requires_tls',
+            "CHECK(smtp_encryption != 'none' OR smtp_authentication != 'certificate')",
+            "Certificate-based authentication requires a TLS transport"
+        ),
+    ]
 
     @api.depends('smtp_authentication')
     def _compute_smtp_authentication_info(self):
@@ -153,14 +187,14 @@ class IrMailServer(models.Model):
             else:
                 server.smtp_authentication = False
 
-    @api.constrains('smtp_ssl_certificate', 'smtp_ssl_private_key')
+    @api.constrains('smtp_authentication', 'smtp_ssl_certificate', 'smtp_ssl_private_key')
     def _check_smtp_ssl_files(self):
-        """We must provided both files or none."""
         for mail_server in self:
-            if mail_server.smtp_ssl_certificate and not mail_server.smtp_ssl_private_key:
-                raise UserError(_('SSL private key is missing for %s.', mail_server.name))
-            elif mail_server.smtp_ssl_private_key and not mail_server.smtp_ssl_certificate:
-                raise UserError(_('SSL certificate is missing for %s.', mail_server.name))
+            if mail_server.smtp_authentication == 'certificate':
+                if not mail_server.smtp_ssl_private_key:
+                    raise UserError(_('SSL private key is missing for %s.', mail_server.name))
+                if not mail_server.smtp_ssl_certificate:
+                    raise UserError(_('SSL certificate is missing for %s.', mail_server.name))
 
     def write(self, vals):
         """Ensure we cannot archive a server in-use"""
@@ -191,11 +225,11 @@ class IrMailServer(models.Model):
                                         for line in usage_details_per_server[server])
         if is_multiple_server_usage:
             raise UserError(
-                _('You cannot archive these Outgoing Mail Servers (%s) because they are still used in the following case(s):\n%s',
-                  error_server_usage, error_usage_details))
+                _('You cannot archive these Outgoing Mail Servers (%(server_usage)s) because they are still used in the following case(s):\n%(usage_details)s',
+                  server_usage=error_server_usage, usage_details=error_usage_details))
         raise UserError(
-            _('You cannot archive this Outgoing Mail Server (%s) because it is still used in the following case(s):\n%s',
-              error_server_usage, error_usage_details))
+            _('You cannot archive this Outgoing Mail Server (%(server_usage)s) because it is still used in the following case(s):\n%(usage_details)s',
+              server_usage=error_server_usage, usage_details=error_usage_details))
 
     def _active_usages_compute(self):
         """Compute a dict server id to list of user-friendly outgoing mail servers usage of this record set.
@@ -205,6 +239,11 @@ class IrMailServer(models.Model):
         :return dict: { ir_mail_server.id: usage_str_list }.
         """
         return dict()
+
+    def _get_max_email_size(self):
+        if self.max_email_size:
+            return self.max_email_size
+        return float(self.env['ir.config_parameter'].sudo().get_param('base.default_max_email_size', '10'))
 
     def _get_test_email_from(self):
         self.ensure_one()
@@ -226,7 +265,16 @@ class IrMailServer(models.Model):
     def _get_test_email_to(self):
         return "noreply@odoo.com"
 
-    def test_smtp_connection(self):
+    def test_smtp_connection(self, autodetect_max_email_size=False):
+        """Test the connection and if autodetect_max_email_size, set auto-detected max email size.
+
+        :param bool autodetect_max_email_size: whether to autodetect the max email size
+        :return (dict): client action to notify the user of the result of the operation (connection test or
+        auto-detection successful depending on the autodetect_max_email_size parameter)
+
+        :raises UserError: if the connection fails and if autodetect_max_email_size and
+            the server doesn't support the auto-detection of email max size
+        """
         for server in self:
             smtp = False
             try:
@@ -237,36 +285,42 @@ class IrMailServer(models.Model):
                 # Testing the MAIL FROM step should detect sender filter problems
                 (code, repl) = smtp.mail(email_from)
                 if code != 250:
-                    raise UserError(_('The server refused the sender address (%(email_from)s) with error %(repl)s', email_from=email_from, repl=repl))
+                    raise UserError(_('The server refused the sender address (%(email_from)s) with error %(repl)s', email_from=email_from, repl=repl))  # noqa: TRY301
                 # Testing the RCPT TO step should detect most relaying problems
                 (code, repl) = smtp.rcpt(email_to)
                 if code not in (250, 251):
-                    raise UserError(_('The server refused the test recipient (%(email_to)s) with error %(repl)s', email_from=email_from, repl=repl))
+                    raise UserError(_('The server refused the test recipient (%(email_to)s) with error %(repl)s', email_to=email_to, repl=repl))  # noqa: TRY301
                 # Beginning the DATA step should detect some deferred rejections
                 # Can't use self.data() as it would actually send the mail!
                 smtp.putcmd("data")
                 (code, repl) = smtp.getreply()
                 if code != 354:
-                    raise UserError(_('The server refused the test connection with error %(repl)s', repl=repl))
-            except UserError as e:
-                # let UserErrors (messages) bubble up
-                raise e
+                    raise UserError(_('The server refused the test connection with error %(repl)s', repl=repl))  # noqa: TRY301
+                if autodetect_max_email_size:
+                    max_size = smtp.esmtp_features.get('size')
+                    if not max_size:
+                        raise UserError(_('The server "%(server_name)s" doesn\'t return the maximum email size.',
+                                          server_name=server.name))
+                    server.max_email_size = float(max_size) / (1024 ** 2)
             except (UnicodeError, idna.core.InvalidCodepoint) as e:
-                raise UserError(_("Invalid server name!\n %s", ustr(e)))
+                raise UserError(_("Invalid server name!\n %s", e)) from e
             except (gaierror, timeout) as e:
-                raise UserError(_("No response received. Check server address and port number.\n %s", ustr(e)))
+                raise UserError(_("No response received. Check server address and port number.\n %s", e)) from e
             except smtplib.SMTPServerDisconnected as e:
-                raise UserError(_("The server has closed the connection unexpectedly. Check configuration served on this port number.\n %s", ustr(e.strerror)))
+                raise UserError(_("The server has closed the connection unexpectedly. Check configuration served on this port number.\n %s", e)) from e
             except smtplib.SMTPResponseException as e:
-                raise UserError(_("Server replied with following exception:\n %s", ustr(e.smtp_error)))
+                raise UserError(_("Server replied with following exception:\n %s", e)) from e
             except smtplib.SMTPNotSupportedError as e:
-                raise UserError(_("An option is not supported by the server:\n %s", e.strerror))
+                raise UserError(_("An option is not supported by the server:\n %s", e)) from e
             except smtplib.SMTPException as e:
-                raise UserError(_("An SMTP exception occurred. Check port number and connection security type.\n %s", ustr(e)))
-            except SSLError as e:
-                raise UserError(_("An SSL exception occurred. Check connection security type.\n %s", ustr(e)))
+                raise UserError(_("An SMTP exception occurred. Check port number and connection security type.\n %s", e)) from e
+            except (ssl.SSLError, SSLError) as e:
+                raise UserError(_("An SSL exception occurred. Check connection security type.\n %s", e)) from e
+            except UserError:
+                raise
             except Exception as e:
-                raise UserError(_("Connection Test Failed! Here is what we got instead:\n %s", ustr(e)))
+                _logger.warning("Connection test on %s failed with a generic error.", server, exc_info=True)
+                raise UserError(_("Connection Test Failed! Here is what we got instead:\n %s", e)) from e
             finally:
                 try:
                     if smtp:
@@ -275,7 +329,12 @@ class IrMailServer(models.Model):
                     # ignored, just a consequence of the previous exception
                     pass
 
-        message = _("Connection Test Successful!")
+        if autodetect_max_email_size:
+            message = _(
+                'Email maximum size updated (%(details)s).',
+                details=', '.join(f'{server.name}: {human_size(server.max_email_size * 1024 ** 2)}' for server in self))
+        else:
+            message = _('Connection Test Successful!')
         return {
             'type': 'ir.actions.client',
             'tag': 'display_notification',
@@ -283,8 +342,13 @@ class IrMailServer(models.Model):
                 'message': message,
                 'type': 'success',
                 'sticky': False,
-            }
+                'next': {'type': 'ir.actions.act_window_close'},  # force a form reload
+            },
         }
+
+    def action_retrieve_max_email_size(self):
+        self.ensure_one()
+        return self.test_smtp_connection(autodetect_max_email_size=True)
 
     def connect(self, host=None, port=None, user=None, password=None, encryption=None,
                 smtp_from=None, ssl_certificate=None, ssl_private_key=None, smtp_debug=False, mail_server_id=None,
@@ -337,9 +401,7 @@ class IrMailServer(models.Model):
             smtp_encryption = mail_server.smtp_encryption
             smtp_debug = smtp_debug or mail_server.smtp_debug
             from_filter = mail_server.from_filter
-            if (mail_server.smtp_authentication == "certificate"
-               and mail_server.smtp_ssl_certificate
-               and mail_server.smtp_ssl_private_key):
+            if mail_server.smtp_authentication == "certificate":
                 try:
                     ssl_context = PyOpenSSLContext(ssl.PROTOCOL_TLS)
                     smtp_ssl_certificate = base64.b64decode(mail_server.smtp_ssl_certificate)
@@ -396,10 +458,7 @@ class IrMailServer(models.Model):
                       "You could use STARTTLS instead. "
                        "If SSL is needed, an upgrade to Python 2.6 on the server-side "
                        "should do the trick."))
-            connection = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=SMTP_TIMEOUT)
-        else:
-            connection = smtplib.SMTP(smtp_server, smtp_port, timeout=SMTP_TIMEOUT)
-
+        connection = SMTPConnection(smtp_server, smtp_port, smtp_encryption, context=ssl_context)
         connection.set_debuglevel(smtp_debug)
         if smtp_encryption == 'starttls':
             # starttls() will perform ehlo() if needed first
@@ -484,7 +543,7 @@ class IrMailServer(models.Model):
         msg = EmailMessage(policy=email.policy.SMTP)
         if not message_id:
             if object_id:
-                message_id = tools.generate_tracking_message_id(object_id)
+                message_id = tools.mail.generate_tracking_message_id(object_id)
             else:
                 message_id = make_msgid()
         msg['Message-Id'] = message_id
@@ -686,8 +745,12 @@ class IrMailServer(models.Model):
         except smtplib.SMTPServerDisconnected:
             raise
         except Exception as e:
-            params = (ustr(smtp_server), e.__class__.__name__, ustr(e))
-            msg = _("Mail delivery failed via SMTP server '%s'.\n%s: %s", *params)
+            msg = _(
+                "Mail delivery failed via SMTP server '%(server)s'.\n%(exception_name)s: %(message)s",
+                server=smtp_server,
+                exception_name=e.__class__.__name__,
+                message=e,
+            )
             _logger.info(msg)
             raise MailDeliveryException(_("Mail Delivery Failed"), msg)
         return message_id

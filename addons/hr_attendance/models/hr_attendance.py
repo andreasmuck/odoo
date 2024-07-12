@@ -1,20 +1,22 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import pytz
 
+from calendar import monthrange
 from collections import defaultdict
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 from operator import itemgetter
 from pytz import timezone
+from random import randint
 
 from odoo import models, fields, api, exceptions, _
 from odoo.addons.resource.models.utils import Intervals
 from odoo.tools import format_datetime
 from odoo.osv.expression import AND, OR
 from odoo.tools.float_utils import float_is_zero
-from odoo.exceptions import AccessError
-from odoo.tools import format_duration
+from odoo.exceptions import AccessDenied, AccessError
+from odoo.tools import convert, format_duration
 
 def get_google_maps_url(latitude, longitude):
     return "https://maps.google.com?q=%s,%s" % (latitude, longitude)
@@ -29,9 +31,12 @@ class HrAttendance(models.Model):
     def _default_employee(self):
         return self.env.user.employee_id
 
-    employee_id = fields.Many2one('hr.employee', string="Employee", default=_default_employee, required=True, ondelete='cascade', index=True)
+    employee_id = fields.Many2one('hr.employee', string="Employee", default=_default_employee, required=True,
+        ondelete='cascade', index=True, group_expand='_read_group_employee_id')
     department_id = fields.Many2one('hr.department', string="Department", related="employee_id.department_id",
         readonly=True)
+    manager_id = fields.Many2one(comodel_name='hr.employee', related="employee_id.parent_id", readonly=True,
+        export_string_translation=False)
     check_in = fields.Datetime(string="Check In", default=fields.Datetime.now, required=True, tracking=True)
     check_out = fields.Datetime(string="Check Out", tracking=True)
     worked_hours = fields.Float(string='Worked Hours', compute='_compute_worked_hours', store=True, readonly=True)
@@ -75,19 +80,31 @@ class HrAttendance(models.Model):
             self.env['hr.attendance'].flush_model(['worked_hours'])
             self.env['hr.attendance.overtime'].flush_model(['duration'])
             self.env.cr.execute('''
-                SELECT att.id as att_id,
-                       att.worked_hours as att_wh,
-                       ot.id as ot_id,
-                       ot.duration as ot_d,
-                       ot.date as od,
-                       att.check_in as ad
+                WITH employee_time_zones AS (
+                    SELECT employee.id AS employee_id,
+                           calendar.tz AS timezone
+                      FROM hr_employee employee
+                INNER JOIN resource_calendar calendar
+                        ON calendar.id = employee.resource_calendar_id
+                )
+                SELECT att.id AS att_id,
+                       att.worked_hours AS att_wh,
+                       ot.id AS ot_id,
+                       ot.duration AS ot_d,
+                       ot.date AS od,
+                       att.check_in AS ad
                   FROM hr_attendance att
-             INNER JOIN hr_attendance_overtime ot
-                    ON date_trunc('day',att.check_in) = date_trunc('day', ot.date)
-                    AND date_trunc('day',att.check_out) = date_trunc('day', ot.date)
-                    AND att.employee_id IN %s
-                    AND att.employee_id = ot.employee_id
-                    ORDER BY att.check_in DESC
+            INNER JOIN employee_time_zones etz
+                    ON att.employee_id = etz.employee_id
+            INNER JOIN hr_attendance_overtime ot
+                    ON date_trunc('day',
+                                  CAST(att.check_in
+                                           AT TIME ZONE 'utc'
+                                           AT TIME ZONE etz.timezone
+                                  as date)) = date_trunc('day', ot.date)
+                   AND att.employee_id = ot.employee_id
+                   AND att.employee_id IN %s
+              ORDER BY att.check_in DESC
             ''', (tuple(self.employee_id.ids),))
             a = self.env.cr.dictfetchall()
             grouped_dict = dict()
@@ -124,10 +141,10 @@ class HrAttendance(models.Model):
                 )
             else:
                 attendance.display_name = _(
-                    "%s : (%s-%s)",
-                    format_duration(attendance.worked_hours),
-                    format_datetime(self.env, attendance.check_in, dt_format="HH:mm"),
-                    format_datetime(self.env, attendance.check_out, dt_format="HH:mm"),
+                    "%(worked_hours)s (%(check_in)s-%(check_out)s)",
+                    worked_hours=format_duration(attendance.worked_hours),
+                    check_in=format_datetime(self.env, attendance.check_in, dt_format="HH:mm"),
+                    check_out=format_datetime(self.env, attendance.check_out, dt_format="HH:mm"),
                 )
 
     def _get_employee_calendar(self):
@@ -143,9 +160,8 @@ class HrAttendance(models.Model):
                 tz = timezone(calendar.tz)
                 check_in_tz = attendance.check_in.astimezone(tz)
                 check_out_tz = attendance.check_out.astimezone(tz)
-                lunch_intervals = calendar._attendance_intervals_batch(
-                    check_in_tz, check_out_tz, resource, lunch=True)
-                attendance_intervals = Intervals([(check_in_tz, check_out_tz, attendance)]) - lunch_intervals[resource.id]
+                lunch_intervals = attendance.employee_id._employee_attendance_intervals(check_in_tz, check_out_tz, lunch=True)
+                attendance_intervals = Intervals([(check_in_tz, check_out_tz, attendance)]) - lunch_intervals
                 delta = sum((i[1] - i[0]).total_seconds() for i in attendance_intervals)
                 attendance.worked_hours = delta / 3600.0
             else:
@@ -259,17 +275,7 @@ class HrAttendance(models.Model):
 
             # Retrieve expected attendance intervals
             calendar = emp.resource_calendar_id or emp.company_id.resource_calendar_id
-            expected_attendances = calendar._attendance_intervals_batch(
-                start, stop, emp.resource_id
-            )[emp.resource_id.id]
-            # Substract Global Leaves and Employee's Leaves
-            leave_intervals = calendar._leave_intervals_batch(
-                start, stop, emp.resource_id, domain=AND([
-                    self._get_overtime_leave_domain(),
-                    [('company_id', 'in', [False, emp.company_id.id])],
-                ])
-            )
-            expected_attendances -= leave_intervals[False] | leave_intervals[emp.resource_id.id]
+            expected_attendances = emp._employee_attendance_intervals(start, stop)
 
             # working_times = {date: [(start, stop)]}
             working_times = defaultdict(lambda: [])
@@ -344,8 +350,8 @@ class HrAttendance(models.Model):
                                 stop_dt = min(planned_end_dt, local_check_out)
                                 work_duration += (stop_dt - start_dt).total_seconds() / 3600.0
                                 # remove lunch time from work duration
-                                lunch_intervals = calendar._attendance_intervals_batch(start_dt, stop_dt, emp.resource_id, lunch=True)
-                                work_duration -= sum((i[1] - i[0]).total_seconds() / 3600.0 for i in lunch_intervals[emp.resource_id.id])
+                                lunch_intervals = emp._employee_attendance_intervals(start_dt, stop_dt, lunch=True)
+                                work_duration -= sum((i[1] - i[0]).total_seconds() / 3600.0 for i in lunch_intervals)
 
                             # There is an overtime at the end of the day
                             if local_check_out > planned_end_dt:
@@ -433,3 +439,171 @@ class HrAttendance(models.Model):
             'url': get_google_maps_url(self.out_latitude, self.out_longitude),
             'target': 'new'
         }
+
+    @api.model
+    def has_demo_data(self):
+        if not self.env.user.has_group("hr_attendance.group_hr_attendance_manager"):
+            return True
+        # This record only exists if the scenario has been already launched
+        demo_tag = self.env.ref('hr_attendance.resource_calendar_std_38h', raise_if_not_found=False)
+        if demo_tag:
+            return True
+        return bool(self.env['ir.module.module'].search_count([
+            '&',
+                ('state', 'in', ['installed', 'to upgrade', 'uninstallable']),
+                ('demo', '=', True)
+        ]))
+
+    def _load_demo_data(self):
+        if self.has_demo_data():
+            return
+        self.env['hr.employee']._load_scenario()
+        # Load employees, schedules, departments and partners
+        convert.convert_file(self.env, 'hr_attendance', 'data/scenarios/hr_attendance_scenario.xml', None, mode='init', kind='data')
+
+        employee_sj = self.env.ref('hr.employee_sj')
+        employee_mw = self.env.ref('hr.employee_mw')
+        employee_eg = self.env.ref('hr.employee_eg')
+
+        # Retrieve employee from xml file
+        # Calculate attendances records for the previous month and the current until today
+        now = datetime.now()
+        previous_month_datetime = (now - relativedelta(months=1))
+        date_range = now.day + monthrange(previous_month_datetime.year, previous_month_datetime.month)[1]
+        city_coordinates = (50.27, 5.31)
+        city_coordinates_exception = (51.01, 2.82)
+        city_dict = {
+                    'latitude': city_coordinates_exception[0],
+                    'longitude': city_coordinates_exception[1],
+                    'city': 'Rellemstraat'
+                }
+        city_exception_dict = {
+            'latitude': city_coordinates[0],
+            'longitude': city_coordinates[1],
+            'city': 'Waillet'
+        }
+        attendance_values = []
+        for i in range(1, date_range):
+            check_in_date = now.replace(hour=6, minute=0, second=randint(0, 59)) + timedelta(days=-i, minutes=randint(-2, 3))
+            if check_in_date.weekday() not in range(0, 5):
+                continue
+            check_out_date = now.replace(hour=10, minute=0, second=randint(0, 59)) + timedelta(days=-i, minutes=randint(-2, -1))
+            check_in_date_after_lunch = now.replace(hour=11, minute=0, second=randint(0, 59)) + timedelta(days=-i, minutes=randint(-2, -1))
+            check_out_date_after_lunch = now.replace(hour=15, minute=0, second=randint(0, 59)) + timedelta(days=-i, minutes=randint(1, 3))
+
+            # employee_eg doesn't work on friday
+            eg_data = []
+            if check_in_date.weekday() != 4:
+                # employee_eg will compensate her work's hours between weeks.
+                if check_in_date.isocalendar().week % 2:
+                    employee_eg_hours = {
+                        'check_in_date': check_in_date + timedelta(hours=1),
+                        'check_out_date': check_out_date,
+                        'check_in_date_after_lunch': check_in_date_after_lunch,
+                        'check_out_date_after_lunch': check_out_date_after_lunch + timedelta(hours=-1),
+                    }
+                else:
+                    employee_eg_hours = {
+                        'check_in_date': check_in_date,
+                        'check_out_date': check_out_date,
+                        'check_in_date_after_lunch': check_in_date_after_lunch,
+                        'check_out_date_after_lunch': check_out_date_after_lunch + timedelta(hours=1, minutes=30),
+                    }
+                eg_data = [{
+                    'employee_id': employee_eg.id,
+                    'check_in': employee_eg_hours['check_in_date'],
+                    'check_out': employee_eg_hours['check_out_date'],
+                    'in_mode': "kiosk",
+                    'out_mode': "kiosk"
+                }, {
+                    'employee_id': employee_eg.id,
+                    'check_in': employee_eg_hours['check_in_date_after_lunch'],
+                    'check_out': employee_eg_hours['check_out_date_after_lunch'],
+                    'in_mode': "kiosk",
+                    'out_mode': "kiosk",
+                }]
+
+            # calculate GPS coordination for employee_mw (systray attendance)
+            if randint(1, 10) == 1:
+                city_data = city_exception_dict
+            else:
+                city_data = city_dict
+            mw_data = [{
+                'employee_id': employee_mw.id,
+                'check_in': check_in_date,
+                'check_out': check_out_date,
+                'in_mode': "systray",
+                'out_mode': "systray",
+                'in_longitude': city_data['longitude'],
+                'out_longitude': city_data['longitude'],
+                'in_latitude': city_data['latitude'],
+                'out_latitude': city_data['latitude'],
+                'in_city': city_data['city'],
+                'out_city': city_data['city'],
+                'in_ip_address': "127.0.0.1",
+                'out_ip_address': "127.0.0.1",
+                'in_browser': 'chrome',
+                'out_browser': 'chrome'
+            }, {
+                'employee_id': employee_mw.id,
+                'check_in': check_in_date_after_lunch,
+                'check_out': check_out_date_after_lunch,
+                'in_mode': "systray",
+                'out_mode': "systray",
+                'in_longitude': city_data['longitude'],
+                'out_longitude': city_data['longitude'],
+                'in_latitude': city_data['latitude'],
+                'out_latitude': city_data['latitude'],
+                'in_city': city_data['city'],
+                'out_city': city_data['city'],
+                'in_ip_address': "127.0.0.1",
+                'out_ip_address': "127.0.0.1",
+                'in_browser': 'chrome',
+                'out_browser': 'chrome'
+            }]
+            sj_data = [{
+                'employee_id': employee_sj.id,
+                'check_in': check_in_date + timedelta(minutes=randint(-10, -5)),
+                'check_out': check_out_date,
+                'in_mode': "manual",
+                'out_mode': "manual"
+            }, {
+                'employee_id': employee_sj.id,
+                'check_in': check_in_date_after_lunch,
+                'check_out': check_out_date_after_lunch + timedelta(hours=1, minutes=randint(-20, 10)),
+                'in_mode': "manual",
+                'out_mode': "manual"
+            }]
+            attendance_values.extend(eg_data + mw_data + sj_data)
+        self.env['hr.attendance'].create(attendance_values)
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'reload',
+        }
+
+    def action_try_kiosk(self):
+        if not self.env.user.has_group("hr_attendance.group_hr_attendance_manager"):
+            return {
+                    'type': 'ir.actions.client',
+                    'tag': 'display_notification',
+                    'params': {
+                        'message': _("You don't have the rights to execute that action."),
+                        'type': 'info',
+                    }
+            }
+        return {
+            'type': 'ir.actions.act_url',
+            'target': 'self',
+            'url': self.env.company.attendance_kiosk_url + '?from_trial_mode=True'
+        }
+
+    def _read_group_employee_id(self, resources, domain):
+        user_domain = self.env.context.get('user_domain')
+        if not user_domain:
+            return self.env['hr.employee'].search([('company_id', 'in', self.env.context.get('allowed_company_ids', []))])
+        else:
+            employee_name_domain = []
+            for leaf in user_domain:
+                if len(leaf) == 3 and leaf[0] == 'employee_id':
+                    employee_name_domain.append([('name', leaf[1], leaf[2])])
+            return resources | self.env['hr.employee'].search(OR(employee_name_domain))

@@ -10,19 +10,24 @@
     }, () => [{
         content: "Select contact form",
         trigger: ":iframe #wrap.o_editable section.s_website_form",
-    }, {
+        run: "click",
+    },
+    {
+        trigger: "#oe_snippets .o_we_customize_snippet_btn.active",
+    },
+    {
         content: "Open action select",
         trigger: "we-select:has(we-button:contains('Create an Opportunity')) we-toggler",
-        extra_trigger: "#oe_snippets .o_we_customize_snippet_btn.active",
+        run: "click",
     }, {
         content: "Select 'Create an Opportunity' as form action",
         trigger: "we-select we-button:contains('Create an Opportunity')",
+        run: "click",
     },
     ...wTourUtils.clickOnSave(),
     {
         content: "Ensure form model has changed and page reload is done after save",
         trigger: ":iframe section.s_website_form form[data-model_name='crm.lead']",
-        isCheck: true,
     }]);
 
     registry.category("web_tour.tours").add('website_crm_tour', {
@@ -31,34 +36,34 @@
         steps: () => [{
         content: "Complete name",
         trigger: "input[name=contact_name]",
-        run: "text John Smith",
+        run: "edit John Smith",
     }, {
         content: "Complete phone number",
         trigger: "input[name=phone]",
-        run: "text +32 485 118.218"
+        run: "edit +32 485 118.218",
     }, {
         content: "Complete Email",
         trigger: "input[name=email_from]",
-        run: "text john@smith.com"
+        run: "edit john@smith.com",
     }, {
         content: "Complete Company",
         trigger: "input[name=partner_name]",
-        run: "text Odoo S.A."
+        run: "edit Odoo S.A.",
     }, {
         content: "Complete Subject",
         trigger: "input[name=name]",
-        run: "text Useless message"
+        run: "edit Useless message",
     }, {
         content: "Complete Subject",
         trigger: "textarea[name=description]",
-        run: "text ### TOUR DATA ###"
+        run: "edit ### TOUR DATA ###",
     }, {
         content: "Send the form",
-        trigger: ".s_website_form_send"
+        trigger: ".s_website_form_send",
+        run: "click",
     }, {
         content: "Check we were redirected to the success page",
         trigger: "#wrap:has(h1:contains('Thank You!'))",
-        isCheck: true,
     }]});
 
     registry.category("web_tour.tours").add('website_crm_catch_logged_partner_info_tour', {
@@ -67,18 +72,18 @@
         steps: () => [{
         content: "Complete Subject",
         trigger: "input[name=name]",
-        run: "text Useless subject"
+        run: "edit Useless subject",
     }, {
         content: "Complete Subject",
         trigger: "textarea[name=description]",
-        run: "text ### TOUR DATA PREFILL ###"
+        run: "edit ### TOUR DATA PREFILL ###",
     }, {
         content: "Send the form",
-        trigger: ".s_website_form_send"
+        trigger: ".s_website_form_send",
+        run: "click",
     }, {
         content: "Check we were redirected to the success page",
         trigger: "#wrap:has(h1:contains('Thank You!'))",
-        isCheck: true,
     }]});
 
     export default {};

@@ -16,6 +16,7 @@ from operator import getitem
 import requests
 import json
 import re
+import contextlib
 
 from pytz import timezone
 
@@ -55,7 +56,7 @@ class IrActions(models.Model):
     _order = 'name'
     _allow_sudo_commands = False
 
-    _sql_constraints = [('path_unique', 'unique(path)', "Path to shown in the URL must be unique! Please choose another one.")]
+    _sql_constraints = [('path_unique', 'unique(path)', "Path to show in the URL must be unique! Please choose another one.")]
 
     name = fields.Char(string='Action Name', required=True, translate=True)
     type = fields.Char(string='Action Type', required=True)
@@ -83,6 +84,17 @@ class IrActions(models.Model):
                     raise ValidationError(_("'action-' is a reserved prefix."))
                 if action.path == "new":
                     raise ValidationError(_("'new' is reserved, and can not be used as path."))
+                # Tables ir_act_window, ir_act_report_xml, ir_act_url, ir_act_server and ir_act_client
+                # inherit from table ir_actions (see base_data.sql). The path must be unique across
+                # all these tables. The unique constraint is not enough because a big limitation of
+                # the inheritance feature is that unique indexes only apply to single tables, and
+                # not accross all the tables. So we need to check the uniqueness of the path manually.
+                # For more information, see: https://www.postgresql.org/docs/14/ddl-inherit.html#DDL-INHERIT-CAVEATS
+
+                # Note that, we leave the unique constraint in place to check the uniqueness of the path
+                # within the same table before checking the uniqueness across all the tables.
+                if (self.env['ir.actions.actions'].search_count([('path', '=', action.path)]) > 1):
+                    raise ValidationError(_("Path to show in the URL must be unique! Please choose another one."))
 
     def _compute_xml_id(self):
         res = self.get_external_id()
@@ -217,6 +229,11 @@ class IrActions(models.Model):
         """
         self.ensure_one()
         readable_fields = self._get_readable_fields()
+        if (self.sudo().type == "ir.actions.act_window"):
+            result = self.sudo().read()[0]
+            embedded_actions = self.env["ir.embedded.actions"].browse(result["embedded_action_ids"]).read()
+            result.update({"embedded_action_ids": embedded_actions})
+            return result
         return {
             field: value
             for field, value in self.sudo().read()[0].items()
@@ -250,9 +267,9 @@ class IrActionsActWindow(models.Model):
     def _check_model(self):
         for action in self:
             if action.res_model not in self.env:
-                raise ValidationError(_('Invalid model name %r in action definition.', action.res_model))
+                raise ValidationError(_('Invalid model name “%s” in action definition.', action.res_model))
             if action.binding_model_id and action.binding_model_id.model not in self.env:
-                raise ValidationError(_('Invalid model name %r in action definition.', action.binding_model_id.model))
+                raise ValidationError(_('Invalid model name “%s” in action definition.', action.binding_model_id.model))
 
     @api.depends('view_ids.view_mode', 'view_mode', 'view_id.type')
     def _compute_views(self):
@@ -283,7 +300,7 @@ class IrActionsActWindow(models.Model):
             if len(modes) != len(set(modes)):
                 raise ValidationError(_('The modes in view_mode must not be duplicated: %s', modes))
             if ' ' in modes:
-                raise ValidationError(_('No spaces allowed in view_mode: %r', modes))
+                raise ValidationError(_('No spaces allowed in view_mode: “%s”', modes))
 
     type = fields.Char(default="ir.actions.act_window")
     view_id = fields.Many2one('ir.ui.view', string='View Ref.', ondelete='set null')
@@ -309,7 +326,13 @@ class IrActionsActWindow(models.Model):
     groups_id = fields.Many2many('res.groups', 'ir_act_window_group_rel',
                                  'act_id', 'gid', string='Groups')
     search_view_id = fields.Many2one('ir.ui.view', string='Search View Ref.')
+    embedded_action_ids = fields.One2many('ir.embedded.actions', compute="_compute_embedded_actions")
     filter = fields.Boolean()
+
+    def _compute_embedded_actions(self):
+        embedded_actions = self.env["ir.embedded.actions"].search([('parent_action_id', 'in', self.ids)]).filtered(lambda x: x.is_visible)
+        for action in self:
+            action.embedded_action_ids = embedded_actions.filtered(lambda rec: rec.parent_action_id == action)
 
     def read(self, fields=None, load='_classic_read'):
         """ call the method get_empty_list_help of the model and set the window action help message
@@ -354,10 +377,12 @@ class IrActionsActWindow(models.Model):
     def _get_readable_fields(self):
         return super()._get_readable_fields() | {
             "context", "mobile_view_mode", "domain", "filter", "groups_id", "limit",
-            "res_id", "res_model", "search_view_id", "target", "view_id", "view_mode", "views",
+            "res_id", "res_model", "search_view_id", "target", "view_id", "view_mode", "views", "embedded_action_ids",
             # `flags` is not a real field of ir.actions.act_window but is used
             # to give the parameters to generate the action
-            "flags"
+            "flags",
+            # this is used by frontend, with the document layout wizard before send and print
+            "close_on_report_download",
         }
 
 
@@ -481,6 +506,7 @@ class IrActionsServer(models.Model):
 #  - records: recordset of all records on which the action is triggered in multi-mode; may be void
 #  - time, datetime, dateutil, timezone: useful Python libraries
 #  - float_compare: utility function to compare floats based on specific precision
+#  - b64encode, b64decode: functions to encode/decode binary data
 #  - log: log(message, level='info'): logging function to record debug information in ir.logging table
 #  - _logger: _logger.info(message): logger to emit messages in server logs
 #  - UserError: exception class for raising user-facing warning messages
@@ -680,8 +706,6 @@ class IrActionsServer(models.Model):
                     raise ValidationError(_("The path to the field to update contains a non-relational field (%s) that is not the last field in the path. You can't traverse non-relational fields (even in the quantum realm). Make sure only the last field in the path is non-relational.", field_name))
                 if isinstance(field, fields.Json):
                     raise ValidationError(_("I'm sorry to say that JSON fields (such as %s) are currently not supported.", field_name))
-                elif field.readonly:
-                    raise ValidationError(_("The field to update (%s) is read-only. You can't update a read-only field - even when asking nicely.", field_name))
         target_records = None
         if record is not None:
             target_records = reduce(getitem, path[:-1], record)
@@ -741,8 +765,8 @@ class IrActionsServer(models.Model):
                 raise ValidationError(msg)
 
     @api.constrains('child_ids')
-    def _check_recursion(self):
-        if not self._check_m2m_recursion('child_ids'):
+    def _check_child_recursion(self):
+        if self._has_cycle('child_ids'):
             raise ValidationError(_('Recursion found in child server actions'))
 
     def _get_readable_fields(self):
@@ -1036,6 +1060,9 @@ class IrActionsServer(models.Model):
                     expr = int(action.value)
                 except Exception:
                     pass
+            elif action.update_field_id.ttype == 'float':
+                with contextlib.suppress(Exception):
+                    expr = float(action.value)
             result[action.id] = expr
         return result
 

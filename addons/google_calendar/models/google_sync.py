@@ -145,13 +145,15 @@ class GoogleSync(models.AbstractModel):
         self.unlink()
 
     @api.model
-    def _sync_google2odoo(self, google_events: GoogleEvent, default_reminders=()):
+    def _sync_google2odoo(self, google_events: GoogleEvent, write_dates=None, default_reminders=()):
         """Synchronize Google recurrences in Odoo. Creates new recurrences, updates
         existing ones.
 
         :param google_recurrences: Google recurrences to synchronize in Odoo
+        :param write_dates: A dictionary mapping Odoo record IDs to their write dates.
         :return: synchronized odoo recurrences
         """
+        write_dates = dict(write_dates or {})
         existing = google_events.exists(self.env)
         new = google_events - existing - google_events.cancelled()
 
@@ -174,15 +176,17 @@ class GoogleSync(models.AbstractModel):
             google_ids_to_remove = [event.full_recurring_event_id() for event in rescheduled_events]
             cancelled_odoo += self.env['calendar.event'].search([('google_id', 'in', google_ids_to_remove)])
 
-        cancelled_odoo._cancel()
+        cancelled_odoo.exists()._cancel()
         synced_records = new_odoo + cancelled_odoo
         for gevent in existing - cancelled:
             # Last updated wins.
             # This could be dangerous if google server time and odoo server time are different
             updated = parse(gevent.updated)
             odoo_record = self.browse(gevent.odoo_id(self.env))
+            # Use the record's write_date to apply Google updates only if they are newer than Odoo's write_date.
+            odoo_record_write_date = write_dates.get(odoo_record.id, odoo_record.write_date)
             # Migration from 13.4 does not fill write_date. Therefore, we force the update from Google.
-            if not odoo_record.write_date or updated >= pytz.utc.localize(odoo_record.write_date):
+            if not odoo_record_write_date or updated >= pytz.utc.localize(odoo_record_write_date):
                 vals = dict(self._odoo_values(gevent, default_reminders), need_sync=False)
                 odoo_record.with_context(dont_notify=True)._write_from_google(gevent, vals)
                 synced_records |= odoo_record
@@ -261,6 +265,21 @@ class GoogleSync(models.AbstractModel):
                 if values:
                     self.exists().with_context(dont_notify=True).need_sync = False
 
+    def _get_post_sync_values(self, request_values, google_values):
+        """ Return the values to be written in the event right after its insertion in Google side. """
+        writeable_values = {
+            'google_id': request_values['id'],
+            'need_sync': False,
+        }
+        return writeable_values
+
+    def _need_video_call(self):
+        """ Implement this method to return True if the event needs a video call
+        :return: bool
+        """
+        self.ensure_one()
+        return True
+
     @after_commit
     def _google_insert(self, google_service: GoogleCalendarService, values, timeout=TIMEOUT):
         if not values:
@@ -270,12 +289,8 @@ class GoogleSync(models.AbstractModel):
                 try:
                     send_updates = self._context.get('send_updates', True)
                     google_service.google_service = google_service.google_service.with_context(send_updates=send_updates)
-                    google_id = google_service.insert(values, token=token, timeout=timeout)
-                    # Everything went smoothly
-                    self.with_context(dont_notify=True).write({
-                        'google_id': google_id,
-                        'need_sync': False,
-                    })
+                    google_values = google_service.insert(values, token=token, timeout=timeout, need_video_call=self._need_video_call())
+                    self.with_context(dont_notify=True).write(self._get_post_sync_values(values, google_values))
                 except HTTPError as e:
                     if e.response.status_code in (400, 403):
                         self._google_error_handling(e)

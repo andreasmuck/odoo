@@ -1,10 +1,10 @@
 /** @odoo-module alias=@web/../tests/utils default=false */
 
-import { isVisible } from "@web/core/utils/ui";
-import { Deferred, tick } from "@odoo/hoot-mock";
-import { __debug__, after, afterAll, beforeAll, expect, getFixture } from "@odoo/hoot";
-import { isMacOS } from "@web/core/browser/feature_detection";
+import { __debug__, after, afterEach, expect, getFixture } from "@odoo/hoot";
 import { queryAll, queryFirst } from "@odoo/hoot-dom";
+import { Deferred, tick } from "@odoo/hoot-mock";
+import { isMacOS } from "@web/core/browser/feature_detection";
+import { isVisible } from "@web/core/utils/ui";
 
 /** @param {EventInit} [args] */
 const mapBubblingEvent = (args) => ({ ...args, bubbles: true });
@@ -500,11 +500,11 @@ export async function triggerHotkey(hotkey, addOverlayModParts = false, eventAtt
 }
 
 function log(ok, message) {
-    __debug__.expect(ok).toBeTruthy({ message });
+    expect(Boolean(ok)).toBe(true, { message });
 }
 
 let hasUsedContainsPositively = false;
-beforeAll(() => (hasUsedContainsPositively = false));
+afterEach(() => (hasUsedContainsPositively = false));
 /**
  * @typedef {[string, ContainsOptions]} ContainsTuple tuple representing params of the contains
  *  function, where the first element is the selector, and the second element is the options param.
@@ -555,15 +555,22 @@ class Contains {
         this.selector = selector;
         this.options = options;
         this.options.count ??= 1;
-        this.options.targetParam = this.options.target?.target ?? this.options.target; // when OdooEnv, special key `target`. See @start
-        this.options.target = this.options.targetParam ?? getFixture();
+        let targetParam;
+        if (this.options.target?.testEnv) {
+            // when OdooEnv, special key `target`. See @start
+            targetParam = this.options.target?.target;
+        }
+        if (!targetParam) {
+            targetParam = this.options.target;
+        }
+        this.options.target = targetParam || getFixture();
         let selectorMessage = `${this.options.count} of "${this.selector}"`;
         if (this.options.visible !== undefined) {
             selectorMessage = `${selectorMessage} ${
                 this.options.visible ? "visible" : "invisible"
             }`;
         }
-        if (this.options.targetParam) {
+        if (targetParam) {
             selectorMessage = `${selectorMessage} inside a specific target`;
         }
         if (this.options.parent) {
@@ -661,7 +668,7 @@ class Contains {
      */
     runOnce(whenMessage, { crashOnFail = false, executeOnSuccess = true } = {}) {
         const res = this.select();
-        if (res?.length === this.options.count || crashOnFail) {
+        if ((res?.length ?? 0) === this.options.count || crashOnFail) {
             // clean before doing anything else to avoid infinite loop due to side effects
             this.observer?.disconnect();
             clearTimeout(this.timer);
@@ -670,7 +677,7 @@ class Contains {
             }
             this.done = true;
         }
-        if (res?.length === this.options.count) {
+        if ((res?.length ?? 0) === this.options.count) {
             this.successMessage = `Found ${this.selectorMessage} (${whenMessage})`;
             if (executeOnSuccess) {
                 this.executeAction(res[0]);
@@ -774,15 +781,14 @@ class Contains {
                 el.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Backspace" }));
                 el.dispatchEvent(new window.KeyboardEvent("keyup", { key: "Backspace" }));
                 el.dispatchEvent(new window.InputEvent("input"));
-                el.dispatchEvent(new window.InputEvent("change"));
             }
             for (const char of this.options.insertText.content) {
                 el.value += char;
                 el.dispatchEvent(new window.KeyboardEvent("keydown", { key: char }));
                 el.dispatchEvent(new window.KeyboardEvent("keyup", { key: char }));
                 el.dispatchEvent(new window.InputEvent("input"));
-                el.dispatchEvent(new window.InputEvent("change"));
             }
+            el.dispatchEvent(new window.InputEvent("change"));
         }
         if (this.options.pasteFiles) {
             message = `${message} and pasted ${this.options.pasteFiles.length} file(s)`;
@@ -959,6 +965,7 @@ export async function contains(selector, options) {
 
 const stepState = {
     expectedSteps: null,
+    /** @type {Promise} */
     deferred: null,
     timeout: null,
     currentSteps: [],
@@ -978,7 +985,7 @@ const stepState = {
         if (!success && !crashOnFail) {
             return;
         }
-        __debug__.expect(this.expectedSteps).toVerifySteps();
+        expect.verifySteps(this.expectedSteps);
         if (success) {
             this.deferred.resolve();
         } else {
@@ -988,7 +995,7 @@ const stepState = {
     },
 };
 
-afterAll(() => {
+afterEach(() => {
     if (stepState.expectedSteps) {
         stepState.check({ crashOnFail: true });
     } else {

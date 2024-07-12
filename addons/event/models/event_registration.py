@@ -3,10 +3,8 @@
 import logging
 import os
 
-from dateutil.relativedelta import relativedelta
-
 from odoo import _, api, fields, models, SUPERUSER_ID
-from odoo.tools import format_date, email_normalize, email_normalize_all
+from odoo.tools import email_normalize, email_normalize_all
 from odoo.exceptions import AccessError, ValidationError
 _logger = logging.getLogger(__name__)
 
@@ -56,6 +54,7 @@ class EventRegistration(models.Model):
         readonly=False, store=True)
     event_begin_date = fields.Datetime(string="Event Start Date", related='event_id.date_begin', readonly=True)
     event_end_date = fields.Datetime(string="Event End Date", related='event_id.date_end', readonly=True)
+    event_date_range = fields.Char("Date Range", compute="_compute_date_range")
     event_organizer_id = fields.Many2one(string='Event Organizer', related='event_id.organizer_id', readonly=True)
     event_user_id = fields.Many2one(string='Event Responsible', related='event_id.user_id', readonly=True)
     company_id = fields.Many2one(
@@ -72,6 +71,10 @@ class EventRegistration(models.Model):
              'Registered: registrations considered taken by a client\n'
              'Attended: registrations for which the attendee attended the event\n'
              'Cancelled: registrations cancelled manually')
+    # questions
+    registration_answer_ids = fields.One2many('event.registration.answer', 'registration_id', string='Attendee Answers')
+    registration_answer_choice_ids = fields.One2many('event.registration.answer', 'registration_id', string='Attendee Selection Answers',
+        domain=[('question_type', '=', 'simple_choice')])
     # properties
     registration_properties = fields.Properties(
         'Properties', definition='event_id.registration_properties_definition', copy=True)
@@ -144,6 +147,11 @@ class EventRegistration(models.Model):
                 else:
                     registration.date_closed = False
 
+    @api.depends("event_id", "partner_id")
+    def _compute_date_range(self):
+        for registration in self:
+            registration.event_date_range = registration.event_id._get_date_range_str(registration.partner_id.lang)
+
     @api.constrains('event_id', 'event_ticket_id')
     def _check_event_ticket(self):
         if any(registration.event_id != registration.event_ticket_id.event_id for registration in self if registration.event_ticket_id):
@@ -209,13 +217,7 @@ class EventRegistration(models.Model):
             values['phone'] = self._phone_format(number=values['phone'], country=related_country) or values['phone']
 
         registrations = super(EventRegistration, self).create(vals_list)
-
-        if not self.env.context.get('install_mode', False):
-            # running the scheduler for demo data can cause an issue where wkhtmltopdf runs during
-            # server start and hangs indefinitely, leading to serious crashes
-            # we currently avoid this by not running the scheduler, would be best to find the actual
-            # reason for this issue and fix it so we can remove this check
-            registrations._update_mail_schedulers()
+        registrations._update_mail_schedulers()
         return registrations
 
     def write(self, vals):
@@ -223,11 +225,7 @@ class EventRegistration(models.Model):
         to_confirm = (self.filtered(lambda registration: registration.state in {'draft', 'cancel'})
                       if confirming else None)
         ret = super(EventRegistration, self).write(vals)
-        if confirming and not self.env.context.get('install_mode', False):
-            # running the scheduler for demo data can cause an issue where wkhtmltopdf runs
-            # during server start and hangs indefinitely, leading to serious crashes we
-            # currently avoid this by not running the scheduler, would be best to find the
-            # actual reason for this issue and fix it so we can remove this check
+        if confirming:
             to_confirm._update_mail_schedulers()
 
         return ret
@@ -296,6 +294,13 @@ class EventRegistration(models.Model):
     def _update_mail_schedulers(self):
         """ Update schedulers to set them as running again, and cron to be called
         as soon as possible. """
+        if self.env.context.get("install_mode", False):
+            # running the scheduler for demo data can cause an issue where wkhtmltopdf runs during
+            # server start and hangs indefinitely, leading to serious crashes
+            # we currently avoid this by not running the scheduler, would be best to find the actual
+            # reason for this issue and fix it so we can remove this check
+            return
+
         open_registrations = self.filtered(lambda registration: registration.state == 'open')
         if not open_registrations:
             return
@@ -387,24 +392,6 @@ class EventRegistration(models.Model):
     # TOOLS
     # ------------------------------------------------------------
 
-    def get_date_range_str(self, lang_code=False):
-        self.ensure_one()
-        today = fields.Datetime.now()
-        event_date = self.event_begin_date
-        diff = (event_date.date() - today.date())
-        if diff.days <= 0:
-            return _('today')
-        elif diff.days == 1:
-            return _('tomorrow')
-        elif (diff.days < 7):
-            return _('in %d days', diff.days)
-        elif (diff.days < 14):
-            return _('next week')
-        elif event_date.month == (today + relativedelta(months=+1)).month:
-            return _('next month')
-        else:
-            return _('on %(date)s', date=format_date(self.env, self.event_begin_date, lang_code=lang_code, date_format='medium'))
-
     def _get_registration_summary(self):
         self.ensure_one()
         return {
@@ -414,5 +401,6 @@ class EventRegistration(models.Model):
             'ticket_name': self.event_ticket_id.name or _('None'),
             'event_id': self.event_id.id,
             'event_display_name': self.event_id.display_name,
+            'registration_answers': self.registration_answer_ids.filtered('value_answer_id').mapped('display_name'),
             'company_name': self.event_id.company_id and self.event_id.company_id.name or False,
         }

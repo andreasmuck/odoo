@@ -9,6 +9,7 @@
     import { _t } from "@web/core/l10n/translation";
     import { renderToElement } from "@web/core/utils/render";
     import { post } from "@web/core/network/http_service";
+    import { localization } from "@web/core/l10n/localization";
 import {
     formatDate,
     formatDateTime,
@@ -108,19 +109,22 @@ import wUtils from '@website/js/utils';
             this.$el.on('input.s_website_form', '.s_website_form_field', this._onFieldInputDebounced);
 
             this.$allDates = this.$el.find('.s_website_form_datetime, .o_website_form_datetime, .s_website_form_date, .o_website_form_date');
-            for (const field of this.$allDates) {
-                const input = field.querySelector("input");
-                const defaultValue = input.getAttribute("value");
-                this.call("datetime_picker", "create", {
-                    target: input,
-                    onChange: () => input.dispatchEvent(new Event("input", { bubbles: true })),
-                    pickerProps: {
-                        type: field.matches('.s_website_form_date, .o_website_form_date') ? 'date' : 'datetime',
-                        value: defaultValue && DateTime.fromSeconds(parseInt(defaultValue)),
-                    },
-                }).enable();
+            this.disableDateTimePickers = [];
+            if (!this.editableMode) {
+                for (const field of this.$allDates) {
+                    const input = field.querySelector("input");
+                    const defaultValue = input.getAttribute("value");
+                    this.disableDateTimePickers.push(this.call("datetime_picker", "create", {
+                        target: input,
+                        onChange: () => input.dispatchEvent(new Event("input", { bubbles: true })),
+                        pickerProps: {
+                            type: field.matches('.s_website_form_date, .o_website_form_date') ? 'date' : 'datetime',
+                            value: defaultValue && DateTime.fromSeconds(parseInt(defaultValue)),
+                        },
+                    }).enable());
+                }
+                this.$allDates.addClass('s_website_form_datepicker_initialized');
             }
-            this.$allDates.addClass('s_website_form_datepicker_initialized');
 
             // Display form values from tag having data-for attribute
             // It's necessary to handle field values generated on server-side
@@ -146,7 +150,7 @@ import wUtils from '@website/js/utils';
                 // the values to submit() for these fields but this could break
                 // customizations that use the current behavior as a feature.
                 for (const name of fieldNames) {
-                    const fieldEl = this.el.querySelector(`[name="${name}"]`);
+                    const fieldEl = this.el.querySelector(`[name="${CSS.escape(name)}"]`);
 
                     // In general, we want the data-for and prefill values to
                     // take priority over set default values. The 'email_to'
@@ -203,6 +207,9 @@ import wUtils from '@website/js/utils';
             return this._super(...arguments).then(() => this.__startResolve());
         },
 
+        /**
+         * @override
+         */
         destroy: function () {
             this._super.apply(this, arguments);
             this.$el.find('button').off('click');
@@ -257,6 +264,9 @@ import wUtils from '@website/js/utils';
             }
 
             this.$el.off('.s_website_form');
+            for (const disableDateTimePicker of this.disableDateTimePickers) {
+                disableDateTimePicker();
+            }
         },
 
         send: async function (e) {
@@ -278,9 +288,8 @@ import wUtils from '@website/js/utils';
                             this.fileInputError.limit
                         )
                         : _t(
-                            "Please fill in the form correctly. The file \"%s\" is too big. (Maximum %s MB)", 
-                            this.fileInputError.fileName,
-                            this.fileInputError.limit
+                            "Please fill in the form correctly. The file “%(file name)s” is too large. (Maximum %(max)s MB)", 
+                            { "file name": this.fileInputError.fileName, max:this.fileInputError.limit }
                         );
                     this.update_status("error", errorMessage);
                     delete this.fileInputError;
@@ -675,8 +684,16 @@ import wUtils from '@website/js/utils';
                 case '!fileSet':
                     return value.name === '';
             }
+
+            const format = value.includes(':')
+                ? localization.dateTimeFormat
+                : localization.dateFormat;
             // Date & Date Time comparison requires formatting the value
-            value = (value.includes(':') ? parseDateTime(value) : parseDate(value)).toUnixInteger();
+            const dateTime = DateTime.fromFormat(value, format);
+            // If invalid, any value other than "NaN" would cause certain
+            // conditions to be broken.
+            value = dateTime.isValid ? dateTime.toUnixInteger() : NaN;
+
             comparable = parseInt(comparable);
             between = parseInt(between) || '';
             switch (comparator) {

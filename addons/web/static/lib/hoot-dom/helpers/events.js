@@ -5,8 +5,9 @@ import {
     getActiveElement,
     getDocument,
     getNextFocusableElement,
+    getNodeRect,
+    getNodeValue,
     getPreviousFocusableElement,
-    getRect,
     getWindow,
     isCheckable,
     isEditable,
@@ -22,6 +23,8 @@ import {
 } from "./dom";
 
 /**
+ * @typedef {"blur" | "enter" | "tab" | false} ConfirmAction
+ *
  * @typedef {{
  *  cancel: () => Event[];
  *  drop: (to?: Target, options?: PointerOptions) => Event[];
@@ -35,7 +38,7 @@ import {
  * @typedef {keyof HTMLElementEventMap | keyof WindowEventMap} EventType
  *
  * @typedef {{
- *  confirm?: boolean;
+ *  confirm?: ConfirmAction;
  *  composition?: boolean;
  *  instantly?: boolean;
  * }} FillOptions
@@ -68,11 +71,32 @@ import {
 // Global
 //-----------------------------------------------------------------------------
 
-const { console, DataTransfer, document, Math, Object, String, Touch, TypeError } = globalThis;
+const {
+    console: { dir: $dir, groupCollapsed: $groupCollapsed, groupEnd: $groupEnd, log: $log },
+    DataTransfer,
+    document,
+    Math: { ceil: $ceil, max: $max, min: $min },
+    Object: { assign: $assign, values: $values },
+    String,
+    Touch,
+    TypeError,
+} = globalThis;
+/** @type {Document["createRange"]} */
+const $createRange = document.createRange.bind(document);
+/** @type {Document["hasFocus"]} */
+const $hasFocus = document.hasFocus.bind(document);
 
 //-----------------------------------------------------------------------------
 // Internal
 //-----------------------------------------------------------------------------
+
+/**
+ * @param {EventTarget} target
+ * @param {EventType} type
+ */
+const catchNextEvent = (target, type) => {
+    target.addEventListener(type, (event) => currentEvents.push(event), { once: true });
+};
 
 /**
  * @param {EventTarget} target
@@ -124,6 +148,7 @@ const getDefaultRunTimeValue = () => ({
 
     // Pointer
     currentClickCount: 0,
+    currentKey: null,
     currentPointerDownTarget: null,
     currentPointerDownTimeout: 0,
     currentPointerTarget: null,
@@ -202,11 +227,12 @@ const getEventConstructor = (eventType) => {
             return [PointerEvent, mapNonBubblingPointerEvent];
 
         // Focus events
-        case "focusin":
-            return [FocusEvent, mapBubblingEvent];
-        case "focus":
         case "blur":
+        case "focus":
             return [FocusEvent, mapNonBubblingEvent];
+        case "focusin":
+        case "focusout":
+            return [FocusEvent, mapBubblingEvent];
 
         // Clipboard events
         case "cut":
@@ -260,10 +286,52 @@ const getEventConstructor = (eventType) => {
         case "wheel":
             return [WheelEvent, mapWheelEvent];
 
+        // Animation events
+        case "animationcancel":
+        case "animationend":
+        case "animationiteration":
+        case "animationstart": {
+            return [AnimationEvent, mapBubblingCancelableEvent];
+        }
+
+        // Error events
+        case "error":
+            return [ErrorEvent, mapNonBubblingEvent];
+        case "unhandledrejection":
+            return [PromiseRejectionEvent, mapNonBubblingCancelableEvent];
+
+        // Unload events (BeforeUnloadEvent cannot be constructed)
+        case "beforeunload":
+            return [Event, mapNonBubblingCancelableEvent];
+        case "unload":
+            return [Event, mapNonBubblingEvent];
+
         // Default: base Event constructor
         default:
             return [Event, mapBubblingEvent];
     }
+};
+
+/**
+ * @param {Node} [a]
+ * @param {Node} [b]
+ */
+const getFirstCommonParent = (a, b) => {
+    if (!a || !b || a.ownerDocument !== b.ownerDocument) {
+        return null;
+    }
+
+    const range = document.createRange();
+    range.setStart(a, 0);
+    range.setEnd(b, 0);
+
+    if (range.collapsed) {
+        // Re-arranges range if the first node comes after the second
+        range.setStart(b, 0);
+        range.setEnd(a, 0);
+    }
+
+    return range.commonAncestorContainer;
 };
 
 /**
@@ -288,7 +356,7 @@ const getPosition = (element, options) => {
         return toEventPosition(posX, posY, position);
     }
 
-    const { x, y, width, height } = getRect(element);
+    const { x, y, width, height } = getNodeRect(element);
     let clientX = x;
     let clientY = y;
 
@@ -299,7 +367,7 @@ const getPosition = (element, options) => {
         if (positions.includes("left")) {
             clientX -= 1;
         } else if (positions.includes("right")) {
-            clientX += Math.ceil(width) + 1;
+            clientX += $ceil(width) + 1;
         } else {
             clientX += width / 2;
         }
@@ -308,7 +376,7 @@ const getPosition = (element, options) => {
         if (positions.includes("top")) {
             clientY -= 1;
         } else if (positions.includes("bottom")) {
-            clientY += Math.ceil(height) + 1;
+            clientY += $ceil(height) + 1;
         } else {
             clientY += height / 2;
         }
@@ -356,8 +424,6 @@ const hasTagName = (node, ...tagNames) => tagNames.includes(getTag(node));
 const hasTouch = () =>
     globalThis.ontouchstart !== undefined || globalThis.matchMedia("(pointer:coarse)").matches;
 
-const isMacOS = () => /Mac/i.test(globalThis.navigator.userAgent);
-
 /**
  * @param {unknown} value
  */
@@ -378,7 +444,7 @@ const logEvents = (actionName) => {
         return events;
     }
     const groupName = [`${actionName}: dispatched`, events.length, `events`];
-    console.groupCollapsed(...groupName);
+    $groupCollapsed(...groupName);
     for (const event of events) {
         /** @type {(keyof typeof LOG_COLORS)[]} */
         const colors = ["blue"];
@@ -402,7 +468,7 @@ const logEvents = (actionName) => {
             if (targetParts.class) {
                 colors.push("lightBlue");
             }
-            const targetString = Object.values(targetParts)
+            const targetString = $values(targetParts)
                 .map((part) => `%c${part}%c`)
                 .join("");
             message += ` @${targetString}`;
@@ -412,12 +478,12 @@ const logEvents = (actionName) => {
             `color: ${LOG_COLORS.reset}`,
         ]);
 
-        console.groupCollapsed(message, ...messageColors);
-        console.dir(event);
-        console.log(event.target);
-        console.groupEnd();
+        $groupCollapsed(message, ...messageColors);
+        $dir(event);
+        $log(event.target);
+        $groupEnd();
     }
-    console.groupEnd();
+    $groupEnd();
     return events;
 };
 
@@ -427,15 +493,13 @@ const logEvents = (actionName) => {
  * @returns {KeyboardEventInit}
  */
 const parseKeyStrokes = (keyStrokes, options) =>
-    (isIterable(keyStrokes) ? [...keyStrokes] : [keyStrokes])
-        .flatMap((keyStroke) => keyStroke.split(/\s*[,+]\s*/))
-        .map((key) => {
-            const lower = key.toLowerCase();
-            return {
-                ...options,
-                key: lower.length === 1 ? key : KEY_ALIASES[lower] || key,
-            };
-        });
+    (isIterable(keyStrokes) ? [...keyStrokes] : [keyStrokes]).map((key) => {
+        const lower = key.toLowerCase();
+        return {
+            ...options,
+            key: lower.length === 1 ? key : KEY_ALIASES[lower] || key,
+        };
+    });
 
 /**
  * @param {Event} ev
@@ -451,9 +515,9 @@ const registerFileInput = ({ target }) => {
 /**
  * @param {EventTarget} target
  * @param {string} initialValue
- * @param {boolean} confirmNow
+ * @param {ConfirmAction} confirmAction
  */
-const registerForChange = (target, initialValue, confirmNow) => {
+const registerForChange = (target, initialValue, confirmAction) => {
     const triggerChange = () => {
         removeChangeTargetListeners();
 
@@ -462,11 +526,19 @@ const registerForChange = (target, initialValue, confirmNow) => {
         }
     };
 
-    const canTriggerEnter = getTag(target) === "input";
-    if (canTriggerEnter) {
-        changeTargetListeners.push(
-            on(target, "keydown", (ev) => !isPrevented(ev) && ev.key === "Enter" && triggerChange())
-        );
+    confirmAction &&= confirmAction.toLowerCase();
+    if (confirmAction === "enter") {
+        if (getTag(target) === "input") {
+            changeTargetListeners.push(
+                on(
+                    target,
+                    "keydown",
+                    (ev) => !isPrevented(ev) && ev.key === "Enter" && triggerChange()
+                )
+            );
+        } else {
+            throw new HootDomError(`"enter" confirm action is only supported on <input/> elements`);
+        }
     }
 
     changeTargetListeners.push(
@@ -474,14 +546,20 @@ const registerForChange = (target, initialValue, confirmNow) => {
         on(target, "change", removeChangeTargetListeners)
     );
 
-    if (confirmNow) {
-        // Triggers confirm action right away
-        if (canTriggerEnter) {
-            _press(target, { key: "Enter" });
-        } else {
+    switch (confirmAction) {
+        case "blur": {
             _click(getDocument(target).body, {
                 position: { x: 0, y: 0 },
             });
+            break;
+        }
+        case "enter": {
+            _press(target, { key: "Enter" });
+            break;
+        }
+        case "tab": {
+            _press(target, { key: "Tab" });
+            break;
         }
     }
 };
@@ -493,18 +571,10 @@ const registerForChange = (target, initialValue, confirmNow) => {
 const registerSpecialKey = (eventInit, toggle) => {
     switch (eventInit.key) {
         case "Alt":
-            if (isMacOS()) {
-                specialKeys.ctrlKey = toggle;
-            } else {
-                specialKeys.altKey = toggle;
-            }
+            specialKeys.altKey = toggle;
             break;
         case "Control":
-            if (isMacOS()) {
-                specialKeys.metaKey = toggle;
-            } else {
-                specialKeys.ctrlKey = toggle;
-            }
+            specialKeys.ctrlKey = toggle;
             break;
         case "Meta":
             specialKeys.metaKey = toggle;
@@ -647,21 +717,33 @@ const triggerFocus = (target) => {
         return;
     }
     if (previous !== target.ownerDocument.body) {
+        if ($hasFocus()) {
+            catchNextEvent(previous, "blur");
+            catchNextEvent(previous, "focusout");
+        }
         // If document is focused, this will trigger a trusted "blur" event
         previous.blur();
-        if (!document.hasFocus()) {
+        if (!$hasFocus()) {
             // When document is not focused: manually trigger a "blur" event
-            dispatch(previous, "blur", { relatedTarget: target });
+            const eventInit = { relatedTarget: target };
+            dispatch(previous, "blur", eventInit);
+            dispatch(previous, "focusout", eventInit);
         }
     }
     if (isNodeFocusable(target)) {
         const previousSelection = getStringSelection(target);
 
         // If document is focused, this will trigger a trusted "focus" event
+        if ($hasFocus()) {
+            catchNextEvent(target, "focus");
+            catchNextEvent(target, "focusin");
+        }
         target.focus();
-        if (!document.hasFocus()) {
+        if (!$hasFocus()) {
             // When document is not focused: manually trigger a "focus" event
-            dispatch(target, "focus", { relatedTarget: previous });
+            const eventInit = { relatedTarget: previous };
+            dispatch(target, "focus", eventInit);
+            dispatch(target, "focusin", eventInit);
         }
 
         if (previousSelection && previousSelection === getStringSelection(target)) {
@@ -716,6 +798,12 @@ const _fill = (target, value, options) => {
 
     if (getTag(target) === "input") {
         switch (target.type) {
+            case "color": {
+                target.value = String(value);
+                dispatch(target, "input");
+                dispatch(target, "change");
+                return;
+            }
             case "file": {
                 const dataTransfer = new DataTransfer();
                 const files = ensureArray(value);
@@ -866,19 +954,67 @@ const _implicitHover = (target, options) => {
 const _keyDown = (target, eventInit) => {
     registerSpecialKey(eventInit, true);
 
-    const keyDownEvent = dispatch(target, "keydown", eventInit);
+    const repeat =
+        typeof eventInit.repeat === "boolean"
+            ? eventInit.repeat
+            : runTime.currentKey === eventInit.key;
+    runTime.currentKey = eventInit.key;
+    const keyDownEvent = dispatch(target, "keydown", { ...eventInit, repeat });
 
     if (isPrevented(keyDownEvent)) {
         return;
     }
 
+    /**
+     * @param {string} toInsert
+     * @param {string} type
+     */
+    const insertValue = (toInsert, type) => {
+        const { selectionStart, selectionEnd, value } = target;
+        inputData = toInsert;
+        inputType = type;
+        if (isNil(selectionStart) && isNil(selectionEnd)) {
+            nextValue += toInsert;
+        } else {
+            nextValue = value.slice(0, selectionStart) + toInsert + value.slice(selectionEnd);
+            if (selectionStart === selectionEnd) {
+                nextSelectionStart = nextSelectionEnd = selectionStart + 1;
+            }
+        }
+    };
+
     const { ctrlKey, key, shiftKey } = keyDownEvent;
     let inputData = null;
     let inputType = null;
+    let nextSelectionEnd = null;
+    let nextSelectionStart = null;
     let nextValue = target.value;
 
     if (isEditable(target)) {
         switch (key) {
+            case "ArrowDown":
+            case "ArrowLeft":
+            case "ArrowUp":
+            case "ArrowRight": {
+                const { selectionStart, selectionEnd, value } = target;
+                if (isNil(selectionStart) || isNil(selectionEnd)) {
+                    break;
+                }
+                const start = key === "ArrowLeft" || key === "ArrowUp";
+                let selectionTarget;
+                if (ctrlKey) {
+                    // Move to the start/end of the line
+                    selectionTarget = start ? 0 : value.length;
+                } else {
+                    // Move the cursor left or right
+                    selectionTarget = start ? selectionStart - 1 : selectionEnd + 1;
+                }
+                target.selectionStart = target.selectionEnd = $max(
+                    $min(selectionTarget, value.length),
+                    0
+                );
+                break;
+            }
             case "Backspace": {
                 const { selectionStart, selectionEnd, value } = target;
                 if (fullClear) {
@@ -918,8 +1054,7 @@ const _keyDown = (target, eventInit) => {
             case "Enter": {
                 if (target.tagName === "TEXTAREA") {
                     // Insert new line
-                    nextValue += "\n";
-                    inputType = "insertLineBreak";
+                    insertValue("\n", "insertLineBreak");
                 }
                 break;
             }
@@ -927,16 +1062,10 @@ const _keyDown = (target, eventInit) => {
                 if (key.length === 1 && !ctrlKey) {
                     // Character coming from the keystroke
                     // ! TODO: Doesn't work with non-roman locales
-                    const { selectionStart, selectionEnd, value } = target;
-                    inputData = shiftKey ? key.toUpperCase() : key.toLowerCase();
-                    // Insert character in target value
-                    if (isNil(selectionStart) && isNil(selectionEnd)) {
-                        nextValue += inputData;
-                    } else {
-                        nextValue =
-                            value.slice(0, selectionStart) + inputData + value.slice(selectionEnd);
-                    }
-                    inputType = runTime.isComposing ? "insertCompositionText" : "insertText";
+                    insertValue(
+                        shiftKey ? key.toUpperCase() : key.toLowerCase(),
+                        runTime.isComposing ? "insertCompositionText" : "insertText"
+                    );
                 }
             }
         }
@@ -948,9 +1077,13 @@ const _keyDown = (target, eventInit) => {
                 // Select all
                 if (isEditable(target)) {
                     dispatch(target, "select");
+                    if (!isNil(target.selectionStart) && !isNil(target.selectionEnd)) {
+                        target.selectionStart = 0;
+                        target.selectionEnd = target.value.length;
+                    }
                 } else {
                     const selection = globalThis.getSelection();
-                    const range = document.createRange();
+                    const range = $createRange();
                     range.selectNodeContents(target);
                     selection.removeAllRanges();
                     selection.addRange(range);
@@ -975,6 +1108,30 @@ const _keyDown = (target, eventInit) => {
             }
             break;
         }
+        case "Enter": {
+            const tag = getTag(target);
+            const parentForm = target.closest("form");
+            if (parentForm && target.type !== "button") {
+                /**
+                 * Special action: <form> 'Enter'
+                 *  On: unprevented 'Enter' keydown on any element that
+                 *      is not a <button type="button"/> in a form element
+                 *  Do: triggers a 'submit' event on the form
+                 */
+                dispatch(parentForm, "submit");
+            } else if (
+                !keyDownEvent.repeat &&
+                (tag === "a" || tag === "button" || (tag === "input" && target.type === "button"))
+            ) {
+                /**
+                 * Special action: <a>, <button> or <input type="button"> 'Enter'
+                 *  On: unprevented and unrepeated 'Enter' keydown on mentioned elements
+                 *  Do: triggers a 'click' event on the element
+                 */
+                dispatch(target, "click", { button: 0 });
+            }
+            break;
+        }
         case "Escape": {
             runTime.isDragging = false;
             break;
@@ -985,7 +1142,9 @@ const _keyDown = (target, eventInit) => {
          *  Do: focus next (or previous with 'Shift') focusable element
          */
         case "Tab": {
-            const next = shiftKey ? getPreviousFocusableElement() : getNextFocusableElement();
+            const next = shiftKey
+                ? getPreviousFocusableElement({ tabbable: true })
+                : getNextFocusableElement({ tabbable: true });
             if (next) {
                 triggerFocus(next);
             }
@@ -1034,6 +1193,12 @@ const _keyDown = (target, eventInit) => {
 
     if (target.value !== nextValue) {
         target.value = nextValue;
+        if (!isNil(nextSelectionStart)) {
+            target.selectionStart = nextSelectionStart;
+        }
+        if (!isNil(nextSelectionEnd)) {
+            target.selectionEnd = nextSelectionEnd;
+        }
         dispatchEventSequence(target, ["beforeinput", "input"], {
             data: inputData,
             inputType,
@@ -1048,27 +1213,9 @@ const _keyDown = (target, eventInit) => {
 const _keyUp = (target, eventInit) => {
     dispatch(target, "keyup", eventInit);
 
+    runTime.currentKey = null;
     registerSpecialKey(eventInit, false);
 
-    if (eventInit.key === "Enter") {
-        let parentForm;
-        if (getTag(target) === "button" && target.type === "button") {
-            /**
-             * Special action: button 'Enter'
-             *  On: unprevented 'Enter' keydown on a <button type="button"/>
-             *  Do: triggers a 'click' event on the button
-             */
-            triggerClick(target, { button: 0 });
-        } else if ((parentForm = target.closest("form"))) {
-            /**
-             * Special action: form 'Enter'
-             *  On: unprevented 'Enter' keydown on any element that
-             *      is not a <button type="button"/> in a form element
-             *  Do: triggers a 'submit' event on the form
-             */
-            dispatch(parentForm, "submit");
-        }
-    }
     if (eventInit.key === " " && getTag(target) === "input" && target.type === "checkbox") {
         /**
          * Special action: input[type=checkbox] 'Space'
@@ -1128,6 +1275,7 @@ const _pointerUp = (target, options) => {
     const eventInit = {
         ...runTime.currentPosition,
         button: options?.button || 0,
+        detail: runTime.currentClickCount,
     };
 
     if (runTime.isDragging) {
@@ -1146,19 +1294,21 @@ const _pointerUp = (target, options) => {
         return;
     }
 
-    const prevented = dispatchEventSequence(
-        target,
-        ["pointerup", hasTouch() ? "touchend" : "mouseup"],
-        eventInit
-    );
+    dispatchEventSequence(target, ["pointerup", hasTouch() ? "touchend" : "mouseup"], eventInit);
 
-    if (!prevented) {
-        if (target === runTime.currentPointerDownTarget) {
-            triggerClick(target, eventInit);
-            runTime.currentClickCount++;
-            if (!hasTouch() && runTime.currentClickCount % 2 === 0) {
-                dispatch(target, "dblclick", eventInit);
-            }
+    const clickEventInit = { ...eventInit, detail: runTime.currentClickCount + 1 };
+    const currentTarget = runTime.currentPointerDownTarget;
+    let actualTarget;
+    if (hasTouch()) {
+        actualTarget = currentTarget === target && target;
+    } else {
+        actualTarget = getFirstCommonParent(target, currentTarget);
+    }
+    if (actualTarget) {
+        triggerClick(actualTarget, clickEventInit);
+        runTime.currentClickCount++;
+        if (!hasTouch() && runTime.currentClickCount % 2 === 0) {
+            dispatch(actualTarget, "dblclick", clickEventInit);
         }
     }
 
@@ -1293,13 +1443,22 @@ const mapBubblingEvent = (eventInit) => ({
 
 /**
  * - does not bubble
+ * - can be canceled
+ * @param {EventInit} [eventInit]
+ */
+const mapNonBubblingCancelableEvent = (eventInit) => ({
+    ...mapNonBubblingEvent(eventInit),
+    cancelable: true,
+});
+
+/**
+ * - does not bubble
  * - cannot be canceled
  * @param {EventInit} [eventInit]
  */
 const mapNonBubblingEvent = (eventInit) => ({
     composed: true,
     ...eventInit,
-    bubbles: false,
 });
 
 // Pointer & wheel event mappers
@@ -1674,7 +1833,9 @@ export function edit(value, options) {
         throw new HootDomError(`cannot call \`edit()\`: target should be editable`);
     }
 
-    _clear(element);
+    if (getNodeValue(element)) {
+        _clear(element);
+    }
     _fill(element, value, options);
 
     return logEvents("edit");
@@ -1935,61 +2096,6 @@ export function press(keyStrokes, options) {
 }
 
 /**
- * Gives the given {@link File} list to the current file input. This helper only
- * works if a file input has been previously interacted with (by clicking on it).
- *
- * @param {MaybeIterable<File>} files
- */
-export function setInputFiles(files) {
-    if (!runTime.currentFileInput) {
-        throw new HootDomError(
-            `cannot call \`setInputFiles()\`: no file input has been interacted with`
-        );
-    }
-
-    _fill(runTime.currentFileInput, files);
-
-    runTime.currentFileInput = null;
-
-    return logEvents("setInputFiles");
-}
-
-/**
- * @param {Target} target
- * @param {number} value
- * @param {PointerOptions} options
- */
-export function setInputRange(target, value, options) {
-    const element = getFirstTarget(target, options);
-
-    _implicitHover(element, options);
-    _pointerDown(element, options);
-    _fill(element, value);
-    _pointerUp(element, options);
-
-    return logEvents("setInputRange");
-}
-
-/**
- * @param {HTMLElement} fixture
- */
-export function setupEventActions(fixture) {
-    if (runTime.currentPointerDownTimeout) {
-        globalThis.clearTimeout(runTime.currentPointerDownTimeout);
-    }
-
-    removeChangeTargetListeners();
-
-    fixture.addEventListener("click", registerFileInput, { capture: true });
-
-    // Runtime global variables
-    Object.assign(runTime, getDefaultRunTimeValue());
-
-    // Special keys
-    Object.assign(specialKeys, getDefaultSpecialKeysValue());
-}
-
-/**
  * Performs a resize event sequence on the given {@link Target}.
  *
  * The event sequence is as follow:
@@ -2043,6 +2149,7 @@ export function scroll(target, position, options) {
         dispatch(element, "wheel");
     }
     // This will trigger a trusted "scroll" event
+    catchNextEvent(element, "scroll");
     element.scrollTo(scrollOptions);
 
     return logEvents("scroll");
@@ -2081,6 +2188,61 @@ export function select(value, options) {
 }
 
 /**
+ * Gives the given {@link File} list to the current file input. This helper only
+ * works if a file input has been previously interacted with (by clicking on it).
+ *
+ * @param {MaybeIterable<File>} files
+ */
+export function setInputFiles(files) {
+    if (!runTime.currentFileInput) {
+        throw new HootDomError(
+            `cannot call \`setInputFiles()\`: no file input has been interacted with`
+        );
+    }
+
+    _fill(runTime.currentFileInput, files);
+
+    runTime.currentFileInput = null;
+
+    return logEvents("setInputFiles");
+}
+
+/**
+ * @param {Target} target
+ * @param {number} value
+ * @param {PointerOptions} options
+ */
+export function setInputRange(target, value, options) {
+    const element = getFirstTarget(target, options);
+
+    _implicitHover(element, options);
+    _pointerDown(element, options);
+    _fill(element, value);
+    _pointerUp(element, options);
+
+    return logEvents("setInputRange");
+}
+
+/**
+ * @param {HTMLElement} fixture
+ */
+export function setupEventActions(fixture) {
+    if (runTime.currentPointerDownTimeout) {
+        globalThis.clearTimeout(runTime.currentPointerDownTimeout);
+    }
+
+    removeChangeTargetListeners();
+
+    fixture.addEventListener("click", registerFileInput, { capture: true });
+
+    // Runtime global variables
+    $assign(runTime, getDefaultRunTimeValue());
+
+    // Special keys
+    $assign(specialKeys, getDefaultSpecialKeysValue());
+}
+
+/**
  * Ensures that the given {@link Target} is unchecked.
  *
  * If it is checked, a click is triggered on the input.
@@ -2114,4 +2276,14 @@ export function uncheck(target, options) {
     }
 
     return logEvents("uncheck");
+}
+
+/**
+ * Triggers a "beforeunload" event the current window.
+ *
+ * @returns {Event[]}
+ */
+export function unload() {
+    dispatch(getWindow(), "beforeunload");
+    return logEvents("unload");
 }

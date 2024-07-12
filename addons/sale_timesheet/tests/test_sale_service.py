@@ -1,8 +1,7 @@
-# -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from odoo.addons.sale_timesheet.tests.common import TestCommonSaleTimesheet
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import UserError
 from odoo.tests import tagged
 
 
@@ -11,10 +10,10 @@ class TestSaleService(TestCommonSaleTimesheet):
     """ This test suite provide checks for miscellaneous small things. """
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
 
-        cls.sale_order = cls.env['sale.order'].with_context(mail_notrack=True, mail_create_nolog=True).create({
+        cls.sale_order = cls.env['sale.order'].create({
             'partner_id': cls.partner_a.id,
             'partner_invoice_id': cls.partner_a.id,
             'partner_shipping_id': cls.partner_a.id,
@@ -353,60 +352,6 @@ class TestSaleService(TestCommonSaleTimesheet):
         self.assertEqual(so_line2.project_id.sale_line_id, so_line2, "SO line of project should be the one that create it.")
         self.assertEqual(so_line5.project_id.sale_line_id, so_line5, "SO line of project with template B should be the one that create it.")
 
-    def test_sale_task_in_project_with_project(self):
-        """ This will test the new 'task_in_project' service tracking correctly creates tasks and projects
-            when a project_id is configured on the parent sale_order (ref task #1915660).
-
-            Setup:
-            - Configure a project_id on the SO
-            - SO line 1: a product with its delivery tracking set to 'task_in_project'
-            - SO line 2: the same product as SO line 1
-            - SO line 3: a product with its delivery tracking set to 'project_only'
-            - Confirm sale_order
-
-            Expected result:
-            - 2 tasks created on the project_id configured on the SO
-            - 1 project created with the correct template for the 'project_only' product
-        """
-
-        self.sale_order.write({'project_id': self.project_global.id})
-        self.sale_order._onchange_project_id()
-        self.assertEqual(self.sale_order.analytic_account_id, self.analytic_account_sale, "Changing the project on the SO should set the analytic account accordingly.")
-
-        so_line1 = self.env['sale.order.line'].create({
-            'product_id': self.product_order_timesheet3.id,
-            'product_uom_qty': 11,
-            'order_id': self.sale_order.id,
-        })
-        so_line2 = self.env['sale.order.line'].create({
-            'product_id': self.product_order_timesheet3.id,
-            'product_uom_qty': 10,
-            'order_id': self.sale_order.id,
-        })
-        so_line3 = self.env['sale.order.line'].create({
-            'product_id': self.product_order_timesheet4.id,
-            'product_uom_qty': 5,
-            'order_id': self.sale_order.id,
-        })
-
-        # temporary project_template_id for our checks
-        self.product_order_timesheet4.write({
-            'project_template_id': self.project_template.id
-        })
-        self.sale_order.action_confirm()
-        # remove it after the confirm because other tests don't like it
-        self.product_order_timesheet4.write({
-            'project_template_id': False
-        })
-
-        self.assertTrue(so_line1.task_id, "so_line1 should create a task as its product's service_tracking is set as 'task_in_project'")
-        self.assertEqual(so_line1.task_id.project_id, self.project_global, "The project on so_line1's task should be project_global as configured on its parent sale_order")
-        self.assertTrue(so_line2.task_id, "so_line2 should create a task as its product's service_tracking is set as 'task_in_project'")
-        self.assertEqual(so_line2.task_id.project_id, self.project_global, "The project on so_line2's task should be project_global as configured on its parent sale_order")
-        self.assertFalse(so_line3.task_id.name, "so_line3 should not create a task as its product's service_tracking is set as 'project_only'")
-        self.assertNotEqual(so_line3.project_id, self.project_template, "so_line3 should create a new project and not directly use the configured template")
-        self.assertIn(self.project_template.name, so_line3.project_id.name, "The created project for so_line3 should use the configured template")
-
     def test_sale_task_in_project_without_project(self):
         """ This will test the new 'task_in_project' service tracking correctly creates tasks and projects
             when the parent sale_order does NOT have a configured project_id (ref task #1915660).
@@ -684,7 +629,7 @@ class TestSaleService(TestCommonSaleTimesheet):
         self.sale_order._create_invoices()
 
         # Check that the resulting invoice line and the project have the same analytic account
-        invoice_line = self.sale_order.invoice_ids.line_ids.filtered(lambda line: line.product_id == product_add)
+        invoice_line = self.sale_order.account_move_ids.line_ids.filtered(lambda line: line.product_id == product_add)
         self.assertEqual(invoice_line.analytic_distribution, {str(self.project_global.analytic_account_id.id): 100},
              "SOL's analytic distribution should contain the project analytic account")
 
@@ -797,7 +742,7 @@ class TestSaleService(TestCommonSaleTimesheet):
     def test_compute_project_and_task_button_with_ts(self):
         """ This test ensures that the button are correctly computed when there is a timesheet service product on a SO. The behavior was not modified in sale_timesheet, but since
         the timesheet product case can not be tested in sale_project, we have to add the test here."""
-        sale_order_1 = self.env['sale.order'].with_context(tracking_disable=True).create([{
+        sale_order_1 = self.env['sale.order'].create([{
             'partner_id': self.partner_a.id,
             'partner_invoice_id': self.partner_a.id,
             'partner_shipping_id': self.partner_a.id,
@@ -820,7 +765,7 @@ class TestSaleService(TestCommonSaleTimesheet):
     def test_compute_show_timesheet_button(self):
         """ This test ensures that the hours recorded button is correctly computed. If there is a service product with an invoice policy of prepaid or timesheet, and there is
         at least on project linked to the SO, then the button should be displayed """
-        sale_order_1, sale_order_2 = self.env['sale.order'].with_context(tracking_disable=True).create([{
+        sale_order_1, sale_order_2 = self.env['sale.order'].create([{
             'partner_id': self.partner_a.id,
             'partner_invoice_id': self.partner_a.id,
             'partner_shipping_id': self.partner_a.id,
@@ -882,3 +827,44 @@ class TestSaleService(TestCommonSaleTimesheet):
         sale_order_2._compute_timesheet_count()
         sale_order_2._compute_show_hours_recorded_button()
         self.assertTrue(sale_order_2.show_hours_recorded_button, "There is a product service with the service_policy set on 'delivered on timesheet' and a project on the sale order, the button should be displayed")
+
+    def test_timesheet_hours_delivered_rounding(self):
+        """
+        Ensure hours are rounded consistently on SO & invoice.
+        """
+        self.env.company.project_time_mode_id.rounding = 1.0
+        self.env['sale.order.line'].create({
+            'name': self.product_delivery_timesheet3.name,
+            'product_id': self.product_delivery_timesheet3.id,
+            'product_uom_qty': 10,
+            'product_uom': self.product_delivery_timesheet3.uom_id.id,
+            'price_unit': self.product_delivery_timesheet3.list_price,
+            'order_id': self.sale_order.id,
+        })
+
+        for amount in (8.1, 8.5, 8.9):
+            order = self.sale_order.copy()
+            sol = order.order_line
+            order.action_confirm()
+
+            self.env['account.analytic.line'].create([{
+                'name': 'Test Line',
+                'project_id': sol.project_id.id,
+                'task_id': sol.task_id.id,
+                'unit_amount': amount,
+                'employee_id': self.employee_manager.id,
+            }])
+
+            invoice = order._create_invoices()
+            hours_delivered = sol._get_delivered_quantity_by_analytic([])[sol.id]
+
+            self.assertEqual(
+                order.timesheet_total_duration,
+                hours_delivered,
+                f"{amount} hours delivered should round the same for SO & timesheet",
+            )
+            self.assertEqual(
+                invoice.timesheet_total_duration,
+                hours_delivered,
+                f"{amount} hours delivered should round the same for invoice & timesheet",
+            )

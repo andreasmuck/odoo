@@ -12,6 +12,7 @@ class AccountPaymentTerm(models.Model):
     _name = "account.payment.term"
     _description = "Payment Terms"
     _order = "sequence, id"
+    _check_company_domain = models.check_company_domain_parent_of
 
     def _default_line_ids(self):
         return [Command.create({'value': 'percent', 'value_amount': 100.0, 'nb_days': 0})]
@@ -26,7 +27,7 @@ class AccountPaymentTerm(models.Model):
     company_id = fields.Many2one('res.company', string='Company')
     fiscal_country_codes = fields.Char(compute='_compute_fiscal_country_codes')
     sequence = fields.Integer(required=True, default=10)
-    currency_id = fields.Many2one('res.currency', default=lambda self: self.env.company.currency_id, store=True)
+    currency_id = fields.Many2one('res.currency', compute="_compute_currency_id")
 
     display_on_invoice = fields.Boolean(string='Show installment dates', default=True)
     example_amount = fields.Monetary(currency_field='currency_id', default=1000, store=False, readonly=True)
@@ -51,15 +52,21 @@ class AccountPaymentTerm(models.Model):
             allowed_companies = record.company_id or self.env.companies
             record.fiscal_country_codes = ",".join(allowed_companies.mapped('account_fiscal_country_id.code'))
 
+    @api.depends_context('company')
+    @api.depends('company_id')
+    def _compute_currency_id(self):
+        for payment_term in self:
+            payment_term.currency_id = payment_term.company_id.currency_id or self.env.company.currency_id
+
     def _get_amount_due_after_discount(self, total_amount, untaxed_amount):
         self.ensure_one()
         if self.early_discount:
             percentage = self.discount_percentage / 100.0
             if self.early_pay_discount_computation in ('excluded', 'mixed'):
-                discount_amount_currency = self.currency_id.round((total_amount - untaxed_amount) * percentage)
+                discount_amount_currency = (total_amount - untaxed_amount) * percentage
             else:
-                discount_amount_currency = self.currency_id.round(total_amount - (total_amount * (1 - (percentage))))
-            return total_amount - discount_amount_currency
+                discount_amount_currency = total_amount * percentage
+            return self.currency_id.round(total_amount - discount_amount_currency)
         return total_amount
 
     @api.depends('company_id')
@@ -76,7 +83,7 @@ class AccountPaymentTerm(models.Model):
     @api.depends('line_ids')
     def _compute_example_invalid(self):
         for payment_term in self:
-            payment_term.example_invalid = len(payment_term.line_ids) <= 1
+            payment_term.example_invalid = not payment_term.line_ids
 
     @api.depends('currency_id', 'example_amount', 'example_date', 'line_ids.value', 'line_ids.value_amount', 'line_ids.nb_days', 'early_discount', 'discount_percentage', 'discount_days')
     def _compute_example_preview(self):
@@ -137,7 +144,7 @@ class AccountPaymentTerm(models.Model):
             results['amount'] += term['foreign_amount']
         return amount_by_date
 
-    @api.constrains('line_ids')
+    @api.constrains('line_ids', 'early_discount')
     def _check_lines(self):
         round_precision = self.env['decimal.precision'].precision_get('Payment Terms')
         for terms in self:
@@ -222,7 +229,7 @@ class AccountPaymentTerm(models.Model):
 
     @api.ondelete(at_uninstall=False)
     def _unlink_except_referenced_terms(self):
-        if self.env['account.move'].search([('invoice_payment_term_id', 'in', self.ids)]):
+        if self.env['account.move'].search_count([('invoice_payment_term_id', 'in', self.ids)], limit=1):
             raise UserError(_('You can not delete payment terms as other records still reference it. However, you can archive it.'))
 
     def unlink(self):
@@ -279,17 +286,11 @@ class AccountPaymentTermLine(models.Model):
         elif self.delay_type == 'days_after_end_of_next_month':
             return date_utils.end_of(due_date + relativedelta(months=1), 'month') + relativedelta(days=self.nb_days)
         elif self.delay_type == 'days_end_of_month_on_the':
-            date_end_of_month = date_utils.end_of(due_date + relativedelta(days=self.nb_days), 'month')
-
-            # Special case handling when the day of the month is 29, 30 or 31 to avoid exceeding the next month's end
-            # For instance, with a payment term of 30 days end of month and using the 31st of a month,
-            # prevent calculation from moving beyond the end of the next month (e.g., early March instead of end February)
-            if self.days_next_month in {'29', '30', '31'}:
-                # We get the min of the days the user enter in the payment term and the last day of the next month
-                days_next_month = relativedelta(days=min(int(self.days_next_month), (date_end_of_month + relativedelta(month=2)).day))
-            else:
-                days_next_month = relativedelta(days=int(self.days_next_month))
-            return date_end_of_month + days_next_month
+            try:
+                days_next_month = int(self.days_next_month)
+            except ValueError:
+                days_next_month = 1
+            return due_date + relativedelta(days=self.nb_days) + relativedelta(months=1, day=days_next_month)
         return due_date + relativedelta(days=self.nb_days)
 
     @api.constrains('days_next_month')

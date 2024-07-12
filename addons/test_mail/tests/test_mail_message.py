@@ -5,6 +5,7 @@ from markupsafe import Markup
 from unittest.mock import patch
 
 from odoo.addons.mail.tests.common import mail_new_test_user, MailCommon
+from odoo.addons.mail.tools.discuss import Store
 from odoo.addons.test_mail.models.test_mail_models import MailTestSimple
 from odoo.exceptions import AccessError, UserError
 from odoo.tests.common import tagged, users
@@ -95,7 +96,7 @@ class TestMessageValues(MailCommon):
             record._message_update_content(tracking_message, '', [])
 
     @mute_logger('odoo.models.unlink')
-    def test_mail_message_format(self):
+    def test_mail_message_to_store(self):
         record1 = self.env['mail.test.simple'].create({'name': 'Test1'})
         record2 = self.env['mail.test.nothread'].create({'name': 'Test2'})
         messages = self.env['mail.message'].create([{
@@ -104,17 +105,17 @@ class TestMessageValues(MailCommon):
         } for record in [record1, record2]])
         for message, record in zip(messages, [record1, record2]):
             with self.subTest(record=record):
-                formatted = message.message_format()[0]
+                formatted = Store(message, for_current_user=True).get_result()["Message"][0]
                 self.assertEqual(formatted['record_name'], record.name)
                 record.write({'name': 'Just Test'})
-                formatted = message.message_format()[0]
+                formatted = Store(message, for_current_user=True).get_result()["Message"][0]
                 self.assertEqual(formatted['record_name'], 'Just Test')
 
     @mute_logger('odoo.models.unlink')
-    def test_mail_message_format_access(self):
+    def test_mail_message_to_store_access(self):
         """
         User that doesn't have access to a record should still be able to fetch
-        the record_name inside message_format.
+        the record_name inside message _to_store.
         """
         company_2 = self.env['res.company'].create({'name': 'Second Test Company'})
         record1 = self.env['mail.test.multi.company'].create({
@@ -124,11 +125,11 @@ class TestMessageValues(MailCommon):
         message = record1.message_post(body='', partner_ids=[self.user_employee.partner_id.id])
         # We need to flush and invalidate the ORM cache since the record_name
         # is already cached from the creation. Otherwise it will leak inside
-        # message_format.
+        # message _to_store.
         self.env.flush_all()
         self.env.invalidate_all()
-        res = message.with_user(self.user_employee).message_format()
-        self.assertEqual(res[0].get('record_name'), 'Test1')
+        res = Store(message.with_user(self.user_employee), for_current_user=True).get_result()
+        self.assertEqual(res["Message"][0].get("record_name"), "Test1")
 
     def test_mail_message_values_body_base64_image(self):
         msg = self.env['mail.message'].with_user(self.user_employee).create({
@@ -141,11 +142,12 @@ class TestMessageValues(MailCommon):
             '<img src="/web/image/{attachment.id}?access_token={attachment.access_token}" alt="image0" width="2"></p>'.format(attachment=msg.attachment_ids[0])
         )
 
-    @mute_logger('odoo.models.unlink')
+    @mute_logger('odoo.models.unlink', 'odoo.addons.mail.models.models')
     @users('employee')
     def test_mail_message_values_fromto_long_name(self):
-        """ Long headers may break in python if above 78 chars as folding is not
-        done correctly (see ``_notify_get_reply_to_formatted_email`` docstring
+        """ Long headers may break in python if above 68 chars for certain
+        DKIM verification stacks as folding is not done correctly
+        (see ``_notify_get_reply_to_formatted_email`` docstring
         + commit linked to this test). """
         # name would make it blow up: keep only email
         test_record = self.env['mail.test.container'].browse(self.alias_record.ids)
@@ -158,17 +160,17 @@ class TestMessageValues(MailCommon):
         })
         reply_to_email = f"{test_record.alias_name}@{self.alias_domain}"
         self.assertEqual(msg.reply_to, reply_to_email,
-                         'Reply-To: use only email when formataddr > 78 chars')
+                         'Reply-To: use only email when formataddr > 68 chars')
 
         # name + company_name would make it blow up: keep record_name in formatting
         self.company_admin.name = "Company name being about 33 chars"
-        test_record.write({'name': 'Name that would be more than 78 with company name'})
+        test_record.write({'name': 'Being more than 68 with company name'})
         msg = self.env['mail.message'].create({
             'model': test_record._name,
             'res_id': test_record.id
         })
         self.assertEqual(msg.reply_to, formataddr((test_record.name, reply_to_email)),
-                         'Reply-To: use recordname as name in format if recordname + company > 78 chars')
+                         'Reply-To: use recordname as name in format if recordname + company > 68 chars')
 
         # no record_name: keep company_name in formatting if ok
         test_record.write({'name': ''})
@@ -177,7 +179,7 @@ class TestMessageValues(MailCommon):
             'res_id': test_record.id
         })
         self.assertEqual(msg.reply_to, formataddr((self.env.user.company_id.name, reply_to_email)),
-                         'Reply-To: use company as name in format when no record name and still < 78 chars')
+                         'Reply-To: use company as name in format when no record name and still < 68 chars')
 
         # no record_name and company_name make it blow up: keep only email
         self.env.user.company_id.write({'name': 'Super Long Name That People May Enter "Even with an internal quoting of stuff"'})
@@ -186,15 +188,15 @@ class TestMessageValues(MailCommon):
             'res_id': test_record.id
         })
         self.assertEqual(msg.reply_to, reply_to_email,
-                         'Reply-To: use only email when formataddr > 78 chars')
+                         'Reply-To: use only email when formataddr > 68 chars')
 
         # whatever the record and company names, email is too long: keep only email
         test_record.write({
-            'alias_name': 'Waaaay too long alias name that should make any reply-to blow the 78 characters limit',
+            'alias_name': 'Waaaay too long alias name that should make any reply-to blow the 68 characters limit',
             'name': 'Short',
         })
         self.env.user.company_id.write({'name': 'Comp'})
-        sanitized_alias_name = 'waaaay-too-long-alias-name-that-should-make-any-reply-to-blow-the-78-characters-limit'
+        sanitized_alias_name = 'waaaay-too-long-alias-name-that-should-make-any-reply-to-blow-the-68-characters-limit'
         msg = self.env['mail.message'].create({
             'model': test_record._name,
             'res_id': test_record.id

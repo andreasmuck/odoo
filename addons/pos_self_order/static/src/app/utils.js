@@ -1,5 +1,3 @@
-/** @odoo-module */
-
 export const categorySorter = (a, b, start_categ_id) => {
     if (a.id === start_categ_id && b.id !== start_categ_id) {
         return -1; // 'a' should come before 'b'
@@ -20,7 +18,7 @@ export const attributeFormatter = (attrById, values, customValues = []) => {
 
     const attrVals = {};
     for (const attr of Object.values(attrById)) {
-        for (const value of attr.values) {
+        for (const value of attr.template_value_ids) {
             attrVals[value.id] = value;
         }
     }
@@ -29,7 +27,7 @@ export const attributeFormatter = (attrById, values, customValues = []) => {
         .filter((attr) => values.includes(attr.id))
         .reduce((acc, val) => {
             let description = "";
-            const attribute = attrById[val.attribute_id];
+            const attribute = val.attribute_id;
             const isCustomValue = Object.values(customValues).find(
                 (cus) => cus.custom_product_template_attribute_value_id === val.id
             );

@@ -20,15 +20,17 @@ registry.category("web_tour.tours").add("mail/static/tests/tours/mail_composer_t
         {
             content: "Click on Send Message",
             trigger: "button:contains(Send message)",
+            run: "click",
         },
         {
             content: "Write something in composer",
             trigger: ".o-mail-Composer-input",
-            run: "text blahblah @Not",
+            run: "edit blahblah @Not && click body",
         },
         {
             content: "Mention a partner",
             trigger: ".o-mail-Composer-suggestion:contains(Not A Demo User)",
+            run: "click",
         },
         {
             content: "Add one file in composer",
@@ -44,26 +46,21 @@ registry.category("web_tour.tours").add("mail/static/tests/tours/mail_composer_t
             },
         },
         {
+            trigger: ".o-mail-AttachmentCard:not(.o-isUploading)", // waiting the attachment to be uploaded
+        },
+        {
             content: "Open full composer",
             trigger: "button[aria-label='Full composer']",
-            extra_trigger: ".o-mail-AttachmentCard:not(.o-isUploading)", // waiting the attachment to be uploaded
+            run: "click",
         },
         {
             content: "Check composer keeps open after pushing Escape",
             trigger: ".o_mail_composer_form_view",
-            run: () => {
-                window.dispatchEvent(
-                    new KeyboardEvent("keydown", {
-                        bubbles: true,
-                        key: "Escape",
-                    })
-                );
-            },
+            run: "press Escape",
         },
         {
             content: "Check the earlier provided attachment is listed",
             trigger: '.o_attachment[title="text.txt"]',
-            run() {},
         },
         {
             content: "Check subject is autofilled",
@@ -102,46 +99,52 @@ registry.category("web_tour.tours").add("mail/static/tests/tours/mail_composer_t
         {
             content: "Open templates",
             trigger: '.o_field_widget[name="template_id"] input',
+            run(helpers) {
+                this.anchor.value = "test";
+                this.anchor.dispatchEvent(new InputEvent("input", { bubbles: true }));
+            },
         },
         {
             content: "Check a template is listed",
             in_modal: false,
             trigger: '.ui-autocomplete .ui-menu-item a:contains("Test template")',
-            run() {},
         },
         {
             content: "Send message",
             trigger: ".o_mail_send",
+            run: "click",
         },
         {
             content: "Check message is shown",
             trigger: '.o-mail-Message-body:contains("blahblah @Not A Demo User")',
+            run: "click",
         },
         {
             content: "Check message contains the attachment",
             trigger: '.o-mail-Message .o-mail-AttachmentCard:contains("text.txt")',
-            isCheck: true,
         },
         // Test the full composer input text is kept on closing
         {
             content: "Open full composer",
             trigger: "button[aria-label='Full composer']",
+            run: "click",
         },
         {
             content: "Write something in full composer",
             trigger: ".note-editable",
-            run: "text keep the content",
+            run: "editor keep the content",
         },
         {
             content: "Close full composer",
             trigger: ".btn-close",
+            run: "click",
         },
         {
             content: "Check full composer text is kept",
             trigger: ".o-mail-Composer-input",
             run() {
                 if (this.anchor.value !== "keep the content") {
-                    throw new Error(
+                    console.error(
                         "Composer in chatter should contain full composer text after discarding."
                     );
                 }

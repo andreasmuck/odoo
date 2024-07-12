@@ -173,6 +173,7 @@
                     <div class="o_login_auth"/>
                 </div>
 
+                <input type="hidden" name="type" value="password"/>
                 <input type="hidden" name="redirect" t-att-value="redirect"/>
             </form>
         </t>
@@ -219,6 +220,10 @@
             <t t-set="head">
                 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
 
+                <script type="text/javascript">
+                    odoo.__session_info__ = <t t-out="json.dumps(session_info)"/>;
+                </script>
+
                 <t t-call-assets="web.assets_unit_tests_setup" />
                 <t t-call-assets="web.assets_unit_tests" />
             </t>
@@ -230,6 +235,10 @@
             <t t-set="html_data" t-value="{'style': 'height: 100%;'}"/>
             <t t-set="title">Web Tests</t>
             <t t-set="head">
+                <script type="text/javascript">
+                    odoo.__session_info__ = <t t-out="json.dumps(session_info)"/>;
+                </script>
+
                 <t t-call="web.test_helpers"/>
 
                 <t t-call-assets="web.qunit_suite_tests" t-js="false"/>
@@ -246,6 +255,9 @@
             <t t-set="title">Web Mobile Tests</t>
             <t t-set="head">
                 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
+                <script type="text/javascript">
+                    odoo.__session_info__ = <t t-out="json.dumps(session_info)"/>;
+                </script>
 
                 <t t-call="web.test_helpers"/>
 
@@ -282,15 +294,17 @@
                         fetch(`/web/webclient/translations/${cache_hashes.translations}?lang=${user_context.lang}`);
                     }
                 </script>
+                <t t-call-assets="web.assets_web_print" media="print" t-js="false"/>
+
                 <t t-if="request.httprequest.cookies.get('color_scheme') == 'dark'">
-                    <t t-call-assets="web.assets_web_dark"/>
+                    <t t-call-assets="web.assets_web_dark" media="screen"/>
                 </t>
                 <t t-else="">
-                    <t t-call-assets="web.assets_web"/>
+                    <t t-call-assets="web.assets_web" media="screen"/>
                 </t>
-                <t t-call="web.conditional_assets_tests"/>
+                <t t-call="web.conditional_assets_tests" media="screen"/>
             </t>
-            <t t-set="head" t-value="head_web + (head or '')"/>
+            <t t-set="head" t-value="head_web + (head or '')" media="screen"/>
             <t t-set="body_classname" t-value="'o_web_client'"/>
         </t>
     </template>
@@ -301,6 +315,13 @@
             <t t-set="title">Offline</t>
             <t t-set="head">
                 <script type="text/javascript">
+                    document.addEventListener("DOMContentLoaded", () => {
+                        const cookies = document.cookie.split(';').map(c => c.trim());
+                        if (cookies.includes('color_scheme=dark')) {
+                            document.body.style.backgroundColor = "#262A36";
+                            document.body.style.color = "#FFFFFF";
+                        }
+                    });
                     window.addEventListener('online', () => location.reload());
                 </script>
                 <style>

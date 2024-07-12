@@ -1,6 +1,4 @@
 import { expect, test } from "@odoo/hoot";
-import { queryOne } from "@odoo/hoot-dom";
-import { animationFrame } from "@odoo/hoot-mock";
 import {
     contains,
     defineModels,
@@ -54,10 +52,8 @@ test("field contains a color input", async () => {
     Color._fields.hex_color = fields.Char({ string: "hexadecimal color", onChange: () => {} });
     await mountView({ type: "form", resModel: "color", resId: 1 });
 
-    onRpc(async (route, { method, args }) => {
-        if (method === "onchange") {
-            expect.step(`onchange ${JSON.stringify(args)}`);
-        }
+    onRpc("onchange", ({ args }) => {
+        expect.step(`onchange ${JSON.stringify(args)}`);
     });
 
     expect(".o_field_color input[type='color']").toHaveCount(1);
@@ -70,13 +66,10 @@ test("field contains a color input", async () => {
     );
     expect(".o_field_color input").toHaveValue("#000000");
 
-    const input = queryOne(".o_field_color input");
-    input.value = "#fefefe";
-    input.dispatchEvent(new Event("change"));
-    await animationFrame();
-    expect([
+    await contains(".o_field_color input", { visible: false }).edit("#fefefe");
+    expect.verifySteps([
         'onchange [[1],{"hex_color":"#fefefe"},["hex_color"],{"hex_color":{},"display_name":{}}]',
-    ]).toVerifySteps();
+    ]);
     expect(".o_field_color input").toHaveValue("#fefefe");
     expect(".o_field_color div").toHaveStyle({ backgroundColor: "rgb(254, 254, 254)" });
 });
@@ -128,10 +121,8 @@ test("color field change via anoter field's onchange", async () => {
     `,
     });
 
-    onRpc(async (route, { method, args }) => {
-        if (method === "onchange") {
-            expect.step(`onchange ${JSON.stringify(args)}`);
-        }
+    onRpc("onchange", ({ args }) => {
+        expect.step(`onchange ${JSON.stringify(args)}`);
     });
 
     expect(".o_field_color div").toHaveStyle(
@@ -142,9 +133,9 @@ test("color field change via anoter field's onchange", async () => {
     );
     expect(".o_field_color input").toHaveValue("#000000");
     await fieldInput("text").edit("someValue");
-    expect([
+    expect.verifySteps([
         'onchange [[1],{"text":"someValue"},["text"],{"text":{},"hex_color":{},"display_name":{}}]',
-    ]).toVerifySteps();
+    ]);
     expect(".o_field_color input", { visible: false }).toHaveValue("#fefefe");
     expect(".o_field_color div").toHaveStyle({ backgroundColor: "rgb(254, 254, 254)" });
 });

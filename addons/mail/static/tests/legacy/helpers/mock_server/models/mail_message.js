@@ -9,10 +9,6 @@ patch(MockServer.prototype, {
             const domain = args.args[0] || args.kwargs.domain;
             return this._mockMailMessageMarkAllAsRead(domain);
         }
-        if (args.model === "mail.message" && args.method === "message_format") {
-            const ids = args.args[0];
-            return this._mockMailMessageMessageFormat(ids);
-        }
         if (args.model === "mail.message" && args.method === "set_message_done") {
             const ids = args.args[0];
             return this._mockMailMessageSetMessageDone(ids);
@@ -188,7 +184,7 @@ patch(MockServer.prototype, {
         return res;
     },
     /**
-     * Simulates `message_format` on `mail.message`.
+     * Simulates `_message_format` on `mail.message`.
      *
      * @private
      * @returns {integer[]} ids
@@ -221,9 +217,6 @@ patch(MockServer.prototype, {
             const allNotifications = this.getRecords("mail.notification", [
                 ["mail_message_id", "=", message.id],
             ]);
-            const historyPartnerIds = allNotifications
-                .filter((notification) => notification.is_read)
-                .map((notification) => notification.res_partner_id);
             const needactionPartnerIds = allNotifications
                 .filter((notification) => !notification.is_read)
                 .map((notification) => notification.res_partner_id);
@@ -290,7 +283,6 @@ patch(MockServer.prototype, {
             const response = Object.assign({}, message, {
                 attachments: formattedAttachments,
                 author,
-                history_partner_ids: historyPartnerIds,
                 default_subject:
                     message.model &&
                     message.res_id &&
@@ -307,7 +299,7 @@ patch(MockServer.prototype, {
                 recipients: partners.map((p) => ({ id: p.id, name: p.name, type: "partner" })),
                 record_name:
                     thread && (thread.name !== undefined ? thread.name : thread.display_name),
-                starredPersonas: message.starred_partner_ids.map((id) => ({ id, type: "partner" })),
+                starred: message.starred_partner_ids?.includes(this.pyEnv.currentPartnerId),
                 trackingValues: formattedTrackingValues,
                 pinned_at: message.pinned_at,
             });
@@ -338,70 +330,6 @@ patch(MockServer.prototype, {
                 Object.assign(response, { thread });
             }
             return response;
-        });
-    },
-    /**
-     * Simulate `_message_format_personalize` on `mail.message` for the current partner.
-     *
-     * @private
-     * @returns {integer[]} ids
-     * @returns {Object[]}
-     */
-    _mockMailMessageFormatPersonalize(ids) {
-        const messages = this._mockMailMessageMessageFormat(ids);
-        messages.forEach((message) => {
-            if (message.model && message.res_id) {
-                const follower = this.getRecords("mail.followers", [
-                    ["res_model", "=", message.model],
-                    ["res_id", "=", message.res_id],
-                    ["partner_id", "=", this.pyEnv.currentPartnerId],
-                ]);
-                if (follower.length !== 0) {
-                    const follower_id = follower[0].id;
-                    message.thread.selfFollower = {
-                        id: follower_id,
-                        is_active: true,
-                        partner: { id: this.pyEnv.currentPartnerId, type: "partner" },
-                    };
-                }
-            }
-        });
-        return messages;
-    },
-    /**
-     * Simulates `_message_notification_format` on `mail.message`.
-     *
-     * @private
-     * @returns {integer[]} ids
-     * @returns {Object[]}
-     */
-    _mockMailMessage_MessageNotificationFormat(ids) {
-        const messages = this.getRecords("mail.message", [["id", "in", ids]]);
-        return messages.map((message) => {
-            let notifications = this.getRecords("mail.notification", [
-                ["mail_message_id", "=", message.id],
-            ]);
-            notifications = this._mockMailNotification_FilteredForWebClient(
-                notifications.map((notification) => notification.id)
-            );
-            notifications = this._mockMailNotification_NotificationFormat(
-                notifications.map((notification) => notification.id)
-            );
-            return {
-                author: message.author_id ? { id: message.author_id, type: "partner" } : false,
-                body: message.body,
-                date: message.date,
-                id: message.id,
-                message_type: message.message_type,
-                notifications: notifications,
-                thread: message.res_id
-                    ? {
-                          id: message.res_id,
-                          model: message.model,
-                          modelName: message.res_model_name,
-                      }
-                    : false,
-            };
         });
     },
     /**

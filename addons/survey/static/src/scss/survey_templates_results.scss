@@ -23,6 +23,9 @@
         border: none !important;
     }
     .o_survey_result {
+        // force to print background-images to render the leaderboard bar
+        -webkit-print-color-adjust: exact !important; /* Chrome, Safari */
+        print-color-adjust: exact !important; /*Firefox*/
         canvas {
             margin-bottom: 2rem;
         }
@@ -35,10 +38,10 @@
                 page-break-after: avoid;
             }
         }
-        .o_survey_results_question_wrapper:has(button.collapsed) {
-            display: none;
+        .o_survey_results_question_wrapper:has(div.collapsed) {
+            display: none !important;
         }
-        .o_survey_user_responses_table_wrapper {
+        .o_survey_results_table_wrapper {
             height: auto !important;
         }
         table {
@@ -112,6 +115,17 @@
 }
 
 .o_survey_results_question {
+    .o_survey_results_question_header {
+        .nav .btn:active {
+            box-shadow: none;
+        }
+        div[aria-expanded="true"] i.fa-caret-right {
+            display: none;
+        }
+        div[aria-expanded="false"] i.fa-caret-down {
+            display: none;
+        }
+    }
     .o_survey_results_question_pill {
         .only_right_radius {
             border-radius: 0 2em 2em 0;
@@ -132,9 +146,12 @@
         cursor:pointer;
 
         &.o_survey_answer_matrix_whitespace {
-            padding-right:18px;
+            padding-right: 16px;
             cursor:default;
         }
+    }
+    .collapse:not(.show) {
+        display: none !important;
     }
     .nav-tabs .nav-link.active {
         background-color: transparent;
@@ -162,8 +179,4 @@
     margin-left: auto;
     margin-right: auto;
     z-index: 1;
-}
-
-.o_survey_user_responses_table_wrapper {
-    overflow: auto;
 }

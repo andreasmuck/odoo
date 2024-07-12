@@ -1,5 +1,3 @@
-/** @odoo-module **/
-
 import { ConfirmationDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
 
 export function makeAwaitable(dialog, comp, props, options) {
@@ -17,6 +15,23 @@ export function makeAwaitable(dialog, comp, props, options) {
                 onClose: () => resolve(),
             }
         );
+    });
+}
+
+export function makeActionAwaitable(action, config, additionalArgs) {
+    return new Promise((resolve) => {
+        action.doAction(config, {
+            ...additionalArgs,
+            props: {
+                ...additionalArgs?.props,
+                onSave: (record) => {
+                    action.doAction({
+                        type: "ir.actions.act_window_close",
+                    });
+                    resolve(record);
+                },
+            },
+        });
     });
 }
 

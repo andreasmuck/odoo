@@ -34,6 +34,19 @@ class StockPicking(models.Model):
             if subcontracted_moves._subcontrating_can_be_record():
                 picking.display_action_record_components = 'facultative'
 
+    @api.depends('picking_type_id', 'partner_id')
+    def _compute_location_id(self):
+        super()._compute_location_id()
+
+        for picking in self:
+            # If this is a subcontractor resupply transfer, set the destination location
+            # to the vendor subcontractor location
+            subcontracting_resupply_type_id = picking.picking_type_id.warehouse_id.subcontracting_resupply_type_id
+            if picking.picking_type_id == subcontracting_resupply_type_id\
+                and picking.partner_id.property_stock_subcontractor:
+                picking.location_dest_id = picking.partner_id.property_stock_subcontractor
+
+
     # -------------------------------------------------------------------------
     # Action methods
     # -------------------------------------------------------------------------
@@ -141,7 +154,7 @@ class StockPicking(models.Model):
             'bom_id': bom.id,
             'location_src_id': subcontract_move.picking_id.partner_id.with_company(subcontract_move.company_id).property_stock_subcontractor.id,
             'location_dest_id': subcontract_move.picking_id.partner_id.with_company(subcontract_move.company_id).property_stock_subcontractor.id,
-            'product_qty': subcontract_move.product_qty or subcontract_move.quantity,
+            'product_qty': subcontract_move.product_uom_qty or subcontract_move.quantity,
             'picking_type_id': warehouse.subcontracting_type_id.id,
             'date_start': subcontract_move.date - relativedelta(days=bom.produce_delay)
         }

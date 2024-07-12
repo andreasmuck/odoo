@@ -11,13 +11,17 @@
         {
             trigger: '.o_app[data-menu-xmlid="crm.crm_menu_root"]',
             content: 'open crm app',
+            run: "click",
         }, {
             trigger: '.o_kanban_record .o_kanban_record_title span:contains(Test Lead Propagation)',
             content: 'Open the first lead',
             run: 'click',
-        }, {
+        },
+        {
+            trigger: ".o_form_editable .o_field_widget[name=email_from] input",
+        },
+        {
             trigger: '.o_form_button_save',
-            extra_trigger: '.o_form_editable .o_field_widget[name=email_from] input',
             content: 'Save the lead',
             run: 'click',
         },
@@ -31,26 +35,29 @@
         {
             trigger: '.o_app[data-menu-xmlid="crm.crm_menu_root"]',
             content: 'open crm app',
+            run: "click",
         }, {
             trigger: '.o_kanban_record .o_kanban_record_title span:contains(Test Lead Propagation)',
             content: 'Open the first lead',
             run: 'click',
-        }, {
+        },
+        {
+            trigger: ".o_form_editable .o_field_widget[name=phone] input",
+        },
+        {
             trigger: '.o_form_editable .o_field_widget[name=email_from] input',
-            extra_trigger: '.o_form_editable .o_field_widget[name=phone] input',
             content: 'Remove the email and the phone',
-            run: function (action) {
-                action.remove_text(".o_form_editable .o_field_widget[name=email_from] input");
-                action.remove_text(".o_form_editable .o_field_widget[name=phone] input");
-            },
-        }, {
+            run: "clear && clear .o_form_editable .o_field_widget[name=phone] input",
+        },
+        {
+            trigger: ".o_form_sheet_bg .fa-exclamation-triangle:not(.o_invisible_modifier)",
+        },
+        {
             trigger: '.o_back_button',
             // wait the warning message to be visible
-            extra_trigger: '.o_form_sheet_bg .fa-exclamation-triangle:not(.o_invisible_modifier)',
             content: 'Save the lead and exit to kanban',
             run: 'click',
         },{
             trigger: '.o_kanban_renderer',
-            isCheck: true,
         }
     ]});

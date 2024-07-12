@@ -18,7 +18,10 @@ class TestPaymentTransaction(RazorpayCommon):
 
     def test_no_item_missing_from_order_request_payload(self):
         """ Test that the request values are conform to the transaction fields. """
-        tx = self._create_transaction('direct')
+        inr_currency = self.env['res.currency'].with_context(active_test=False).search([
+            ('name', '=', 'INR'),
+        ], limit=1)
+        tx = self._create_transaction('direct', currency_id=inr_currency.id)
         for tokenize in (False, True):
             tx.tokenize = tokenize
             request_payload = tx._razorpay_prepare_order_payload(customer_id=self.customer_id)
@@ -81,6 +84,24 @@ class TestPaymentTransaction(RazorpayCommon):
         tx = self._create_transaction('direct')
         tx._process_notification_data(self.payment_data)
         self.assertEqual(tx.state, 'done')
+
+    def test_processing_notification_data_only_tokenizes_once(self):
+        """ Test that only one token is created when notification data of a given transaction are
+        processed multiple times. """
+        tx1 = self._create_transaction('redirect', reference='tx1', tokenize=True)
+        tx1._process_notification_data(self.tokenize_payment_data)
+        with patch(
+            'odoo.addons.payment_razorpay.models.payment_transaction.PaymentTransaction'
+            '._razorpay_tokenize_from_notification_data'
+        ) as tokenize_mock:
+            # Create the second transaction with the first transaction's token.
+            tx2 = self._create_transaction('token', reference='tx2', token_id=tx1.token_id.id)
+            tx2._process_notification_data(self.tokenize_payment_data)
+            self.assertEqual(
+                tokenize_mock.call_count,
+                0,
+                msg="No new token should be created for transactions already linked to a token.",
+            )
 
     def test_processing_notification_data_tokenizes_transaction(self):
         """ Test that the transaction is tokenized when it was requested and the notification data

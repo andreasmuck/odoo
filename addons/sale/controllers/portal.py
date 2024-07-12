@@ -206,6 +206,7 @@ class CustomerPortal(payment_portal.PaymentPortal):
             amount = order_sudo.amount_total - order_sudo.amount_paid
         currency = order_sudo.currency_id
 
+        availability_report = {}
         # Select all the payment methods and tokens that match the payment context.
         providers_sudo = request.env['payment.provider'].sudo()._get_compatible_providers(
             company.id,
@@ -213,6 +214,7 @@ class CustomerPortal(payment_portal.PaymentPortal):
             amount,
             currency_id=currency.id,
             sale_order_id=order_sudo.id,
+            report=availability_report,
             **kwargs,
         )  # In sudo mode to read the fields of providers and partner (if logged out).
         payment_methods_sudo = request.env['payment.method'].sudo()._get_compatible_payment_methods(
@@ -220,6 +222,7 @@ class CustomerPortal(payment_portal.PaymentPortal):
             partner_sudo.id,
             currency_id=currency.id,
             sale_order_id=order_sudo.id,
+            report=availability_report,
             **kwargs,
         )  # In sudo mode to read the fields of providers.
         tokens_sudo = request.env['payment.token'].sudo()._get_available_tokens(
@@ -247,6 +250,7 @@ class CustomerPortal(payment_portal.PaymentPortal):
             'providers_sudo': providers_sudo,
             'payment_methods_sudo': payment_methods_sudo,
             'tokens_sudo': tokens_sudo,
+            'availability_report': availability_report,
             'transaction_route': order_sudo.get_portal_url(suffix='/transaction'),
             'landing_route': order_sudo.get_portal_url(),
             'access_token': order_sudo._portal_ensure_token(),
@@ -313,6 +317,13 @@ class CustomerPortal(payment_portal.PaymentPortal):
 
         if order_sudo._has_to_be_signed() and decline_message:
             order_sudo._action_cancel()
+            # The currency is manually cached while in a sudoed environment to prevent an
+            # AccessError. The state of the Sales Order is a dependency of
+            # `untaxed_amount_to_invoice`, which is a monetary field. They require the currency to
+            # ensure the values are saved in the correct format. However, the currency cannot be
+            # read directly during the flush due to access rights, necessitating manual caching.
+            order_sudo.order_line.currency_id
+
             _message_post_helper(
                 'sale.order',
                 order_sudo.id,

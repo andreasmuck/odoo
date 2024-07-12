@@ -1,105 +1,81 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 from odoo import fields, Command
-from odoo.tests import Form, TransactionCase, HttpCase
+from odoo.tests import Form, HttpCase, new_test_user
 from odoo.tools.float_utils import float_round
+
+from odoo.addons.product.tests.common import ProductCommon
 
 import json
 import base64
+from contextlib import contextmanager
+from functools import wraps
 from lxml import etree
 from unittest import SkipTest
+from unittest.mock import patch
 
 
-def instantiate_accountman(cls):
-    cls.user = cls.env['res.users'].create({
-        'name': 'Because I am accountman!',
-        'login': 'accountman',
-        'password': 'accountman',
-        'groups_id': [
-            Command.set(cls.env.user.groups_id.ids),
-            Command.link(cls.env.ref('account.group_account_manager').id),
-            Command.link(cls.env.ref('account.group_account_user').id),
-        ],
-    })
-    cls.user.partner_id.email = 'accountman@test.com'
-
-    # Shadow the current environment/cursor with one having the report user.
-    # This is mandatory to test access rights.
-    cls.env = cls.env(user=cls.user)
-    cls.cr = cls.env.cr
-
-class AccountTestInvoicingCommon(TransactionCase):
+class AccountTestInvoicingCommon(ProductCommon):
+    # to override by the helper methods setup_country and setup_chart_template to adapt to a localization
+    chart_template = False
+    country_code = False
 
     @classmethod
     def safe_copy(cls, record):
         return record and record.copy()
 
-    @classmethod
-    def copy_account(cls, account, default=None):
-        suffix_nb = 1
-        while True:
-            new_code = '%s.%s' % (account.code, suffix_nb)
-            if account.search_count([('company_id', '=', account.company_id.id), ('code', '=', new_code)]):
-                suffix_nb += 1
-            else:
-                return account.copy(default={**(default or {}), 'code': new_code, 'name': account.name})
+    @staticmethod
+    def setup_country(country_code):
+
+        def _decorator(function):
+            @wraps(function)
+            def wrapper(self):
+                self.country_code = country_code.upper()
+                function(self)
+            return wrapper
+
+        return _decorator
+
+    @staticmethod
+    def setup_chart_template(chart_template):
+        def _decorator(function):
+            @wraps(function)
+            def wrapper(self):
+                self.chart_template = chart_template
+                function(self)
+            return wrapper
+
+        return _decorator
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
+    def setUpClass(cls):
         super().setUpClass()
-        cls.env = cls.env(context={
-            **cls.env.context,
-            'disable_abnormal_invoice_detection': True,
-        })
-        cls.env.ref('base.main_company').currency_id = cls.env.ref('base.USD')
-        instantiate_accountman(cls)
 
-        assert 'post_install' in cls.test_tags, 'This test requires a CoA to be installed, it should be tagged "post_install"'
-
-        if chart_template_ref:
-            template_vals = cls.env['account.chart.template']._get_chart_template_mapping()[chart_template_ref]
-            template_module = cls.env.ref(f"base.module_{template_vals['module']}")
-            if template_module.state != 'installed':
-                raise SkipTest(f"Module required for the test is not installed ({template_module.name})")
-
-        cls.company_data_2 = cls.setup_company_data('company_2_data', chart_template=chart_template_ref)
-        cls.company_data = cls.setup_company_data('company_1_data', chart_template=chart_template_ref)
-
-        cls.user.write({
-            'company_ids': [Command.set((cls.company_data['company'] + cls.company_data_2['company']).ids)],
-            'company_id': cls.company_data['company'].id,
-        })
-
-        cls.currency_data = cls.setup_multi_currency_data()
+        cls.company_data = cls.collect_company_accounting_data(cls.env.company)
 
         # ==== Taxes ====
         cls.tax_sale_a = cls.company_data['default_tax_sale']
-        cls.tax_sale_b = cls.safe_copy(cls.company_data['default_tax_sale'])
+        cls.tax_sale_b = cls.company_data['default_tax_sale'] and cls.company_data['default_tax_sale'].copy()
         cls.tax_purchase_a = cls.company_data['default_tax_purchase']
-        cls.tax_purchase_b = cls.safe_copy(cls.company_data['default_tax_purchase'])
+        cls.tax_purchase_b = cls.company_data['default_tax_purchase'] and cls.company_data['default_tax_purchase'].copy()
         cls.tax_armageddon = cls.setup_armageddon_tax('complex_tax', cls.company_data)
 
         # ==== Products ====
-        cls.product_a = cls.env['product.product'].create({
-            'name': 'product_a',
-            'uom_id': cls.env.ref('uom.product_uom_unit').id,
-            'lst_price': 1000.0,
-            'standard_price': 800.0,
-            'property_account_income_id': cls.company_data['default_account_revenue'].id,
-            'property_account_expense_id': cls.company_data['default_account_expense'].id,
-            'taxes_id': [Command.set(cls.tax_sale_a.ids)],
-            'supplier_taxes_id': [Command.set(cls.tax_purchase_a.ids)],
-        })
-        cls.product_b = cls.env['product.product'].create({
-            'name': 'product_b',
-            'uom_id': cls.env.ref('uom.product_uom_dozen').id,
-            'lst_price': 200.0,
-            'standard_price': 160.0,
-            'property_account_income_id': cls.copy_account(cls.company_data['default_account_revenue']).id,
-            'property_account_expense_id': cls.copy_account(cls.company_data['default_account_expense']).id,
-            'taxes_id': [Command.set((cls.tax_sale_a + cls.tax_sale_b).ids)],
-            'supplier_taxes_id': [Command.set((cls.tax_purchase_a + cls.tax_purchase_b).ids)],
-        })
+        cls.product_a = cls._create_product(
+            name='product_a',
+            lst_price=1000.0,
+            standard_price=800.0
+        )
+        cls.product_b = cls._create_product(
+            name='product_b',
+            uom_id=cls.uom_dozen.id,
+            lst_price=200.0,
+            standard_price=160.0,
+            property_account_income_id=cls.copy_account(cls.company_data['default_account_revenue']).id,
+            property_account_expense_id=cls.copy_account(cls.company_data['default_account_expense']).id,
+            taxes_id=[Command.set((cls.tax_sale_a + cls.tax_sale_b).ids)],
+            supplier_taxes_id=[Command.set((cls.tax_purchase_a + cls.tax_purchase_b).ids)],
+        )
 
         # ==== Fiscal positions ====
         cls.fiscal_pos_a = cls.env['account.fiscal.position'].create({
@@ -194,32 +170,78 @@ class AccountTestInvoicingCommon(TransactionCase):
             )
 
     @classmethod
-    def setup_company_data(cls, company_name, chart_template=None, **kwargs):
-        ''' Create a new company having the name passed as parameter.
-        A chart of accounts will be installed to this company: the same as the current company one.
-        The current user will get access to this company.
+    def setup_other_company(cls, **kwargs):
+        # OVERRIDE
+        company = cls._create_company(**{'name': 'company_2'} | kwargs)
+        return cls.collect_company_accounting_data(company)
 
-        :param chart_template: The chart template to be used on this new company.
-        :param company_name: The name of the company.
-        :return: A dictionary will be returned containing all relevant accounting data for testing.
-        '''
+    @classmethod
+    def setup_independent_company(cls, **kwargs):
+        return cls._create_company(name='company_1_data', **kwargs)
 
-        company = cls.env['res.company'].create({
-            'name': company_name,
-            **kwargs,
-        })
-        cls.env.user.company_ids |= company
+    @classmethod
+    def setup_independent_user(cls):
+        return new_test_user(
+            cls.env,
+            name='Because I am accountman!',
+            login='accountman',
+            password='accountman',
+            email='accountman@test.com',
+            groups_id=cls.get_default_groups().ids,
+            company_id=cls.env.company.id,
+        )
+
+    @classmethod
+    def _create_company(cls, **create_values):
+        if cls.country_code:
+            country = cls.env['res.country'].search([('code', '=', cls.country_code.upper())])
+            if not country:
+                raise ValueError('Invalid country code')
+            if 'country_id' not in create_values:
+                create_values['country_id'] = country.id
+            if 'currency_id' not in create_values:
+                create_values['currency_id'] = country.currency_id.id
+        company = super()._create_company(**create_values)
+        cls._use_chart_template(company, cls.chart_template)
+        # if the currency_id was defined explicitly (or via the country), it should override the one from the coa
+        if create_values.get('currency_id'):
+            company.currency_id = create_values['currency_id']
+        return company
+
+    @classmethod
+    def _create_product(cls, **create_values):
+        # OVERRIDE
+        create_values.setdefault('property_account_income_id', cls.company_data['default_account_revenue'].id)
+        create_values.setdefault('property_account_expense_id', cls.company_data['default_account_expense'].id)
+        create_values.setdefault('taxes_id', [Command.set(cls.tax_sale_a.ids)])
+        return super()._create_product(**create_values)
+
+    @classmethod
+    def get_default_groups(cls):
+        groups = super().get_default_groups()
+        return groups | cls.env.ref('account.group_account_manager') | cls.env.ref('account.group_account_user')
+
+    @classmethod
+    def setup_other_currency(cls, code, **kwargs):
+        if 'rates' not in kwargs:
+            return super().setup_other_currency(code, rates=[('2016-01-01', 3.0), ('2017-01-01', 2.0)], **kwargs)
+        return super().setup_other_currency(code, **kwargs)
+
+    @classmethod
+    def _use_chart_template(cls, company, chart_template_ref=None):
+        chart_template_ref = chart_template_ref or cls.env['account.chart.template']._guess_chart_template(company.country_id)
+        template_vals = cls.env['account.chart.template']._get_chart_template_mapping()[chart_template_ref]
+        template_module = cls.env['ir.module.module']._get(template_vals['module'])
+        if template_module.state != 'installed':
+            raise SkipTest(f"Module required for the test is not installed ({template_module.name})")
 
         # Install the chart template
-        chart_template = chart_template or cls.env['account.chart.template']._guess_chart_template(company.country_id)
-        cls.env['account.chart.template'].try_loading(chart_template, company=company, install_demo=False)
+        cls.env['account.chart.template'].try_loading(chart_template_ref, company=company, install_demo=False)
         if not company.account_fiscal_country_id:
             company.account_fiscal_country_id = cls.env.ref('base.us')
 
-        # The currency could be different after the installation of the chart template.
-        if kwargs.get('currency_id'):
-            company.write({'currency_id': kwargs['currency_id']})
-
+    @classmethod
+    def collect_company_accounting_data(cls, company):
         return {
             'company': company,
             'currency': company.currency_id,
@@ -279,49 +301,19 @@ class AccountTestInvoicingCommon(TransactionCase):
         }
 
     @classmethod
-    def setup_multi_currency_data(cls, default_values=None, rate2016=3.0, rate2017=2.0):
-        default_values = default_values or {}
-        foreign_currency = cls.env['res.currency'].create({
-            'name': 'Gold Coin',
-            'symbol': '☺',
-            'rounding': 0.001,
-            'position': 'after',
-            'currency_unit_label': 'Gold',
-            'currency_subunit_label': 'Silver',
-            **default_values,
-        })
-        rate1 = cls.env['res.currency.rate'].create({
-            'name': '2016-01-01',
-            'rate': rate2016,
-            'currency_id': foreign_currency.id,
-            'company_id': cls.env.company.id,
-        })
-        rate2 = cls.env['res.currency.rate'].create({
-            'name': '2017-01-01',
-            'rate': rate2017,
-            'currency_id': foreign_currency.id,
-            'company_id': cls.env.company.id,
-        })
-        return {
-            'currency': foreign_currency,
-            'rates': rate1 + rate2,
-        }
+    def copy_account(cls, account, default=None):
+        suffix_nb = 1
+        while True:
+            new_code = '%s.%s' % (account.code, suffix_nb)
+            if account.search_count([('company_id', '=', account.company_id.id), ('code', '=', new_code)]):
+                suffix_nb += 1
+            else:
+                return account.copy(default={'code': new_code, 'name': account.name, **(default or {})})
 
     @classmethod
-    def _instantiate_basic_test_tax_group(cls, company=None, country=None):
-        company = company or cls.env.company
-        vals = {
-            'name': 'Test tax group',
-            'company_id': company.id,
-            'tax_receivable_account_id': cls.company_data['default_account_receivable'].sudo().copy({'company_id': company.id}).id,
-            'tax_payable_account_id': cls.company_data['default_account_payable'].sudo().copy({'company_id': company.id}).id,
-        }
-        if country:
-            vals['country_id'] = country.id
-        return cls.env['account.tax.group'].sudo().create(vals)
-
-    @classmethod
-    def setup_armageddon_tax(cls, tax_name, company_data):
+    def setup_armageddon_tax(cls, tax_name, company_data, **kwargs):
+        type_tax_use = kwargs.get('type_tax_use', 'sale')
+        cash_basis_transition_account = company_data['default_account_tax_sale'] and company_data['default_account_tax_sale'].copy()
         return cls.env['account.tax'].create({
             'name': '%s (group)' % tax_name,
             'amount_type': 'group',
@@ -332,6 +324,7 @@ class AccountTestInvoicingCommon(TransactionCase):
                     'name': '%s (child 1)' % tax_name,
                     'amount_type': 'percent',
                     'amount': 20.0,
+                    'type_tax_use': type_tax_use,
                     'country_id': company_data['company'].account_fiscal_country_id.id,
                     'price_include': True,
                     'include_base_amount': True,
@@ -371,9 +364,10 @@ class AccountTestInvoicingCommon(TransactionCase):
                     'name': '%s (child 2)' % tax_name,
                     'amount_type': 'percent',
                     'amount': 10.0,
+                    'type_tax_use': type_tax_use,
                     'country_id': company_data['company'].account_fiscal_country_id.id,
                     'tax_exigibility': 'on_payment',
-                    'cash_basis_transition_account_id': cls.safe_copy(company_data['default_account_tax_sale']).id,
+                    'cash_basis_transition_account_id': cash_basis_transition_account.id,
                     'invoice_repartition_line_ids': [
                         (0, 0, {
                             'repartition_type': 'base',
@@ -395,6 +389,7 @@ class AccountTestInvoicingCommon(TransactionCase):
                     ],
                 }),
             ],
+            **kwargs,
         })
 
     @classmethod
@@ -478,13 +473,13 @@ class AccountTestInvoicingCommon(TransactionCase):
 
     def assertInvoiceValues(self, move, expected_lines_values, expected_move_values):
         def sort_lines(lines):
-            return lines.sorted(lambda line: (line.sequence, not bool(line.tax_line_id), line.name or '', line.balance))
+            return lines.sorted(lambda line: (line.sequence, not bool(line.tax_line_id), line.name or line.product_id.display_name or '', line.balance))
         self.assertRecordValues(sort_lines(move.line_ids.sorted()), expected_lines_values)
         self.assertRecordValues(move, [expected_move_values])
 
     def assert_tax_totals(self, tax_totals, currency, expected_values):
         main_keys_to_ignore = {'formatted_amount_total', 'formatted_amount_untaxed'}
-        group_keys_to_ignore = {'group_key', 'formatted_tax_group_amount', 'formatted_tax_group_base_amount'}
+        group_keys_to_ignore = {'group_key', 'formatted_tax_group_amount', 'formatted_tax_group_base_amount', 'display_formatted_tax_group_base_amount'}
         subtotals_keys_to_ignore = {'formatted_amount'}
         comp_curr_keys = {'tax_group_amount_company_currency', 'tax_group_base_amount_company_currency', 'amount_company_currency'}
         to_compare = dict(tax_totals)
@@ -604,16 +599,19 @@ class AccountTestInvoicingCommon(TransactionCase):
             :param node_dict:           The node to compare with.
             :param expected_node_dict:  The expected node.
             '''
+            if expected_node_dict['text'] == '___ignore___':
+                return
             # Check tag.
             self.assertEqual(node_dict['tag'], expected_node_dict['tag'])
 
             # Check attributes.
-            node_dict_attrib = {k: '___ignore___' if expected_node_dict['attrib'].get(k) == '___ignore___' else v
-                                for k, v in node_dict['attrib'].items()}
-            expected_node_dict_attrib = {k: v for k, v in expected_node_dict['attrib'].items() if v != '___remove___'}
+            for k, v in expected_node_dict['attrib'].items():
+                if v == '___ignore___':
+                    node_dict['attrib'][k] = '___ignore___'
+
             self.assertDictEqual(
-                node_dict_attrib,
-                expected_node_dict_attrib,
+                node_dict['attrib'],
+                expected_node_dict['attrib'],
                 f"Element attributes are different for node {node_dict['full_path']}",
             )
 
@@ -663,16 +661,62 @@ class AccountTestInvoicingCommon(TransactionCase):
         '''
         return etree.fromstring(xml_tree_str)
 
+    @contextmanager
+    def enter_test_mode(self):
+        """
+        Make so that all new cursors opened on this database registry
+        reuse the one currently used by the test.
 
-class AccountTestInvoicingHttpCommon(AccountTestInvoicingCommon, HttpCase):
+        Useful for printing PDFs inside a TransactionCase test when
+        using a HttpCase is not possible/desirable.
+        """
+        self.env.registry.enter_test_mode(self.env.cr)
+        try:
+            yield
+        finally:
+            self.env.registry.leave_test_mode()
+
+
+class AccountTestMockOnlineSyncCommon(HttpCase):
+    def start_tour(self, url_path, tour_name, step_delay=None, **kwargs):
+        with self.mock_online_sync_favorite_institutions():
+            super().start_tour(url_path, tour_name, step_delay, **kwargs)
+
+    @classmethod
+    @contextmanager
+    def mock_online_sync_favorite_institutions(cls):
+        def get_institutions(*args, **kwargs):
+            return [
+                {
+                    'country': 'US',
+                    'id': 3245,
+                    'name': 'BMO Business Banking',
+                    'picture': '/base/static/img/logo_white.png',
+                },
+                {
+                    'country': 'US',
+                    'id': 8192,
+                    'name': 'Banc of California',
+                    'picture': '/base/static/img/logo_white.png'
+                },
+            ]
+        with patch.object(
+             target=cls.registry['account.journal'],
+             attribute='fetch_online_sync_favorite_institutions',
+             new=get_institutions,
+             create=True):
+            yield
+
+
+class AccountTestInvoicingHttpCommon(AccountTestInvoicingCommon, AccountTestMockOnlineSyncCommon):
     pass
 
 
 class TestTaxCommon(AccountTestInvoicingHttpCommon):
 
     @classmethod
-    def setUpClass(cls, chart_template_ref=None):
-        super().setUpClass(chart_template_ref=chart_template_ref)
+    def setUpClass(cls):
+        super().setUpClass()
         cls.number = 0
         cls.maxDiff = None
 
@@ -720,60 +764,115 @@ class TestTaxCommon(AccountTestInvoicingHttpCommon):
         })
 
     def _prepare_taxes_computation_test(self, taxes, price_unit, expected_values, evaluation_context_kwargs=None, compute_kwargs=None):
+        """ Prepare the values to test a taxes computation.
+
+        :param taxes:                       A recordset of account.tax.
+        :param price_unit:                  The price unit on which apply the computation of taxes.
+        :param expected_values:             The expected result of '_eval_taxes_computation'.
+        :param evaluation_context_kwargs:   Some extra values about the computation:
+            * quantity:                 1 by default.
+            * product:                  An optional product record if you are using taxes that depend on the product.
+            * rounding_method:          The taxes rounding method that is 'round_per_line' by default.
+            * excluded_special_modes:   By default, when using the 'round_globally' method, both special modes are tested as well
+                                        ('total_excluded' & 'total_included') to ensure the computations are symmetrical.
+                                        The taxes computation is called first with 'special_mode=False'.
+                                        Then, we call it again with "special_mode='total_excluded'" using the 'total_excluded' found during
+                                        the previous evaluation as price_unit.
+                                        Then, we call it again but this time using 'total_included'.
+                                        The all 3 computations should give exactly the same expected results. In rare cases, you would want
+                                        to use a configuration that is not symmetrical. In that case, 'excluded_special_modes' could be
+                                        used to excluded 'total_excluded', 'total_included' or both.
+        :param compute_kwargs:  Extra parameters to be passed to the '_prepare_taxes_computation' method.
+        :return: A dictionary representing a test that will be used py-side & js-side to assert the taxes computation.
+        """
         evaluation_context_kwargs = evaluation_context_kwargs or {}
         quantity = evaluation_context_kwargs.pop('quantity', 1)
+        product = evaluation_context_kwargs.pop('product', None)
         compute_kwargs = compute_kwargs or {}
         is_round_globally = evaluation_context_kwargs.get('rounding_method') == 'round_globally'
+        excluded_special_modes = evaluation_context_kwargs.pop('excluded_special_modes', [])
+
+        taxes_data = taxes._convert_to_dict_for_taxes_computation()
+        product_values = taxes._eval_taxes_computation_turn_to_product_values(taxes_data, product=product)
         return {
             'expected_values': expected_values,
             'params': {
                 'test': 'taxes_computation',
-                'tax_values_list': taxes._convert_to_dict_for_taxes_computation(),
+                'taxes_data': taxes_data,
                 'price_unit': price_unit,
                 'quantity': quantity,
+                'product_values': product_values,
                 'evaluation_context_kwargs': evaluation_context_kwargs,
                 'compute_kwargs': compute_kwargs,
                 'is_round_globally': is_round_globally,
+                'excluded_special_modes': excluded_special_modes,
             },
         }
 
-    def _prepare_adapt_price_unit_to_another_taxes_test(self, price_unit, original_taxes, new_taxes, expected_price_unit):
+    def _prepare_adapt_price_unit_to_another_taxes_test(self, price_unit, original_taxes, new_taxes, expected_price_unit, product=None):
+        original_taxes_data = original_taxes._convert_to_dict_for_taxes_computation()
+        new_taxes_data = new_taxes._convert_to_dict_for_taxes_computation()
+        product_values = new_taxes._eval_taxes_computation_turn_to_product_values(
+            original_taxes_data + new_taxes_data,
+            product=product,
+        )
         return {
             'expected_price_unit': expected_price_unit,
             'params': {
                 'test': 'adapt_price_unit_to_another_taxes',
-                'original_tax_values_list': original_taxes._convert_to_dict_for_taxes_computation(),
-                'new_tax_values_list': new_taxes._convert_to_dict_for_taxes_computation(),
+                'original_taxes_data': original_taxes_data,
+                'new_taxes_data': new_taxes_data,
                 'price_unit': price_unit,
+                'product_values': product_values,
             },
         }
 
     def _add_test_py_results(self, test):
+        AccountTax = self.env['account.tax']
         params = test['params']
         if params['test'] == 'taxes_computation':
-            evaluation_context = self.env['account.tax']._eval_taxes_computation_prepare_context(
+            evaluation_context = AccountTax._eval_taxes_computation_prepare_context(
                 params['price_unit'],
                 params['quantity'],
+                params['product_values'],
                 **params['evaluation_context_kwargs'],
             )
-            taxes_computation = self.env['account.tax']._prepare_taxes_computation(params['tax_values_list'], **params['compute_kwargs'])
+            taxes_computation = AccountTax._prepare_taxes_computation(params['taxes_data'], **params['compute_kwargs'])
             test['py_results'] = {
-                'results': self.env['account.tax']._eval_taxes_computation(taxes_computation, evaluation_context),
+                'results': AccountTax._eval_taxes_computation(taxes_computation, evaluation_context),
             }
 
             if params['is_round_globally']:
-                evaluation_context = self.env['account.tax']._eval_taxes_computation_prepare_context(
+                taxes_computation = AccountTax._prepare_taxes_computation(
+                    params['taxes_data'],
+                    **params['compute_kwargs'],
+                    special_mode='total_excluded',
+                )
+                evaluation_context = AccountTax._eval_taxes_computation_prepare_context(
                     test['py_results']['results']['total_excluded'] / params['quantity'],
                     params['quantity'],
+                    params['product_values'],
                     **params['evaluation_context_kwargs'],
-                    reverse=True,
                 )
-                test['py_results']['reverse_results'] = self.env['account.tax']._eval_taxes_computation(taxes_computation, evaluation_context)
+                test['py_results']['total_excluded_results'] = AccountTax._eval_taxes_computation(taxes_computation, evaluation_context)
+                taxes_computation = AccountTax._prepare_taxes_computation(
+                    params['taxes_data'],
+                    **params['compute_kwargs'],
+                    special_mode='total_included',
+                )
+                evaluation_context = AccountTax._eval_taxes_computation_prepare_context(
+                    test['py_results']['results']['total_included'] / params['quantity'],
+                    params['quantity'],
+                    params['product_values'],
+                    **params['evaluation_context_kwargs'],
+                )
+                test['py_results']['total_included_results'] = AccountTax._eval_taxes_computation(taxes_computation, evaluation_context)
         elif params['test'] == 'adapt_price_unit_to_another_taxes':
             test['py_results'] = self.env['account.tax']._adapt_price_unit_to_another_taxes(
                 params['price_unit'],
-                params['original_tax_values_list'],
-                params['new_tax_values_list'],
+                params['product_values'],
+                params['original_taxes_data'],
+                params['new_taxes_data'],
             )
         else:
             assert False, f"Unknown tax test method: {params['test']}"
@@ -806,31 +905,50 @@ class TestTaxCommon(AccountTestInvoicingHttpCommon):
                 float_round(results['total_excluded'], precision_rounding=rounding),
                 float_round(expected_values['total_excluded'], precision_rounding=rounding),
             )
-            self.assertEqual(len(results['tax_values_list']), len(expected_values['tax_values_list']))
-            for tax_values, (expected_base, expected_tax) in zip(results['tax_values_list'], expected_values['tax_values_list']):
+            self.assertEqual(len(results['taxes_data']), len(expected_values['taxes_data']))
+            for tax_data, (expected_base, expected_tax) in zip(results['taxes_data'], expected_values['taxes_data']):
                 self.assertEqual(
-                    float_round(tax_values['base'], precision_rounding=rounding),
+                    float_round(tax_data['base'], precision_rounding=rounding),
                     float_round(expected_base, precision_rounding=rounding),
                 )
                 self.assertEqual(
-                    float_round(tax_values['tax_amount_factorized'], precision_rounding=rounding),
+                    float_round(tax_data['tax_amount_factorized'], precision_rounding=rounding),
                     float_round(expected_tax, precision_rounding=rounding),
                 )
 
         params = test['params']
         is_round_globally = params['is_round_globally']
+        excluded_special_modes = params['excluded_special_modes']
         rounding = 0.000001 if is_round_globally else 0.01
         compare_taxes_computation_values(results['results'], test['expected_values'], rounding)
 
-        # Check the reverse in case of round_globally.
+        # Check the special modes in case of round_globally.
         if is_round_globally:
-            compare_taxes_computation_values(results['reverse_results'], test['expected_values'], rounding)
-            delta = sum(x['tax_amount_factorized'] for x in results['reverse_results']['tax_values_list'] if x['price_include'])
+            # special_mode == 'total_excluded'.
+            if 'total_excluded' not in excluded_special_modes:
+                compare_taxes_computation_values(results['total_excluded_results'], test['expected_values'], rounding)
+                delta = sum(x['tax_amount_factorized'] for x in results['total_excluded_results']['taxes_data'] if x['_original_price_include'])
 
-            self.assertEqual(
-                float_round(results['reverse_results']['total_excluded'] + delta, precision_rounding=rounding),
-                float_round(params['price_unit'], precision_rounding=rounding),
-            )
+                self.assertEqual(
+                    float_round(
+                        (results['total_excluded_results']['total_excluded'] + delta) / params['quantity'],
+                        precision_rounding=rounding,
+                    ),
+                    float_round(params['price_unit'], precision_rounding=rounding),
+                )
+
+            # special_mode == 'total_included'.
+            if 'total_included' not in excluded_special_modes:
+                compare_taxes_computation_values(results['total_included_results'], test['expected_values'], rounding)
+                delta = sum(x['tax_amount_factorized'] for x in results['total_included_results']['taxes_data'] if not x['_original_price_include'])
+
+                self.assertEqual(
+                    float_round(
+                        (results['total_included_results']['total_included'] - delta) / params['quantity'],
+                        precision_rounding=rounding,
+                    ),
+                    float_round(params['price_unit'], precision_rounding=rounding),
+                )
 
     def _assert_sub_test(self, test, results):
         params = test['params']

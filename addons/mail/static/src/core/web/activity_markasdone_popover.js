@@ -1,6 +1,4 @@
-import { Component, onMounted, useExternalListener, useRef, useState } from "@odoo/owl";
-
-import { useService } from "@web/core/utils/hooks";
+import { Component, onMounted, useExternalListener, useRef } from "@odoo/owl";
 
 export class ActivityMarkAsDone extends Component {
     static template = "mail.ActivityMarkAsDone";
@@ -20,7 +18,7 @@ export class ActivityMarkAsDone extends Component {
     }
 
     setup() {
-        this.threadService = useState(useService("mail.thread"));
+        super.setup();
         this.textArea = useRef("textarea");
         onMounted(() => {
             this.textArea.el.focus();
@@ -40,9 +38,9 @@ export class ActivityMarkAsDone extends Component {
             model: res_model,
             id: res_id,
         });
-        await this.env.services["mail.activity"].markAsDone(this.props.activity);
+        await this.props.activity.markAsDone();
         this.props.onActivityChanged(thread);
-        await this.threadService.fetchNewMessages(thread);
+        await thread.fetchNewMessages();
     }
 
     async onClickDoneAndScheduleNext() {
@@ -57,10 +55,8 @@ export class ActivityMarkAsDone extends Component {
         if (this.props.close) {
             this.props.close();
         }
-        const action = await this.env.services["mail.activity"].markAsDoneAndScheduleNext(
-            this.props.activity
-        );
-        this.threadService.fetchNewMessages(thread);
+        const action = await this.props.activity.markAsDoneAndScheduleNext();
+        thread.fetchNewMessages();
         this.props.onActivityChanged(thread);
         if (!action) {
             return;

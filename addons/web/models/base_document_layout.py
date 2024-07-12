@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 from markupsafe import Markup
 
-from odoo import api, fields, models, tools
+from odoo import api, fields, models
 
 from odoo.addons.base.models.ir_qweb_fields import nl2br
-from odoo.tools import html2plaintext, is_html_empty
+from odoo.tools import html2plaintext, is_html_empty, image as tools
 from odoo.tools.misc import file_path
 
 try:
@@ -45,7 +45,7 @@ class BaseDocumentLayout(models.TransientModel):
         if 'company_name' not in address_format:
             address_format = '%(company_name)s\n' + address_format
             company_data['company_name'] = company_data['company_name'] or company.name
-        return Markup(nl2br(address_format)) % company_data
+        return nl2br(address_format) % company_data
 
     def _clean_address_format(self, address_format, company_data):
         missing_company_data = [k for k, v in company_data.items() if not v]
@@ -120,25 +120,40 @@ class BaseDocumentLayout(models.TransientModel):
     @api.depends('report_layout_id', 'logo', 'font', 'primary_color', 'secondary_color', 'report_header', 'report_footer', 'layout_background', 'layout_background_image', 'company_details')
     def _compute_preview(self):
         """ compute a qweb based preview to display on the wizard """
+
+        # This condition below makes sure that preview is computed only if the document layout is still under creation.
+        # If the document layout is finished (i.e., edit wizard is closed), the preview should not be recomputed.
+        # This solves the issue of the preview glitching at the wizard closing.
+        if self.env['base.document.layout'].browse(self.id):
+            self.preview = False
+            return
+
         styles = self._get_asset_style()
 
         for wizard in self:
             if wizard.report_layout_id:
-                preview_css, wizard_with_logo = wizard._get_render_information(styles)
-
-                wizard.preview = wizard_with_logo.env['ir.ui.view']._render_template('web.report_invoice_wizard_preview', {
-                    'company': wizard_with_logo,
-                    'preview_css': preview_css,
-                    'is_html_empty': is_html_empty,
-                })
+                if wizard.env.context.get('bin_size'):
+                    # guarantees that bin_size is always set to False,
+                    # so the logo always contains the bin data instead of the binary size
+                    wizard = wizard.with_context(bin_size=False)
+                wizard.preview = wizard.env['ir.ui.view']._render_template(
+                    wizard._get_preview_template(),
+                    wizard._get_render_information(styles),
+                )
             else:
                 wizard.preview = False
 
+    def _get_preview_template(self):
+        return 'web.report_invoice_wizard_preview'
+
     def _get_render_information(self, styles):
         self.ensure_one()
-        wizard_with_logo = self.with_context(bin_size=False)
-        preview_css = self._get_css_for_preview(styles, wizard_with_logo.id)
-        return preview_css, wizard_with_logo
+        preview_css = self._get_css_for_preview(styles, self.id)
+        return {
+            'company': self,
+            'preview_css': preview_css,
+            'is_html_empty': is_html_empty,
+        }
 
     @api.onchange('company_id')
     def _onchange_company_id(self):

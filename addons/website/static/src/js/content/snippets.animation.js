@@ -23,6 +23,7 @@ import {
     switchTextHighlight,
 } from "@website/js/text_processing";
 import { touching } from "@web/core/utils/ui";
+import { ObservingCookieWidgetMixin } from "@website/snippets/observing_cookie_mixin";
 
 // Initialize fallbacks for the use of requestAnimationFrame,
 // cancelAnimationFrame and performance.now()
@@ -138,7 +139,7 @@ var AnimationEffect = Class.extend(mixins.ParentedMixin, {
         this.startEvents = startEvents || 'scroll';
         const modalEl = options.enableInModal ? parent.target.closest('.modal') : null;
         const mainScrollingElement = modalEl ? modalEl : $().getScrollingElement()[0];
-        const mainScrollingTarget = mainScrollingElement === document.documentElement ? window : mainScrollingElement;
+        const mainScrollingTarget = $().getScrollingTarget(mainScrollingElement)[0];
         this.$startTarget = $($startTarget ? $startTarget : this.startEvents === 'scroll' ? mainScrollingTarget : window);
         if (options.getStateCallback) {
             this._getStateCallback = options.getStateCallback;
@@ -713,7 +714,8 @@ const MobileYoutubeAutoplayMixin = {
     },
 };
 
-registry.mediaVideo = publicWidget.Widget.extend(MobileYoutubeAutoplayMixin, {
+registry.mediaVideo = publicWidget.Widget.extend(
+    MobileYoutubeAutoplayMixin, ObservingCookieWidgetMixin, {
     selector: '.media_iframe_video',
 
     /**
@@ -733,6 +735,17 @@ registry.mediaVideo = publicWidget.Widget.extend(MobileYoutubeAutoplayMixin, {
             iframeEl = this._generateIframe();
         }
 
+        if (this.el.dataset.needCookiesApproval) {
+            const sizeContainerEl = this.el.querySelector(":scope > .media_iframe_video_size");
+            sizeContainerEl.classList.add("d-none");
+            this._showSizeContainerEl = () => {
+                sizeContainerEl.classList.remove("d-none");
+            };
+            document.addEventListener(
+                "optionalCookiesAccepted", this._showSizeContainerEl, { once: true }
+            );
+        }
+
         // We don't want to cause an error that would prevent entering edit mode
         // if there is an iframe that doesn't have a src (this was possible for
         // a while with the media dialog).
@@ -746,6 +759,16 @@ registry.mediaVideo = publicWidget.Widget.extend(MobileYoutubeAutoplayMixin, {
         return Promise.all(proms).then(() => {
             this._triggerAutoplay(iframeEl);
         });
+    },
+    /**
+     * @override
+     */
+    destroy() {
+        if (this._showSizeContainerEl) {
+            document.removeEventListener("optionalCookiesAccepted", this._showSizeContainerEl);
+            this._showSizeContainerEl();
+        }
+        return this._super(...arguments);
     },
 
     //--------------------------------------------------------------------------
@@ -778,18 +801,25 @@ registry.mediaVideo = publicWidget.Widget.extend(MobileYoutubeAutoplayMixin, {
             return;
         }
         var domain = m[1].replace(/^www\./, '');
-        var supportedDomains = ['youtu.be', 'youtube.com', 'youtube-nocookie.com', 'instagram.com', 'vine.co', 'player.vimeo.com', 'vimeo.com', 'dailymotion.com', 'player.youku.com', 'youku.com'];
+        const supportedDomains = [
+            "youtu.be", "youtube.com", "youtube-nocookie.com",
+            "instagram.com",
+            "player.vimeo.com", "vimeo.com",
+            "dailymotion.com",
+            "player.youku.com", "youku.com",
+        ];
         if (!supportedDomains.includes(domain)) {
             // Unsupported domain, don't inject iframe
             return;
         }
+
         const iframeEl = $('<iframe/>', {
-            src: src,
             frameborder: '0',
             allowfullscreen: 'allowfullscreen',
             "aria-label": _t("Media video"),
         })[0];
         this.$el.append(iframeEl);
+        this._manageIframeSrc(this.el, src);
         return iframeEl;
     },
 });
@@ -856,6 +886,10 @@ registry.backgroundVideo = publicWidget.Widget.extend(MobileYoutubeAutoplayMixin
         if (this.$bgVideoContainer) {
             this.$bgVideoContainer.remove();
         }
+        document.removeEventListener(
+            "optionalCookiesAccepted",
+            this.__onEnableVideoPostCookiesAccepted
+        );
     },
 
     //--------------------------------------------------------------------------
@@ -902,101 +936,39 @@ registry.backgroundVideo = publicWidget.Widget.extend(MobileYoutubeAutoplayMixin
      * @private
      */
     _appendBgVideo: function () {
+        const allowedCookies = !this.el.dataset.needCookiesApproval;
+
         var $oldContainer = this.$bgVideoContainer || this.$('> .o_bg_video_container');
         this.$bgVideoContainer = $(renderToElement('website.background.video', {
-            videoSrc: this.videoSrc,
+            videoSrc: allowedCookies ? this.videoSrc : "about:blank",
             iframeID: this.iframeID,
         }));
         this.$iframe = this.$bgVideoContainer.find('.o_bg_video_iframe');
         this.$iframe.one('load', () => {
             this.$bgVideoContainer.find('.o_bg_video_loading').remove();
+            // When there is a "slide in (left or right) animation" element, we
+            // need to adjust the iframe size once it has been loaded, otherwise
+            // an horizontal scrollbar may appear.
+            this._adjustIframe();
         });
         this.$bgVideoContainer.prependTo(this.$el);
         $oldContainer.remove();
 
+        if (!allowedCookies) {
+            // We don't add the optional cookies warning for background videos
+            // so that the fallback message doesn't appear behind the content.
+            this.__onEnableVideoPostCookiesAccepted = () => {
+                this.$iframe[0].src = this.videoSrc;
+            };
+            document.addEventListener(
+                "optionalCookiesAccepted",
+                this.__onEnableVideoPostCookiesAccepted,
+                { once: true }
+            );
+        }
+
         this._adjustIframe();
         this._triggerAutoplay(this.$iframe[0]);
-    },
-});
-
-registry.socialShare = publicWidget.Widget.extend({
-    selector: '.oe_social_share',
-    events: {
-        'mouseenter': '_onMouseEnter',
-    },
-
-    //--------------------------------------------------------------------------
-    // Private
-    //--------------------------------------------------------------------------
-
-    /**
-     * @private
-     */
-    _bindSocialEvent: function () {
-        this.$('.oe_social_facebook').click($.proxy(this._renderSocial, this, 'facebook'));
-        this.$('.oe_social_twitter').click($.proxy(this._renderSocial, this, 'twitter'));
-        this.$('.oe_social_linkedin').click($.proxy(this._renderSocial, this, 'linkedin'));
-    },
-    /**
-     * @private
-     */
-    _render: function () {
-        this.$el.popover({
-            content: renderToElement('website.social_hover', {medias: this.socialList}),
-            placement: 'bottom',
-            container: this.$el,
-            html: true,
-            trigger: 'manual',
-            animation: false,
-        }).popover("show");
-
-        this.$el.off('mouseleave.socialShare').on('mouseleave.socialShare', function () {
-            var self = this;
-            setTimeout(function () {
-                if (!$(".popover:hover").length) {
-                    $(self).popover('dispose');
-                }
-            }, 200);
-        });
-    },
-    /**
-     * @private
-     */
-    _renderSocial: function (social) {
-        var url = this.$el.data('urlshare') || document.URL.split(/[?#]/)[0];
-        url = encodeURIComponent(url);
-        var title = document.title.split(" | ")[0];  // get the page title without the company name
-        var hashtags = ' #' + document.title.split(" | ")[1].replace(' ', '') + ' ' + this.hashtags;  // company name without spaces (for hashtag)
-        var socialNetworks = {
-            'facebook': 'https://www.facebook.com/sharer/sharer.php?u=' + url,
-            'twitter': 'https://twitter.com/intent/tweet?original_referer=' + url + '&text=' + encodeURIComponent(title + hashtags + ' - ') + url,
-            'linkedin': 'https://www.linkedin.com/sharing/share-offsite/?url=' + url,
-        };
-        if (!Object.keys(socialNetworks).includes(social)) {
-            return;
-        }
-        var wHeight = 500;
-        var wWidth = 500;
-        window.open(socialNetworks[social], '', 'menubar=no, toolbar=no, resizable=yes, scrollbar=yes, height=' + wHeight + ',width=' + wWidth);
-    },
-
-    //--------------------------------------------------------------------------
-    // Handlers
-    //--------------------------------------------------------------------------
-
-    /**
-     * Called when the user hovers the animation element -> open the social
-     * links popover.
-     *
-     * @private
-     */
-    _onMouseEnter: function () {
-        var social = this.$el.data('social');
-        this.socialList = social ? social.split(',') : ['facebook', 'twitter', 'linkedin'];
-        this.hashtags = this.$el.data('hashtags') || '';
-
-        this._render();
-        this._bindSocialEvent();
     },
 });
 
@@ -1239,8 +1211,9 @@ registry.BottomFixedElement = publicWidget.Widget.extend({
      */
     async start() {
         this.$scrollingElement = $().getScrollingElement();
+        this.$scrollingTarget = $().getScrollingTarget(this.$scrollingElement);
         this.__hideBottomFixedElements = debounce(() => this._hideBottomFixedElements(), 100);
-        this.$scrollingElement.on('scroll.bottom_fixed_element', this.__hideBottomFixedElements);
+        this.$scrollingTarget.on('scroll.bottom_fixed_element', this.__hideBottomFixedElements);
         $(window).on('resize.bottom_fixed_element', this.__hideBottomFixedElements);
         return this._super(...arguments);
     },
@@ -1249,7 +1222,7 @@ registry.BottomFixedElement = publicWidget.Widget.extend({
      */
     destroy() {
         this._super(...arguments);
-        this.$scrollingElement.off('.bottom_fixed_element');
+        this.$scrollingTarget.off('.bottom_fixed_element');
         $(window).off('.bottom_fixed_element');
         this._restoreBottomFixedElements($('.o_bottom_fixed_element'));
     },
@@ -1335,6 +1308,7 @@ registry.WebsiteAnimate = publicWidget.Widget.extend({
     start() {
         this.lastScroll = 0;
         this.$scrollingElement = $().getScrollingElement();
+        this.$scrollingTarget = $().getScrollingTarget(this.$scrollingElement);
         this.$animatedElements = this.$('.o_animate');
 
         // Fix for "transform: none" not overriding keyframe transforms on
@@ -1372,7 +1346,7 @@ registry.WebsiteAnimate = publicWidget.Widget.extend({
         // for events that otherwise don’t support it. (e.g. useful when
         // scrolling a modal)
         this.__onScrollWebsiteAnimate = throttleForAnimation(this._onScrollWebsiteAnimate.bind(this));
-        this.$scrollingElement[0].addEventListener('scroll', this.__onScrollWebsiteAnimate, {capture: true});
+        this.$scrollingTarget[0].addEventListener('scroll', this.__onScrollWebsiteAnimate, {capture: true});
 
         $(window).on('resize.o_animate, shown.bs.modal.o_animate, slid.bs.carousel.o_animate, shown.bs.tab.o_animate, shown.bs.collapse.o_animate', () => {
             this.windowsHeight = $(window).height();
@@ -1395,7 +1369,7 @@ registry.WebsiteAnimate = publicWidget.Widget.extend({
             });
         $(window).off('.o_animate');
         this.__onScrollWebsiteAnimate.cancel();
-        this.$scrollingElement[0].removeEventListener('scroll', this.__onScrollWebsiteAnimate, {capture: true});
+        this.$scrollingTarget[0].removeEventListener('scroll', this.__onScrollWebsiteAnimate, {capture: true});
         this.$scrollingElement[0].classList.remove('o_wanim_overflow_xy_hidden');
     },
 
@@ -1551,10 +1525,10 @@ registry.WebsiteAnimate = publicWidget.Widget.extend({
 
     /**
      * @private
-     * @param {Event} ev
      */
-    _onScrollWebsiteAnimate(ev) {
-        this._scrollWebsiteAnimate(ev.currentTarget);
+    _onScrollWebsiteAnimate() {
+        // Note: Do not rely on ev.currentTarget which might be lost by Chrome.
+        this._scrollWebsiteAnimate(this.$scrollingElement[0]);
     },
 });
 
@@ -1587,10 +1561,7 @@ registry.ImagesLazyLoading = publicWidget.Widget.extend({
         // the image intrinsic min-height.
         const imgEls = this.el.querySelectorAll('img[loading="lazy"]');
         for (const imgEl of imgEls) {
-            // Write initial min-height on the dataset, so that it can also
-            // be properly restored on widget destroy.
-            imgEl.dataset.lazyLoadingInitialMinHeight = imgEl.style.minHeight;
-            imgEl.style.minHeight = '1px';
+            this._updateImgMinHeight(imgEl);
             wUtils.onceAllImagesLoaded($(imgEl)).then(() => {
                 if (this.isDestroyed()) {
                     return;
@@ -1620,8 +1591,34 @@ registry.ImagesLazyLoading = publicWidget.Widget.extend({
      * @param {HTMLImageElement} imgEl
      */
     _restoreImage(imgEl) {
-        imgEl.style.minHeight = imgEl.dataset.lazyLoadingInitialMinHeight;
-        delete imgEl.dataset.lazyLoadingInitialMinHeight;
+        this._updateImgMinHeight(imgEl, true);
+    },
+    /**
+     * Updates the image element style with the corresponding min-height.
+     * If the editor is enabled, it deactivates the observer during the CSS
+     * update.
+     *
+     * @param {HTMLElement} imgEl - The image element to update the minimum
+     *        height of.
+     * @param {boolean} [reset=false] - Whether to remove the minimum height
+     *        and restore the initial value.
+     */
+    _updateImgMinHeight(imgEl, reset = false) {
+        if (this.options.wysiwyg) {
+            this.options.wysiwyg.odooEditor.observerUnactive('_updateImgMinHeight');
+        }
+        if (reset) {
+            imgEl.style.minHeight = imgEl.dataset.lazyLoadingInitialMinHeight;
+            delete imgEl.dataset.lazyLoadingInitialMinHeight;
+        } else {
+            // Write initial min-height on the dataset, so that it can also
+            // be properly restored on widget destroy.
+            imgEl.dataset.lazyLoadingInitialMinHeight = imgEl.style.minHeight;
+            imgEl.style.minHeight = '1px';
+        }
+        if (this.options.wysiwyg) {
+            this.options.wysiwyg.odooEditor.observerActive('_updateImgMinHeight');
+        }
     },
 });
 
@@ -1736,9 +1733,14 @@ registry.ImageShapeHoverEffet = publicWidget.Widget.extend({
      */
     destroy() {
         this._super(...arguments);
-        if (this.originalImgSrc && (this.lastImgSrc === this.el.getAttribute('src'))) {
+        if (this.el.dataset.originalSrcBeforeHover && !this.el.classList.contains("o_modified_image_to_save")) {
+            // Replace the image source by its original one if it has not been
+            // modified in edit mode.
+            this.el.src = this.el.dataset.originalSrcBeforeHover;
+        } else if (this.originalImgSrc && (this.lastImgSrc === this.el.getAttribute("src"))) {
             this.el.src = this.originalImgSrc;
         }
+        delete this.el.dataset.originalSrcBeforeHover;
     },
 
     //--------------------------------------------------------------------------
@@ -1835,6 +1837,9 @@ registry.ImageShapeHoverEffet = publicWidget.Widget.extend({
                 return;
             }
             this.options.wysiwyg && this.options.wysiwyg.odooEditor.observerUnactive("setImgHoverEffectSrc");
+            if (this.editableMode && !this.el.dataset.originalSrcBeforeHover) {
+                this.el.dataset.originalSrcBeforeHover = this.originalImgSrc;
+            }
             this.el.src = preloadedImg.getAttribute('src');
             this.options.wysiwyg && this.options.wysiwyg.odooEditor.observerActive("setImgHoverEffectSrc");
             this.lastImgSrc = preloadedImg.getAttribute('src');
@@ -1917,64 +1922,6 @@ registry.TextHighlight = publicWidget.Widget.extend({
     // Private
     //--------------------------------------------------------------------------
 
-    /**
-     * Right after custom fonts loading, the text width can change (even after
-     * adapting the highlights), leading to a highlight SVG slightly longer or
-     * shorter than the text content... `document.fonts.ready` is resolved
-     * before the text width is updated, so we need to do the update manually
-     * here by adjusting the highlights if the text width changes using a
-     * `ResizeObserver`.
-     *
-     * TODO: Remove in master (left in stable for compatibility)
-     *
-     * @private
-     */
-    _adaptOnFontsLoading() {
-        this.observerLocked = new Map();
-        // The idea here is to adapt the highlights when a width change is
-        // detected, but after every adjustment, the `ResizeObserver` will
-        // unfortunately immediately notify a size change once new highlight
-        // items are observed leading to an infinite loop. To avoid that,
-        // we use a lock map (`observerLocked`) to block the callback on this
-        // first notification for observed items.
-        this.resizeObserver = new window.ResizeObserver(entries => {
-            window.requestAnimationFrame(() => {
-                const topTextEls = new Set();
-                entries.forEach(entry => {
-                    const target = entry.target;
-                    if (this.observerLocked.get(target)) {
-                        // Unlock the target, the next resize will trigger
-                        // highlight adaptation.
-                        return this.observerLocked.set(target, false);
-                    }
-                    const topTextEl = target.closest(".o_text_highlight");
-                    if (topTextEl) {
-                        topTextEls.add(topTextEl);
-                        // Unobserve the target (it will be replaced by a new
-                        // one after the update).
-                        this.resizeObserver.unobserve(target);
-                    }
-                });
-                // The `ResizeObserver` cannot detect the width change on the
-                // entire `.o_text_highlight` element, so we need to observe
-                // the highlight units (`.o_text_highlight_item`) and do the
-                // adjustment only once for the whole container.
-                topTextEls.forEach(async topTextEl => {
-                    // We don't need to track old items, they will be removed
-                    // after the adaptation.
-                    [...topTextEl.querySelectorAll(".o_text_highlight_item")].forEach(unit => {
-                        this.observerLocked.delete(unit);
-                    });
-                    // Adapt the highlight, lock new items and observe them.
-                    switchTextHighlight(topTextEl);
-                    this._lockHighlightObserver(topTextEl);
-                    this._observeHighlightResize(topTextEl);
-                });
-            });
-        });
-        this._observeHighlightResize();
-        this._lockHighlightObserver();
-    },
     /**
      * The `resizeObserver` ignores an element if it has an inline display.
      * We need to target the closest non-inline parent.

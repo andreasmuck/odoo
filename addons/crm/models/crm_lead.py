@@ -4,20 +4,18 @@
 import logging
 import pytz
 import threading
-from ast import literal_eval
 from collections import OrderedDict, defaultdict
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from markupsafe import Markup
-from psycopg2 import sql
 
-from odoo import api, fields, models, tools, SUPERUSER_ID
+from odoo import api, fields, models, tools
 from odoo.addons.iap.tools import iap_tools
 from odoo.addons.mail.tools import mail_validation
 from odoo.addons.phone_validation.tools import phone_validation
 from odoo.exceptions import UserError, AccessError
 from odoo.osv import expression
 from odoo.tools.translate import _
-from odoo.tools import date_utils, email_split, is_html_empty, groupby, parse_contact_from_email
+from odoo.tools import date_utils, email_split, is_html_empty, groupby, parse_contact_from_email, SQL
 from odoo.tools.misc import get_lang
 
 from . import crm_stage
@@ -278,7 +276,8 @@ class Lead(models.Model):
                 continue
             team_domain = [('use_leads', '=', True)] if lead.type == 'lead' else [('use_opportunities', '=', True)]
             team = self.env['crm.team']._get_default_team_id(user_id=user.id, domain=team_domain)
-            lead.team_id = team.id
+            if lead.team_id != team:
+                lead.team_id = team.id
 
     @api.depends('user_id', 'team_id', 'partner_id')
     def _compute_company_id(self):
@@ -326,12 +325,14 @@ class Lead(models.Model):
     @api.depends('user_id')
     def _compute_date_open(self):
         for lead in self:
-            lead.date_open = self.env.cr.now() if lead.user_id else False
+            if not lead.date_open and lead.user_id:
+                lead.date_open = self.env.cr.now()
 
     @api.depends('stage_id')
     def _compute_date_last_stage_update(self):
         for lead in self:
-            lead.date_last_stage_update = self.env.cr.now()
+            if not lead.date_last_stage_update:
+                lead.date_last_stage_update = self.env.cr.now()
 
     @api.depends('create_date', 'date_open')
     def _compute_day_open(self):
@@ -587,7 +588,7 @@ class Lead(models.Model):
             # check for "same commercial entity" duplicates
             if lead.partner_id and lead.partner_id.commercial_partner_id:
                 duplicate_lead_ids |= lead.with_context(active_test=False).search(common_lead_domain + [
-                    ("partner_id", "child_of", lead.partner_id.commercial_partner_id.id)
+                    ("partner_id", "child_of", lead.partner_id.commercial_partner_id.ids)
                 ])
             # check the phone number duplicates, based on phone_sanitized. Only
             # exact matches are found, and the single one stored in phone_sanitized
@@ -748,13 +749,27 @@ class Lead(models.Model):
         if vals.get('website'):
             vals['website'] = self.env['res.partner']._clean_website(vals['website'])
 
-        stage_updated, stage_is_won = vals.get('stage_id'), False
-        # stage change: update date_last_stage_update
-        if stage_updated:
-            stage = self.env['crm.stage'].browse(vals['stage_id'])
-            if stage.is_won:
-                vals.update({'probability': 100, 'automated_probability': 100})
-                stage_is_won = True
+        now = self.env.cr.now()
+        stage_updated, stage_is_won = False, False
+        # stage change (or reset): update date_last_stage_update if at least one
+        # lead does not have the same stage
+        if 'stage_id' in vals:
+            stage_updated = any(lead.stage_id.id != vals['stage_id'] for lead in self)
+            if stage_updated:
+                vals['date_last_stage_update'] = now
+            if stage_updated and vals.get('stage_id'):
+                stage = self.env['crm.stage'].browse(vals['stage_id'])
+                if stage.is_won:
+                    vals.update({'probability': 100, 'automated_probability': 100})
+                    stage_is_won = True
+        # user change; update date_open if at least one lead does not
+        # have the same user
+        if 'user_id' in vals and not vals.get('user_id'):
+            vals['date_open'] = False
+        elif vals.get('user_id'):
+            user_updated = any(lead.user_id.id != vals['user_id'] for lead in self)
+            if user_updated:
+                vals['date_open'] = now
 
         # stage change with new stage: update probability and date_closed
         if vals.get('probability', 0) >= 100 or not vals.get('active', True):
@@ -939,7 +954,7 @@ class Lead(models.Model):
             search_domain = ['|', ('id', 'in', stages.ids), ('team_id', '=', False)]
 
         # perform search
-        stage_ids = stages._search(search_domain, order=stages._order, access_rights_uid=SUPERUSER_ID)
+        stage_ids = stages.sudo()._search(search_domain, order=stages._order)
         return stages.browse(stage_ids)
 
     def _stage_find(self, team_id=False, domain=None, order='sequence, id', limit=1):
@@ -1222,16 +1237,8 @@ class Lead(models.Model):
 
     def action_snooze(self):
         self.ensure_one()
-        today = date.today()
         my_next_activity = self.activity_ids.filtered(lambda activity: activity.user_id == self.env.user)[:1]
-        if my_next_activity:
-            if my_next_activity.date_deadline < today:
-                date_deadline = today + timedelta(days=7)
-            else:
-                date_deadline = my_next_activity.date_deadline + timedelta(days=7)
-            my_next_activity.write({
-                'date_deadline': date_deadline
-            })
+        my_next_activity.action_snooze()
         return True
 
     # ------------------------------------------------------------
@@ -1412,7 +1419,12 @@ class Lead(models.Model):
             if merged_data.get('stage_id') not in team_stage_ids.ids:
                 merged_data['stage_id'] = team_stage_ids[0].id if team_stage_ids else False
 
-        # write merged data into first opportunity
+        # write merged data into first opportunity; remove some keys if already
+        # set on opp to avoid useless recomputes
+        if 'user_id' in merged_data and opportunities_head.user_id.id == merged_data['user_id']:
+            merged_data.pop('user_id')
+        if 'team_id' in merged_data and opportunities_head.team_id.id == merged_data['team_id']:
+            merged_data.pop('team_id')
         opportunities_head.write(merged_data)
 
         # delete tail opportunities
@@ -1666,7 +1678,6 @@ class Lead(models.Model):
         new_team_id = team_id if team_id else self.team_id.id
         upd_values = {
             'type': 'opportunity',
-            'date_open': self.env.cr.now(),
             'date_conversion': self.env.cr.now(),
         }
         if customer != self.partner_id:
@@ -1868,7 +1879,6 @@ class Lead(models.Model):
             'name': partner_name,
             'user_id': self.env.context.get('default_user_id') or self.user_id.id,
             'comment': self.description,
-            'team_id': self.team_id.id,
             'parent_id': parent_id,
             'phone': self.phone,
             'mobile': self.mobile,
@@ -1895,6 +1905,12 @@ class Lead(models.Model):
 
     def _creation_subtype(self):
         return self.env.ref('crm.mt_lead_create')
+
+    def _creation_message(self):
+        self.ensure_one()
+        if self.team_id:
+            return _('A new lead has been created for the team "%(team_name)s".', team_name=self.team_id.display_name)
+        return _('A new lead has been created and is not assigned to any team.')
 
     def _track_subtype(self, init_values):
         self.ensure_one()
@@ -2045,7 +2061,7 @@ class Lead(models.Model):
             if partner_info.get('partner_id') or not email:
                 continue
             # reformat email if no name information
-            name_emails = tools.email_split_tuples(email)
+            name_emails = tools.mail.email_split_tuples(email)
             name_from_email = name_emails[0][0] if name_emails else False
             if name_from_email:
                 continue  # already containing name + email
@@ -2624,30 +2640,28 @@ class Lead(models.Model):
             pls_fields.remove('tag_ids')
 
         if domain:
-            # active_test = False as domain should take active into 'active' field it self
-            from_clause, where_clause, where_params = self.env['crm.lead'].with_context(active_test=False)._where_calc(domain).get_sql()
-            str_fields = ", ".join(["{}"] * len(pls_fields))
-            args = [sql.Identifier(field) for field in pls_fields]
-
             # Get leads values
             self.flush_model()
-            query = """SELECT id, probability, %s
-                        FROM %s
-                        WHERE %s order by team_id asc, id desc"""
-            query = sql.SQL(query % (str_fields, from_clause, where_clause)).format(*args)
-            self._cr.execute(query, where_params)
+            # active_test = False as domain should take active into 'active' field it self
+            query = self.env['crm.lead'].with_context(active_test=False)._where_calc(domain)
+            table = query.table
+            query.order = SQL("%(table)s.team_id asc, %(table)s.id desc", table=SQL.identifier(table))
+            sql_fields = [SQL.identifier(field) for field in pls_fields]
+            self._cr.execute(query.select(
+                SQL("id"),
+                SQL("probability"),
+                *sql_fields,
+            ))
             lead_results = self._cr.dictfetchall()
 
             if use_tags:
                 # Get tags values
-                query = """SELECT crm_lead.id as lead_id, t.id as tag_id
-                            FROM %s
-                            LEFT JOIN crm_tag_rel rel ON crm_lead.id = rel.lead_id
-                            LEFT JOIN crm_tag t ON rel.tag_id = t.id
-                            WHERE %s order by crm_lead.team_id asc, crm_lead.id"""
-                args.append(sql.Identifier('tag_id'))
-                query = sql.SQL(query % (from_clause, where_clause)).format(*args)
-                self._cr.execute(query, where_params)
+                tag_rel_alias = query.left_join(table, 'id', 'crm_tag_rel', 'lead_id', 'crm_tag_rel')
+                tag_alias = query.left_join(tag_rel_alias, 'tag_id', 'crm_tag', 'id', 'crm_tag')
+                self._cr.execute(query.select(
+                    SQL("%s AS lead_id", SQL.identifier(table, "id")),
+                    SQL("%s AS tag_id", SQL.identifier(tag_alias, "id")),
+                ))
                 tag_results = self._cr.dictfetchall()
             else:
                 tag_results = []

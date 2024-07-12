@@ -1,10 +1,8 @@
-import { rpcWithEnv } from "@mail/utils/common/misc";
+import { rpc } from "@web/core/network/rpc";
 import { Component, onWillStart, useState } from "@odoo/owl";
 
 import { Dialog } from "@web/core/dialog/dialog";
 import { _t } from "@web/core/l10n/translation";
-/** @type {ReturnType<import("@mail/utils/common/misc").rpcWithEnv>} */
-let rpc;
 import { useService } from "@web/core/utils/hooks";
 
 /**
@@ -27,7 +25,7 @@ export class FollowerSubtypeDialog extends Component {
     static template = "mail.FollowerSubtypeDialog";
 
     setup() {
-        rpc = rpcWithEnv(this.env);
+        super.setup();
         this.store = useState(useService("mail.store"));
         this.state = useState({
             /** @type {SubtypeData[]} */
@@ -52,7 +50,7 @@ export class FollowerSubtypeDialog extends Component {
         const selectedSubtypes = this.state.subtypes.filter((s) => s.followed);
         const thread = this.props.follower.thread;
         if (selectedSubtypes.length === 0) {
-            await this.env.services["mail.thread"].removeFollower(this.props.follower);
+            await this.props.follower.remove();
         } else {
             await this.env.services.orm.call(
                 this.props.follower.thread.model,
@@ -64,7 +62,7 @@ export class FollowerSubtypeDialog extends Component {
                 }
             );
             if (!selectedSubtypes.some((subtype) => subtype.id === this.store.mt_comment_id)) {
-                this.env.services["mail.thread"].removeRecipient(this.props.follower);
+                this.props.follower.removeRecipient();
             }
             this.env.services.notification.add(
                 _t("The subscription preferences were successfully applied."),

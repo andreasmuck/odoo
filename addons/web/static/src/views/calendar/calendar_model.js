@@ -11,6 +11,7 @@ import { user } from "@web/core/user";
 import { KeepLast } from "@web/core/utils/concurrency";
 import { Model } from "@web/model/model";
 import { extractFieldsFromArchInfo } from "@web/model/relational_model/utils";
+import { browser } from "@web/core/browser/browser";
 
 export class CalendarModel extends Model {
     setup(params, services) {
@@ -28,7 +29,7 @@ export class CalendarModel extends Model {
             firstDayOfWeek: (localization.weekStart || 0) % 7,
             formViewId: params.formViewId || formViewIdFromConfig,
         };
-
+        this.meta.scale = this.getLocalStorageScale();
         this.data = {
             filters: {},
             filterSections: {},
@@ -43,13 +44,14 @@ export class CalendarModel extends Model {
         if (!this.meta.date) {
             this.meta.date =
                 params.context && params.context.initial_date
-                    ? deserializeDateTime(params.context.initial_date)
-                    : luxon.DateTime.local();
+                    ? deserializeDateTime(params.context.initial_date).startOf("day")
+                    : luxon.DateTime.local().startOf("day");
         }
         // Prevent picking a scale that is not supported by the view
         if (!this.meta.scales.includes(this.meta.scale)) {
             this.meta.scale = this.meta.scales[0];
         }
+        browser.localStorage.setItem(this.storageKey, this.meta.scale);
         const data = { ...this.data };
         await this.keepLast.add(this.updateData(data));
         this.data = data;
@@ -70,7 +72,7 @@ export class CalendarModel extends Model {
         return this.meta.canDelete;
     }
     get canEdit() {
-        return !this.meta.fields[this.meta.fieldMapping.date_start].readonly;
+        return this.meta.canEdit && !this.meta.fields[this.meta.fieldMapping.date_start].readonly;
     }
     get eventLimit() {
         return this.meta.eventLimit;
@@ -134,6 +136,9 @@ export class CalendarModel extends Model {
     }
     get scales() {
         return this.meta.scales;
+    }
+    get storageKey() {
+        return `scaleOf-viewId-${this.env.config.viewId}`;
     }
     get unusualDays() {
         return this.data.unusualDays;
@@ -200,6 +205,8 @@ export class CalendarModel extends Model {
                             [info.filterFieldName]: active,
                         };
                         await this.orm.write(info.writeResModel, [filter.recordId], data);
+                    } else if (filter.type === "all") {
+                        this.meta.allFilter[section.label] = active;
                     }
                 }
             }
@@ -491,7 +498,7 @@ export class CalendarModel extends Model {
      * @param {Record<string, any>} rawRecord
      */
     normalizeRecord(rawRecord) {
-        const { fields, fieldMapping, isTimeHidden, scale } = this.meta;
+        const { fields, fieldMapping, isTimeHidden } = this.meta;
 
         const startType = fields[fieldMapping.date_start].type;
         const isAllDay =
@@ -523,7 +530,6 @@ export class CalendarModel extends Model {
 
         const showTime =
             !(fieldMapping.all_day && rawRecord[fieldMapping.all_day]) &&
-            scale === "month" &&
             startType !== "date" &&
             start.day === end.day;
 
@@ -567,6 +573,12 @@ export class CalendarModel extends Model {
     fetchFilters(resModel, fieldNames) {
         return this.orm.searchRead(resModel, [["user_id", "=", user.userId]], fieldNames);
     }
+
+    getLocalStorageScale() {
+        const localScaleId = browser.localStorage.getItem(this.storageKey);
+        return this.meta.scales.includes(localScaleId) ? localScaleId : this.meta.scale;
+    }
+
     /**
      * @protected
      */
@@ -614,7 +626,7 @@ export class CalendarModel extends Model {
         }
 
         const previousAllFilter = previousFilters.find((f) => f.type === "all");
-        filters.push(this.makeFilterAll(previousAllFilter, isUserOrPartner));
+        filters.push(this.makeFilterAll(previousAllFilter, isUserOrPartner, filterInfo.label));
 
         return {
             label: filterInfo.label,
@@ -828,13 +840,15 @@ export class CalendarModel extends Model {
     /**
      * @protected
      */
-    makeFilterAll(previousAllFilter, isUserOrPartner) {
+    makeFilterAll(previousAllFilter, isUserOrPartner, sectionLabel) {
         return {
             type: "all",
             recordId: null,
             value: "all",
             label: isUserOrPartner ? _t("Everybody's calendars") : _t("Everything"),
-            active: previousAllFilter ? previousAllFilter.active : false,
+            active: previousAllFilter
+                ? previousAllFilter.active
+                : this.meta.allFilter[sectionLabel] || false,
             canRemove: false,
             colorIndex: null,
             hasAvatar: false,

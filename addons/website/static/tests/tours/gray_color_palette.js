@@ -12,11 +12,10 @@ function waitForCSSReload() {
         // that the mutex is cleared, and therefore we can apply the saturation
         // step.
         wTourUtils.goBackToBlocks(),
-        wTourUtils.goToTheme(),
+        ...wTourUtils.goToTheme(),
         {
             content: "Wait for no loading",
             trigger: 'body:not(:has(.o_we_ui_loading)) :iframe body:not(:has(.o_we_ui_loading))',
-            run: () => null,
         },
     ];
 }
@@ -26,10 +25,11 @@ wTourUtils.registerWebsitePreviewTour('website_gray_color_palette', {
     url: '/',
     edition: true,
 }, () => [
-    wTourUtils.goToTheme(),
+    ...wTourUtils.goToTheme(),
     {
         content: "Toggle gray color palette",
         trigger: '.o_we_gray_preview.o_we_collapse_toggler',
+        run: "click",
     },
     {
         content: "Drag the hue slider",
@@ -43,7 +43,6 @@ wTourUtils.registerWebsitePreviewTour('website_gray_color_palette', {
     {
         content: "Check the preview of the gray 900 after hue change",
         trigger: '[variable="900"][style="background-color: rgb(36, 41, 33) !important;"]',
-        run: () => {}, // This is a check.
     },
     ...waitForCSSReload(),
     {
@@ -58,7 +57,6 @@ wTourUtils.registerWebsitePreviewTour('website_gray_color_palette', {
     {
         content: "Check the preview of the gray 900 after saturation change",
         trigger: '[variable="900"][style="background-color: rgb(34, 47, 27) !important;"]',
-        run: () => {}, // This is a check.
     },
     ...waitForCSSReload(),
     {

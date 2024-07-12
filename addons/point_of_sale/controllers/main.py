@@ -65,6 +65,7 @@ class PosController(PortalAccount):
             'login_number': pos_session.login(),
             'pos_session_id': pos_session.id,
             'pos_config_id': pos_session.config_id.id,
+            'access_token': pos_session.config_id.access_token,
         }
         response = request.render('point_of_sale.index', context)
         response.headers['Cache-Control'] = 'no-store'
@@ -84,6 +85,7 @@ class PosController(PortalAccount):
             'session_info': session_info,
             'pos_session_id': pos_session.id,
             'pos_config_id': pos_session.config_id.id,
+            'access_token': pos_session.config_id.access_token,
         }
         return request.render('point_of_sale.qunit_suite', qcontext=context)
 
@@ -112,7 +114,7 @@ class PosController(PortalAccount):
             else:
                 date_order = datetime(*[int(i) for i in form_values['date_order'].split('-')])
                 order = request.env['pos.order'].sudo().search([
-                    ('pos_reference', '=like', '%' + form_values['pos_reference'].replace('%', r'\%').replace('_', r'\_')),
+                    ('pos_reference', '=like', '%' + form_values['pos_reference'].strip().replace('%', r'\%').replace('_', r'\_')),
                     ('date_order', '>=', date_order),
                     ('date_order', '<', date_order + timedelta(days=1)),
                     ('ticket_code', '=', form_values['ticket_code']),

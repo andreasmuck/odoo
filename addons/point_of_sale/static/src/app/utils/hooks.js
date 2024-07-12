@@ -1,9 +1,18 @@
-/** @odoo-module **/
-
 import { _t } from "@web/core/l10n/translation";
 import { ConfirmationDialog, AlertDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
 import { ErrorDialog } from "@web/core/errors/error_dialogs";
-import { useEnv, onMounted, onPatched, useComponent, useRef } from "@odoo/owl";
+import {
+    useEnv,
+    onMounted,
+    onPatched,
+    useComponent,
+    useRef,
+    useState,
+    useEffect,
+    onWillUnmount,
+} from "@odoo/owl";
+import { useService } from "@web/core/utils/hooks";
+import { useDropdownState } from "@web/core/dropdown/dropdown_hooks";
 
 /**
  * Introduce error handlers in the component.
@@ -84,4 +93,125 @@ export function useAsyncLockedMethod(method) {
             called = false;
         }
     };
+}
+
+/**
+ * Wrapper for an async function that exposes the status of the function call.
+ *
+ * Sample use case:
+ * ```js
+ * {
+ *   // inside in a component
+ *   this.doPrint = useTrackedAsync(() => this.printReceipt())
+ *   this.doPrint.status === 'idle'
+ *   this.doPrint.call() // triggers the given async function
+ *   this.doPrint.status === 'loading'
+ *   ['success', 'error].includes(this.doPrint.status) && this.doPrint.result
+ * }
+ * ```
+ * @param {(...args: any[]) => Promise<any>} asyncFn
+ */
+export function useTrackedAsync(asyncFn) {
+    /**
+     * @type {{
+     *  status: 'idle' | 'loading' | 'error' | 'success',
+     * result: any,
+     * lastArgs: any[]
+     * }}
+     */
+    const state = useState({
+        status: "idle",
+        result: null,
+        lastArgs: null,
+    });
+
+    const lockedCall = useAsyncLockedMethod(async (...args) => {
+        state.status = "loading";
+        state.result = null;
+        state.lastArgs = args;
+        try {
+            const result = await asyncFn(...args);
+            state.status = "success";
+            state.result = result;
+        } catch (error) {
+            state.status = "error";
+            state.result = error;
+        }
+    });
+    return {
+        get status() {
+            return state.status;
+        },
+        get result() {
+            return state.result;
+        },
+        get lastArgs() {
+            return state.lastArgs;
+        },
+        call: lockedCall,
+    };
+}
+
+export function useIsChildLarger(childRefName) {
+    const child = useRef(childRefName);
+    const state = useState({
+        isLarger: false,
+    });
+    useEffect(
+        (child) => {
+            const updateDimensions = () => {
+                state.isLarger = child.el.scrollWidth > child.el.parentElement.clientWidth;
+            };
+            updateDimensions();
+            window.addEventListener("resize", updateDimensions);
+            return () => {
+                window.removeEventListener("resize", updateDimensions);
+            };
+        },
+        () => [child]
+    );
+    return () => state.isLarger;
+}
+
+/**
+ * Manages a component to be used as a popover.
+ *
+ * @param {typeof import("@odoo/owl").Component} component
+ * @param {import("@web/core/popover/popover_service").PopoverServiceAddOptions} [options]
+ * @returns {import("@web/core/popover/popover_hook").PopoverHookReturnType}
+ */
+export function useReactivePopover(component, options = {}) {
+    const popoverService = useService("popover");
+    const owner = useComponent();
+    const newOptions = Object.create(options);
+    newOptions.onClose = () => {
+        if (status(owner) !== "destroyed") {
+            options.onClose?.();
+        }
+    };
+    let removeFn = null;
+    const state = useDropdownState();
+    function close() {
+        state.close();
+        removeFn?.();
+    }
+    const popover = {
+        open(target, props) {
+            close();
+            state.open();
+            const newOptions = Object.create(options);
+            newOptions.onClose = () => {
+                removeFn = null;
+                state.close();
+                options.onClose?.();
+            };
+            removeFn = popoverService.add(target, component, props, newOptions);
+        },
+        close,
+        get isOpen() {
+            return state.isOpen;
+        },
+    };
+    onWillUnmount(popover.close);
+    return popover;
 }

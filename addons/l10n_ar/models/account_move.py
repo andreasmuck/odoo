@@ -25,8 +25,6 @@ class AccountMove(models.Model):
         ' identify the type of responsibilities that a person or a legal entity could have and that impacts in the'
         ' type of operations and requirements they need.')
 
-    l10n_ar_currency_rate = fields.Float(copy=False, readonly=True, string="Currency Rate")
-
     # Mostly used on reports
     l10n_ar_afip_concept = fields.Selection(
         compute='_compute_l10n_ar_afip_concept', selection='_get_afip_invoice_concepts', string="AFIP Concept",
@@ -91,7 +89,7 @@ class AccountMove(models.Model):
         self.ensure_one()
         invoice_lines = self.invoice_line_ids.filtered(lambda x: x.display_type not in ('line_note', 'line_section'))
         product_types = set([x.product_id.type for x in invoice_lines if x.product_id])
-        consumable = set(['consu', 'product'])
+        consumable = {'consu'}
         service = set(['service'])
         # on expo invoice you can mix services and products
         expo_invoice = self.l10n_latam_document_type_id.code in ['19', '20', '21']
@@ -141,12 +139,12 @@ class AccountMove(models.Model):
             for line in inv.mapped('invoice_line_ids').filtered(lambda x: x.display_type not in ('line_section', 'line_note')):
                 vat_taxes = line.tax_ids.filtered(lambda x: x.tax_group_id.l10n_ar_vat_afip_code)
                 if len(vat_taxes) != 1:
-                    raise UserError(_('There should be a single tax from the "VAT" tax group per line, add it to %r. If you already have it, please check the tax configuration, in advanced options, in the corresponding field "Tax Group".', line.name))
+                    raise UserError(_("There should be a single tax from the “VAT“ tax group per line, but this is not the case for line “%s”. Please add a tax to this line or check the tax configuration's advanced options for the corresponding field “Tax Group”.", line.name))
 
                 elif purchase_aliquots == 'zero' and vat_taxes.tax_group_id.l10n_ar_vat_afip_code != '0':
-                    raise UserError(_('On invoice id %r you must use VAT Not Applicable on every line.', inv.id))
+                    raise UserError(_('On invoice id “%s” you must use VAT Not Applicable on every line.', inv.id))
                 elif purchase_aliquots == 'not_zero' and vat_taxes.tax_group_id.l10n_ar_vat_afip_code == '0':
-                    raise UserError(_('On invoice id %r you must use VAT taxes different than VAT Not Applicable.', inv.id))
+                    raise UserError(_('On invoice id “%s” you must use a VAT tax that is not VAT Not Applicable', inv.id))
 
     def _set_afip_service_dates(self):
         for rec in self.filtered(lambda m: m.invoice_date and m.l10n_ar_afip_concept in ['2', '3', '4']):
@@ -160,20 +158,6 @@ class AccountMove(models.Model):
         necessary because the user can change the responsability after that any time """
         for rec in self:
             rec.l10n_ar_afip_responsibility_type_id = rec.commercial_partner_id.l10n_ar_afip_responsibility_type_id.id
-
-    def _set_afip_rate(self):
-        """ We set the l10n_ar_currency_rate value with the accounting date. This should be done
-        after invoice has been posted in order to have the proper accounting date"""
-        for rec in self:
-            if rec.company_id.currency_id == rec.currency_id:
-                rec.l10n_ar_currency_rate = 1.0
-            elif not rec.l10n_ar_currency_rate:
-                rec.l10n_ar_currency_rate = self.env['res.currency']._get_conversion_rate(
-                    from_currency=rec.currency_id,
-                    to_currency=rec.company_id.currency_id,
-                    company=rec.company_id,
-                    date=rec.invoice_date,
-                )
 
     @api.onchange('partner_id')
     def _onchange_afip_responsibility(self):
@@ -222,7 +206,6 @@ class AccountMove(models.Model):
 
         posted_ar_invoices = posted & ar_invoices
         posted_ar_invoices._set_afip_responsibility()
-        posted_ar_invoices._set_afip_rate()
         posted_ar_invoices._set_afip_service_dates()
         return posted
 

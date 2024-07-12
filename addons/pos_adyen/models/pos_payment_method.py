@@ -27,6 +27,12 @@ class PosPaymentMethod(models.Model):
 
     adyen_latest_response = fields.Char(copy=False, groups='base.group_erp_manager') # used to buffer the latest asynchronous notification from Adyen.
 
+    @api.model
+    def _load_pos_data_fields(self, config_id):
+        params = super()._load_pos_data_fields(config_id)
+        params += ['adyen_terminal_identifier']
+        return params
+
     @api.constrains('adyen_terminal_identifier')
     def _check_adyen_terminal_identifier(self):
         for payment_method in self:
@@ -38,13 +44,13 @@ class PosPaymentMethod(models.Model):
                                                   limit=1)
             if existing_payment_method:
                 if existing_payment_method.company_id == payment_method.company_id:
-                    raise ValidationError(_('Terminal %s is already used on payment method %s.',
-                                      payment_method.adyen_terminal_identifier, existing_payment_method.display_name))
+                    raise ValidationError(_('Terminal %(terminal)s is already used on payment method %(payment_method)s.',
+                                      terminal=payment_method.adyen_terminal_identifier, payment_method=existing_payment_method.display_name))
                 else:
-                    raise ValidationError(_('Terminal %s is already used in company %s on payment method %s.',
-                                             payment_method.adyen_terminal_identifier,
-                                             existing_payment_method.company_id.name,
-                                             existing_payment_method.display_name))
+                    raise ValidationError(_('Terminal %(terminal)s is already used in company %(company)s on payment method %(payment_method)s.',
+                                             terminal=payment_method.adyen_terminal_identifier,
+                                             company=existing_payment_method.company_id.name,
+                                             payment_method=existing_payment_method.display_name))
 
     def _get_adyen_endpoints(self):
         return {
@@ -71,7 +77,7 @@ class PosPaymentMethod(models.Model):
         if not data:
             raise UserError(_('Invalid Adyen request'))
 
-        if 'SaleToPOIRequest' in data and data['SaleToPOIRequest']['MessageHeader']['MessageCategory'] == 'Payment': # Clear only if it is a payment request
+        if 'SaleToPOIRequest' in data and data['SaleToPOIRequest']['MessageHeader']['MessageCategory'] == 'Payment' and 'PaymentRequest' in data['SaleToPOIRequest']:  # Clear only if it is a payment request
             self.sudo().adyen_latest_response = ''  # avoid handling old responses multiple times
 
         if not operation:

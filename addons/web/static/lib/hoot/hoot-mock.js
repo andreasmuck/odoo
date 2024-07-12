@@ -4,16 +4,18 @@
  * @typedef {import("./mock/network").ServerWebSocket} ServerWebSocket
  */
 
-export { setRandomSeed } from "./mock/math";
-export { mockPermission, mockUserAgent } from "./mock/navigator";
-export { mockFetch, mockWebSocket, mockWorker } from "./mock/network";
+export { makeSeededRandom } from "./mock/math";
+export { mockPermission, mockSendBeacon, mockUserAgent } from "./mock/navigator";
+export { mockFetch, mockLocation, mockWebSocket, mockWorker } from "./mock/network";
 export { flushNotifications } from "./mock/notification";
 export {
     Deferred,
+    advanceFrame,
     advanceTime,
     animationFrame,
     cancelAllTimers,
     delay,
+    freezeTime,
     microTick,
     mockDate,
     mockTimeZone,
@@ -21,4 +23,4 @@ export {
     setFrameRate,
     tick,
 } from "./mock/time";
-export { mockLocation, mockTouch } from "./mock/window";
+export { mockTouch, watchKeys, watchListeners } from "./mock/window";

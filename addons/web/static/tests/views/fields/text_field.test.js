@@ -6,11 +6,11 @@ import {
     defineModels,
     fieldInput,
     fields,
-    makeMockServer,
     models,
     mountView,
     onRpc,
-} from "../../web_test_helpers";
+    serverState,
+} from "@web/../tests/web_test_helpers";
 
 function fieldTextArea(name) {
     return contains(`.o_field_widget[name='${name}'] textarea`);
@@ -22,7 +22,7 @@ class Product extends models.Model {
 
 defineModels([Product]);
 
-onRpc("/web/dataset/call_kw/res.users/has_group", () => true);
+onRpc("has_group", () => true);
 
 test("basic rendering", async () => {
     Product._records = [{ id: 1, description: "Description as text" }];
@@ -70,7 +70,7 @@ test("render following an onchange", async () => {
     await fieldTextArea("description").edit("Description as text");
     expect(textarea.offsetHeight).toBe(initialHeight);
     expect(textarea.clientHeight).toBe(textarea.scrollHeight);
-    expect(["onchange"]).toVerifySteps();
+    expect.verifySteps(["onchange"]);
 });
 
 test("no scroll bar in editable list", async () => {
@@ -104,28 +104,24 @@ test("set row on text fields", async () => {
 test("is translatable", async () => {
     Product._fields.description = fields.Text({ translate: true });
     Product._records = [{ id: 1, description: "Description as text" }];
-    await makeMockServer({
-        multi_lang: true,
-    });
-    onRpc("/web/dataset/call_kw/res.lang/get_installed", () => {
-        return Promise.resolve([
-            ["en_US", "English"],
-            ["fr_BE", "French (Belgium)"],
-        ]);
-    });
-    onRpc("/web/dataset/call_kw/product/get_field_translations", () => {
-        return Promise.resolve([
-            [
-                { lang: "en_US", source: "Description as text", value: "Description as text" },
-                {
-                    lang: "fr_BE",
-                    source: "Description as text",
-                    value: "Description sous forme de texte",
-                },
-            ],
-            { translation_type: "text", translation_show_source: false },
-        ]);
-    });
+
+    serverState.multiLang = true;
+
+    onRpc("get_installed", () => [
+        ["en_US", "English"],
+        ["fr_BE", "French (Belgium)"],
+    ]);
+    onRpc("get_field_translations", () => [
+        [
+            { lang: "en_US", source: "Description as text", value: "Description as text" },
+            {
+                lang: "fr_BE",
+                source: "Description as text",
+                value: "Description sous forme de texte",
+            },
+        ],
+        { translation_type: "text", translation_show_source: false },
+    ]);
     await mountView({
         type: "form",
         resModel: "product",
@@ -133,6 +129,7 @@ test("is translatable", async () => {
         arch: `<form><sheet><group><field name="description"/></group></sheet></form>`,
     });
     expect(".o_field_text textarea").toHaveClass("o_field_translate");
+    await contains(".o_field_text textarea").click();
     expect(".o_field_text .btn.o_field_translate").toHaveCount(1);
     await contains(".o_field_text .btn.o_field_translate").click();
     expect(".modal").toHaveCount(1);
@@ -141,9 +138,9 @@ test("is translatable", async () => {
 test("is translatable on new record", async () => {
     Product._fields.description = fields.Text({ translate: true });
     Product._records = [{ id: 1, description: "Description as text" }];
-    await makeMockServer({
-        multi_lang: true,
-    });
+
+    serverState.multiLang = true;
+
     await mountView({
         type: "form",
         resModel: "product",
@@ -165,11 +162,12 @@ test("press enter inside editable list", async () => {
     await contains(".o_data_row .o_data_cell").click();
     expect("textarea.o_input").toHaveCount(1);
     expect("textarea.o_input").toHaveValue("Description as text");
-    expect(queryOne("textarea.o_input")).toBe(document.activeElement);
+    expect("textarea.o_input").toBeFocused();
     expect("textarea.o_input").toHaveValue("Description as text");
-    await fieldTextArea("description").press("Enter");
+    // clear selection before enter
+    await fieldTextArea("description").press(["right", "Enter"]);
     expect("textarea.o_input").toHaveValue("Description as text\n");
-    expect(queryOne("textarea.o_input")).toBe(document.activeElement);
+    expect("textarea.o_input").toBeFocused();
     expect("tr.o_data_row").toHaveCount(1);
 });
 
@@ -181,7 +179,7 @@ test("in editable list view", async () => {
         arch: '<tree editable="top"><field name="description"/></tree>',
     });
     await contains(".o_list_button_add").click();
-    expect(queryOne("textarea")).toBe(document.activeElement);
+    expect("textarea").toBeFocused();
 });
 
 test.tags("desktop")("with dynamic placeholder", async () => {
@@ -206,7 +204,7 @@ test.tags("desktop")("with dynamic placeholder", async () => {
             </form>`,
     });
     expect(".o_popover .o_model_field_selector_popover").toHaveCount(0);
-    await press("alt+#");
+    press(["alt", "#"]);
     await animationFrame();
     expect(".o_popover .o_model_field_selector_popover").toHaveCount(1);
 });
@@ -234,7 +232,7 @@ test.tags("mobile")("with dynamic placeholder in mobile", async () => {
     });
     expect(".o_popover .o_model_field_selector_popover").toHaveCount(0);
     await fieldTextArea("description").focus();
-    await press("alt+#");
+    press(["alt", "#"]);
     await animationFrame();
     expect(".o_popover .o_model_field_selector_popover").toHaveCount(1);
 });

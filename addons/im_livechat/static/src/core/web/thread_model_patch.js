@@ -8,7 +8,7 @@ patch(Thread.prototype, {
         super.setup(...arguments);
         this.appAsLivechats = Record.one("DiscussApp", {
             compute() {
-                return this.channel_type === "livechat" ? this._store.discuss : null;
+                return this.channel_type === "livechat" ? this.store.discuss : null;
             },
         });
         this.livechatChannel = Record.one("LivechatChannel");
@@ -27,13 +27,13 @@ patch(Thread.prototype, {
     },
     get canUnpin() {
         if (this.channel_type === "livechat") {
-            return this.message_unread_counter === 0;
+            return !this.selfMember || this.selfMember.message_unread_counter === 0;
         }
         return super.canUnpin;
     },
 
     get correspondents() {
-        return super.correspondents.filter((correspondent) => !correspondent.is_bot);
+        return super.correspondents.filter((correspondent) => !correspondent.persona.is_bot);
     },
 
     computeCorrespondent() {
@@ -44,8 +44,8 @@ patch(Thread.prototype, {
             const orderedChannelMembers = [...this.channelMembers].sort((a, b) => a.id - b.id);
             const isFirstMemberOperator = orderedChannelMembers[0]?.persona.eq(this.operator);
             correspondent = isFirstMemberOperator
-                ? orderedChannelMembers[1]?.persona
-                : orderedChannelMembers[0]?.persona;
+                ? orderedChannelMembers[1]
+                : orderedChannelMembers[0];
         }
         return correspondent;
     },
@@ -54,33 +54,30 @@ patch(Thread.prototype, {
         if (this.channel_type !== "livechat" || !this.correspondent) {
             return super.displayName;
         }
-        if (!this.correspondent.is_public && this.correspondent.country) {
-            return `${this.getMemberName(this.correspondent)} (${this.correspondent.country.name})`;
+        if (!this.correspondent.persona.is_public && this.correspondent.persona.country) {
+            return `${this.correspondent.name} (${this.correspondent.persona.country.name})`;
         }
         if (this.anonymous_country) {
-            return `${this.getMemberName(this.correspondent)} (${this.anonymous_country.name})`;
+            return `${this.correspondent.name} (${this.anonymous_country.name})`;
         }
-        return this.getMemberName(this.correspondent);
+        return this.correspondent.name;
     },
 
     get avatarUrl() {
         if (this.channel_type === "livechat" && this.correspondent) {
-            return this.correspondent.avatarUrl;
+            return this.correspondent.persona.avatarUrl;
         }
         return super.avatarUrl;
     },
 
     /**
-     *
-     * @param {import("models").Persona} persona
+     * @override
+     * @param {boolean} pushState
      */
-    getMemberName(persona) {
-        if (this.channel_type !== "livechat") {
-            return super.getMemberName(persona);
+    setAsDiscussThread(pushState) {
+        super.setAsDiscussThread(pushState);
+        if (this.store.env.services.ui.isSmall && this.channel_type === "livechat") {
+            this.store.discuss.activeTab = "livechat";
         }
-        if (persona.user_livechat_username) {
-            return persona.user_livechat_username;
-        }
-        return super.getMemberName(persona);
     },
 });

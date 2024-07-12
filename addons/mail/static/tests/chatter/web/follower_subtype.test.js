@@ -1,4 +1,3 @@
-import { describe, test } from "@odoo/hoot";
 import {
     click,
     contains,
@@ -6,8 +5,10 @@ import {
     openFormView,
     start,
     startServer,
-} from "../../mail_test_helpers";
+} from "@mail/../tests/mail_test_helpers";
+import { describe, test } from "@odoo/hoot";
 import { patchWithCleanup, serverState } from "@web/../tests/web_test_helpers";
+
 import { MailThread } from "../../mock_server/mock_models/mail_thread";
 
 describe.current.tags("desktop");
@@ -27,11 +28,10 @@ test("simplest layout of a followed subtype", async () => {
         subtype_ids: [subtypeId],
     });
     patchWithCleanup(MailThread.prototype, {
-        _get_mail_thread_data() {
+        _thread_to_store(ids, store) {
             // mimic user with write access
-            const res = super._get_mail_thread_data(...arguments);
-            res["hasWriteAccess"] = true;
-            return res;
+            super._thread_to_store(...arguments);
+            store.add("Thread", { hasWriteAccess: true, id: ids[0], model: this._name });
         },
     });
     await start();
@@ -60,11 +60,10 @@ test("simplest layout of a not followed subtype", async () => {
         res_id: serverState.partnerId,
     });
     patchWithCleanup(MailThread.prototype, {
-        _get_mail_thread_data() {
+        _thread_to_store(ids, store) {
             // mimic user with write access
-            const res = super._get_mail_thread_data(...arguments);
-            res["hasWriteAccess"] = true;
-            return res;
+            super._thread_to_store(...arguments);
+            store.add("Thread", { hasWriteAccess: true, id: ids[0], model: this._name });
         },
     });
     await start();
@@ -89,11 +88,10 @@ test("toggle follower subtype checkbox", async () => {
         res_id: serverState.partnerId,
     });
     patchWithCleanup(MailThread.prototype, {
-        _get_mail_thread_data() {
+        _thread_to_store(ids, store) {
             // mimic user with write access
-            const res = super._get_mail_thread_data(...arguments);
-            res["hasWriteAccess"] = true;
-            return res;
+            super._thread_to_store(...arguments);
+            store.add("Thread", { hasWriteAccess: true, id: ids[0], model: this._name });
         },
     });
     await start();

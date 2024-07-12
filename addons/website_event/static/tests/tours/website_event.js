@@ -11,16 +11,17 @@
     }, () => [{
         content: _t("Click here to add new content to your website."),
         trigger: ".o_menu_systray .o_new_content_container > a",
-        consumeVisibleOnly: true,
         position: 'bottom',
+        run: "click",
     }, {
         trigger: "a[data-module-xml-id='base.module_website_event']",
         content: _t("Click here to create a new event."),
         position: "bottom",
+        run: "click",
     }, {
         trigger: '.modal-dialog div[name="name"] input',
         content: markup(_t("Create a name for your new event and click <em>\"Continue\"</em>. e.g: Technical Training")),
-        run: 'text Technical Training',
+        run: "edit Technical Training",
         position: "left",
     }, {
         trigger: '.modal-dialog div[name=date_begin]',
@@ -34,29 +35,41 @@
             el2.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
             el1.click();
         }
-    }, {
+    },
+    {
+        isActive: ["auto"],
+        trigger: `.modal-dialog input[type=text]:not(:value(""))`,
+    },
+    {
         trigger: '.modal-footer button.btn-primary',
-        extra_trigger: `.modal-dialog input[type=text]:not(:value(""))`,
         content: markup(_t("Click <em>Continue</em> to create the event.")),
         position: "right",
+        run: "click",
     }, {
         trigger: "#oe_snippets.o_loaded #snippet_structure .oe_snippet:eq(2) .oe_snippet_thumbnail",
         content: _t("Drag this block and drop it in your page."),
         position: "bottom",
-        run: "drag_and_drop_native :iframe #wrapwrap > main",
+        run: `drag_and_drop(:iframe #wrapwrap > main)`,
+    }, {
+        // Wait until the drag and drop is resolved (causing a history step)
+        // before clicking save.
+        trigger: ".o_we_external_history_buttons button.fa-undo:not([disabled])",
     }, {
         trigger: "button[data-action=save]",
         content: _t("Once you click on save, your event is updated."),
         position: "bottom",
-        extra_trigger: ":iframe .o_dirty",
-    }, {
+        run: "click",
+    },
+    {
+        trigger: ":iframe body:not(.editor_enable)",
+    },
+    {
         trigger: ".o_menu_systray_item.o_website_publish_container a",
-        extra_trigger: ":iframe body:not(.editor_enable)",
         content: _t("Click to publish your event."),
         position: "top",
+        run: "click",
     }, {
         trigger: ".o_website_edit_in_backend > a",
         content: _t("Click here to customize your event further."),
         position: "bottom",
-        isCheck: true,
     }]);

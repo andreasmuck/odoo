@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 {
-    'name' : 'Invoicing',
+    'name': 'Invoicing',
     'version' : '1.2',
-    'summary': 'Invoices & Payments',
+    'summary': 'Invoices, Payments, Follow-ups & Bank Synchronization',
     'sequence': 10,
     'description': """
 Invoicing & Payments
@@ -54,6 +54,7 @@ You could use this simplified accounting in case you work with an (external) acc
         'views/report_invoice.xml',
         'report/account_invoice_report_view.xml',
         'views/account_cash_rounding_view.xml',
+        'views/ir_actions_views.xml',
         'views/ir_module_views.xml',
         'views/res_config_settings_views.xml',
         'views/partner_view.xml',
@@ -68,12 +69,13 @@ You could use this simplified accounting in case you work with an (external) acc
         'report/account_hash_integrity_templates.xml',
         'views/res_currency.xml',
         'views/account_menuitem.xml',
-        'wizard/account_tour_upload_bill.xml',
+        'views/mail_message_views.xml',
         'wizard/accrued_orders.xml',
         'views/bill_preview_template.xml',
         'data/account_reports_data.xml',
         'views/uom_uom_views.xml',
         'views/product_views.xml',
+        'wizard/account_advance_payments_views.xml',
         'views/tests_shared_js_python.xml',
         'views/base_document_layout_views.xml',
         'views/report_templates.xml'
@@ -91,28 +93,38 @@ You could use this simplified accounting in case you work with an (external) acc
         'web.assets_backend': [
             'account/static/src/css/account_bank_and_cash.css',
             'account/static/src/css/account.css',
+            'account/static/src/css/account_payment.scss',
             'account/static/src/scss/account_journal_dashboard.scss',
             'account/static/src/scss/account_searchpanel.scss',
             'account/static/src/scss/account_payment_term.scss',
             'account/static/src/components/**/*',
             'account/static/src/services/*.js',
+            'account/static/src/views/*.js',
             'account/static/src/js/tours/account.js',
-            'account/static/src/views/**/*.js',
             'account/static/src/js/search/search_bar/search_bar.js',
             'account/static/src/helpers/*.js',
+            'account/static/src/core/utils/*.js',
+        ],
+        # Unit test files
+        'web.assets_unit_tests': [
+            'account/static/tests/**/*',
+            ('remove', 'account/static/tests/legacy/**/*'),  # to remove when all legacy tests are ported
+            ('remove', 'account/static/tests/helpers/**/*'),
+            ('remove', 'account/static/tests/tours/**/*'),
         ],
         'web.assets_frontend': [
             'account/static/src/js/account_portal_sidebar.js',
             'account/static/src/js/account_portal.js',
             'account/static/src/components/tests_shared_js_python/*',
             'account/static/src/helpers/*.js',
+            'account/static/src/core/utils/*.js',
         ],
         'web.assets_tests': [
             'account/static/tests/tours/**/*',
         ],
         'web.qunit_suite_tests': [
             'account/static/tests/helpers/*.js',
-            'account/static/tests/*.js',
+            'account/static/tests/legacy/*.js',
         ],
         'web.report_assets_common': [
             'account/static/src/css/report_invoice.css',

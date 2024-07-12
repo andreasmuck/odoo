@@ -5,7 +5,7 @@ from lxml import html
 from werkzeug.urls import url_encode
 
 from odoo.tests import HttpCase, tagged
-from odoo.addons.website.tools import MockRequest
+from odoo.addons.website.tools import MockRequest, create_image_attachment
 from odoo.tests.common import HOST
 from odoo.tools import config
 
@@ -23,11 +23,12 @@ class TestSnippets(HttpCase):
         with MockRequest(self.env, website=self.env['website'].browse(1)):
             snippets_template = self.env['ir.ui.view'].render_public_asset('website.snippets')
         html_template = html.fromstring(snippets_template)
-        data_snippet_els = html_template.xpath("//*[@class='o_panel' and not(contains(@class, 'd-none'))]//*[@data-snippet]")
+        data_snippet_els = html_template.xpath("//*[snippets and not(contains(@class, 'd-none'))]//*[@data-snippet]")
         blacklist = [
             's_facebook_page',  # avoid call to external services (facebook.com)
             's_map',  # avoid call to maps.google.com
             's_instagram_page',  # avoid call to instagram.com
+            's_image',  # Avoid specific case where the media dialog opens on drop
         ]
         snippets_names = ','.join(set(el.attrib['data-snippet'] for el in data_snippet_els if el.attrib['data-snippet'] not in blacklist))
         snippets_names_encoded = url_encode({'snippets_names': snippets_names})
@@ -54,14 +55,7 @@ class TestSnippets(HttpCase):
             'social_instagram': 'https://www.instagram.com/explore/tags/odoo/',
             'social_tiktok': 'https://www.tiktok.com/@odoo',
         })
-        IrAttachment = self.env['ir.attachment']
-        base = "http://%s:%s" % (HOST, config['http_port'])
-        IrAttachment.create({
-            'public': True,
-            'name': 's_banner_default_image.jpg',
-            'type': 'url',
-            'url': base + '/web/image/website.s_banner_default_image',
-        })
+        create_image_attachment(self.env, '/web/image/website.s_banner_default_image', 's_banner_default_image.jpg')
         self.start_tour(self.env['website'].get_client_action_url('/'), 'snippet_social_media', login="admin")
         self.assertEqual(
             self.env['website'].browse(1).social_instagram,
@@ -79,20 +73,8 @@ class TestSnippets(HttpCase):
         self.start_tour(self.env['website'].get_client_action_url('/'), 'snippet_table_of_content', login='admin')
 
     def test_09_snippet_image_gallery(self):
-        IrAttachment = self.env['ir.attachment']
-        base = "http://%s:%s" % (HOST, config['http_port'])
-        IrAttachment.create({
-            'public': True,
-            'name': 's_default_image.jpg',
-            'type': 'url',
-            'url': base + '/web/image/website.s_banner_default_image.jpg',
-        })
-        IrAttachment.create({
-            'public': True,
-            'name': 's_default_image2.jpg',
-            'type': 'url',
-            'url': base + '/web/image/website.s_banner_default_image.jpg',
-        })
+        create_image_attachment(self.env, '/web/image/website.s_banner_default_image.jpg', 's_default_image.jpg')
+        create_image_attachment(self.env, '/web/image/website.s_banner_default_image.jpg', 's_default_image2.jpg')
         self.start_tour("/", "snippet_image_gallery_remove", login='admin')
 
     def test_10_parallax(self):
@@ -117,15 +99,15 @@ class TestSnippets(HttpCase):
         self.start_tour(self.env['website'].get_client_action_url('/'), "snippet_image_gallery_reorder", login='admin')
 
     def test_snippet_image_gallery_thumbnail_update(self):
-        IrAttachment = self.env['ir.attachment']
-        base = 'http://%s:%s' % (HOST, config['http_port'])
-        IrAttachment.create({
-            'public': True,
-            'name': 's_default_image.jpg',
-            'type': 'url',
-            'url': base + '/web/image/website.s_banner_default_image',
-        })
+        create_image_attachment(self.env, '/web/image/website.s_banner_default_image', 's_default_image.jpg')
         self.start_tour(self.env['website'].get_client_action_url('/'), 'snippet_image_gallery_thumbnail_update', login='admin')
 
     def test_dropdowns_and_header_hide_on_scroll(self):
         self.start_tour(self.env['website'].get_client_action_url('/'), 'dropdowns_and_header_hide_on_scroll', login='admin')
+
+    def test_snippet_image(self):
+        create_image_attachment(self.env, '/web/image/website.s_banner_default_image', 's_default_image.jpg')
+        self.start_tour(self.env['website'].get_client_action_url('/'), 'snippet_image', login='admin')
+
+    def test_rating_snippet(self):
+        self.start_tour(self.env["website"].get_client_action_url("/"), "snippet_rating", login="admin")

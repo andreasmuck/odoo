@@ -1,7 +1,16 @@
 import { expect, getFixture, test } from "@odoo/hoot";
-import { queryAll, queryAllTexts, queryFirst, queryLast, queryOne } from "@odoo/hoot-dom";
+import { queryAllTexts, queryLast } from "@odoo/hoot-dom";
 import { animationFrame, runAllTimers } from "@odoo/hoot-mock";
 import { Component, useState, xml } from "@odoo/owl";
+import {
+    clickPrev,
+    followRelation,
+    getDisplayedFieldNames,
+    getFocusedFieldName,
+    getModelFieldSelectorValues,
+    getTitle,
+    openModelFieldSelectorPopover,
+} from "@web/../tests/core/tree_editor/condition_tree_editor_test_helpers";
 import {
     contains,
     defineModels,
@@ -10,19 +19,10 @@ import {
     mountWithCleanup,
     onRpc,
 } from "@web/../tests/web_test_helpers";
-import {
-    getModelFieldSelectorValues,
-    openModelFieldSelectorPopover,
-    getDisplayedFieldNames,
-    getTitle,
-    clickPrev,
-    followRelation,
-    getFocusedFieldName,
-} from "@web/../tests/core/tree_editor/condition_tree_editor_test_helpers";
 
 import { ModelFieldSelector } from "@web/core/model_field_selector/model_field_selector";
 
-export class Partner extends models.Model {
+class Partner extends models.Model {
     foo = fields.Char();
     bar = fields.Boolean();
     product_id = fields.Many2one({ relation: "product", searchable: true });
@@ -34,7 +34,7 @@ export class Partner extends models.Model {
     ];
 }
 
-export class Product extends models.Model {
+class Product extends models.Model {
     name = fields.Char({ string: "Product Name", searchable: true });
 
     _records = [
@@ -63,11 +63,9 @@ function addProperties() {
 }
 
 test("creating a field chain from scratch", async () => {
-    function getValueFromDOM(el) {
-        return [...queryAll(".o_model_field_selector_chain_part", { root: el })]
-            .map((part) => part.textContent.trim())
-            .join(" -> ");
-    }
+    const getValueFromDOM = (root) =>
+        queryAllTexts(".o_model_field_selector_chain_part", { root }).join(" -> ");
+
     class Parent extends Component {
         static components = { ModelFieldSelector };
         static template = xml`
@@ -93,12 +91,12 @@ test("creating a field chain from scratch", async () => {
     const fieldSelector = await mountWithCleanup(Parent);
 
     await openModelFieldSelectorPopover();
-    expect(queryOne("input.o_input[placeholder='Search...']")).toBe(document.activeElement);
+    expect("input.o_input[placeholder='Search...']").toBeFocused();
     expect(".o_model_field_selector_popover").toHaveCount(1);
 
     // The field selector popover should contain the list of "partner"
     // fields. "Bar" should be among them.
-    expect(queryFirst(".o_model_field_selector_popover_item_name")).toHaveText("Bar");
+    expect(".o_model_field_selector_popover_item_name:first").toHaveText("Bar");
 
     // Clicking the "Bar" field should close the popover and set the field
     // chain to "bar" as it is a basic field
@@ -106,7 +104,7 @@ test("creating a field chain from scratch", async () => {
     expect(".o_model_field_selector_popover").toHaveCount(0);
     expect(getValueFromDOM()).toBe("Bar");
     expect(fieldSelector.path).toBe("bar");
-    expect(["update: bar"]).toVerifySteps();
+    expect.verifySteps(["update: bar"]);
 
     await openModelFieldSelectorPopover();
     expect(".o_model_field_selector_popover").toHaveCount(1);
@@ -128,13 +126,13 @@ test("creating a field chain from scratch", async () => {
     await contains(queryLast(".o_model_field_selector_popover_item_name")).click();
     expect(".o_model_field_selector_popover").toHaveCount(0);
     expect(getValueFromDOM()).toBe("Product -> Product Name");
-    expect(["update: product_id.name"]).toVerifySteps();
+    expect.verifySteps(["update: product_id.name"]);
 
     // Remove the current selection and recreate it again
     await openModelFieldSelectorPopover();
     await contains(".o_model_field_selector_popover_prev_page").click();
     await contains(".o_model_field_selector_popover_close").click();
-    expect(["update: product_id"]).toVerifySteps();
+    expect.verifySteps(["update: product_id"]);
 
     await openModelFieldSelectorPopover();
     expect(
@@ -147,7 +145,7 @@ test("creating a field chain from scratch", async () => {
     await contains(queryLast(".o_model_field_selector_popover_item_name")).click();
     expect(".o_model_field_selector_popover").toHaveCount(0);
     expect(getValueFromDOM()).toBe("Product -> Product Name");
-    expect(["update: product_id.name"]).toVerifySteps();
+    expect.verifySteps(["update: product_id.name"]);
 });
 
 test("default field chain should set the page data correctly", async () => {
@@ -170,7 +168,7 @@ test("default field chain should set the page data correctly", async () => {
         "Last Modified on",
         "Product",
     ]);
-    expect(queryLast(".o_model_field_selector_popover_item")).toHaveClass("active");
+    expect(".o_model_field_selector_popover_item:last").toHaveClass("active");
 });
 
 test("use the filter option", async () => {
@@ -211,7 +209,6 @@ test("default `showSearchInput` option", async () => {
         ".o_model_field_selector_popover .o_model_field_selector_popover_search input"
     ).edit("xx", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(getDisplayedFieldNames()).toBeEmpty();
 
     // search 'Pro'
@@ -219,7 +216,6 @@ test("default `showSearchInput` option", async () => {
         ".o_model_field_selector_popover .o_model_field_selector_popover_search input"
     ).edit("Pro", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(getDisplayedFieldNames()).toEqual(["Product"]);
 });
 
@@ -268,11 +264,9 @@ test("cache fields_get", async () => {
         relation: "partner",
         searchable: true,
     });
-    onRpc((_, { method }) => {
-        if (method === "fields_get") {
-            expect.step("fields_get");
-        }
-    });
+
+    onRpc("fields_get", ({ method }) => expect.step(method));
+
     await mountWithCleanup(ModelFieldSelector, {
         props: {
             readonly: false,
@@ -280,7 +274,7 @@ test("cache fields_get", async () => {
             resModel: "partner",
         },
     });
-    expect(["fields_get"]).toVerifySteps();
+    expect.verifySteps(["fields_get"]);
 });
 
 test("Using back button in popover", async () => {
@@ -345,7 +339,7 @@ test("select a relational field does not follow relation", async () => {
     await contains(
         ".o_model_field_selector_popover_item:last-child .o_model_field_selector_popover_item_name"
     ).click();
-    expect(["product_id"]).toVerifySteps();
+    expect.verifySteps(["product_id"]);
     expect(".o_popover").toHaveCount(0);
 
     await openModelFieldSelectorPopover();
@@ -371,7 +365,7 @@ test("select a relational field does not follow relation", async () => {
     expect(".o_popover").toHaveCount(1);
 
     await contains(".o_model_field_selector_popover_item_name").click();
-    expect(["product_id.create_date"]).toVerifySteps();
+    expect.verifySteps(["product_id.create_date"]);
     expect(".o_popover").toHaveCount(0);
 });
 
@@ -724,14 +718,10 @@ test("focus on search input", async () => {
 
     await mountWithCleanup(Parent);
     await openModelFieldSelectorPopover();
-    expect(document.activeElement).toBe(
-        queryOne(".o_model_field_selector_popover_search .o_input")
-    );
+    expect(".o_model_field_selector_popover_search .o_input").toBeFocused();
 
     await followRelation();
-    expect(document.activeElement).toBe(
-        queryOne(".o_model_field_selector_popover_search .o_input")
-    );
+    expect(".o_model_field_selector_popover_search .o_input").toBeFocused();
 });
 
 test("support properties", async () => {
@@ -774,7 +764,7 @@ test("support properties", async () => {
     ).click();
     expect(getModelFieldSelectorValues()).toEqual(["Properties"]);
     expect(".o_model_field_selector_warning").toHaveCount(1);
-    expect([]).toVerifySteps();
+    expect.verifySteps([]);
 
     await clickPrev();
     expect(getTitle()).toBe("");
@@ -796,7 +786,7 @@ test("support properties", async () => {
     await contains(
         '.o_model_field_selector_popover_item[data-name="xphone_prop_2"] .o_model_field_selector_popover_item_name'
     ).click();
-    expect(["properties.xphone_prop_2"]).toVerifySteps();
+    expect.verifySteps(["properties.xphone_prop_2"]);
     expect(".o_model_field_selector_value").toHaveText("PropertiesP2");
     expect(".o_model_field_selector_warning").toHaveCount(0);
 });
@@ -825,7 +815,6 @@ test("search on field string and name in debug mode", async () => {
         ".o_model_field_selector_popover .o_model_field_selector_popover_search input"
     ).edit("uct", { confirm: false });
     await runAllTimers();
-    await animationFrame();
     expect(getDisplayedFieldNames()).toEqual([
         "Product\nproduct_id (many2one)",
         "Some string\nucit (char)",
@@ -867,14 +856,14 @@ test("clear button (allowEmpty=true)", async () => {
     expect(getModelFieldSelectorValues()).toEqual([]);
     expect(".o_model_field_selector_warning").toHaveCount(0);
     expect(".o_model_field_selector .fa.fa-times").toHaveCount(0);
-    expect([`path is ""`]).toVerifySteps();
+    expect.verifySteps([`path is ""`]);
 
     await openModelFieldSelectorPopover();
     await contains(".o_model_field_selector_popover_item_name").click();
     expect(getModelFieldSelectorValues()).toEqual(["Bar"]);
     expect(".o_model_field_selector_warning").toHaveCount(0);
     expect(".o_model_field_selector .fa.fa-times").toHaveCount(1);
-    expect([`path is "bar"`]).toVerifySteps();
+    expect.verifySteps([`path is "bar"`]);
 
     // clear when popover is open
     await openModelFieldSelectorPopover();
@@ -882,7 +871,7 @@ test("clear button (allowEmpty=true)", async () => {
     expect(getModelFieldSelectorValues()).toEqual([]);
     expect(".o_model_field_selector_warning").toHaveCount(0);
     expect(".o_model_field_selector .fa.fa-times").toHaveCount(0);
-    expect([`path is ""`]).toVerifySteps();
+    expect.verifySteps([`path is ""`]);
 });
 
 test("Modify path in popover debug input and click away", async () => {
@@ -920,7 +909,7 @@ test("Modify path in popover debug input and click away", async () => {
 
     await contains(getFixture()).click();
     expect(getModelFieldSelectorValues()).toEqual(["foooooo"]);
-    expect(["foooooo"]).toVerifySteps();
+    expect.verifySteps(["foooooo"]);
 });
 
 test("showDebugInput = false", async () => {

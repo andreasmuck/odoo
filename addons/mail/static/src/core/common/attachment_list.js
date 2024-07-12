@@ -19,6 +19,7 @@ export class AttachmentList extends Component {
     static template = "mail.AttachmentList";
 
     setup() {
+        super.setup();
         this.ui = useState(useService("ui"));
         // Arbitrary high value, this is effectively a max-width.
         this.imagesWidth = 1920;
@@ -38,6 +39,14 @@ export class AttachmentList extends Component {
             width: this.imagesWidth,
             height: this.props.imagesHeight,
         });
+    }
+
+    get images() {
+        return this.props.attachments.filter((a) => a.isImage);
+    }
+
+    get cards() {
+        return this.props.attachments.filter((a) => !a.isImage);
     }
 
     /**
@@ -94,11 +103,18 @@ export class AttachmentList extends Component {
     }
 
     get showDelete() {
+        // in the composer they should all be implicitly deletable
+        if (this.env.inComposer) {
+            return true;
+        }
+        if (!this.attachment.isDeletable) {
+            return false;
+        }
+        // in messages users are expected to delete the message instead of just the attachment
         return (
-            (this.attachment.isDeletable &&
-                (!this.env.message || this.env.message?.hasTextContent)) ||
-            this.env.inComposer ||
-            this.props.attachments.length > 1
+            !this.env.message ||
+            this.env.message.hasTextContent ||
+            (this.env.message && this.props.attachments.length > 1)
         );
     }
 }

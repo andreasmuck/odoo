@@ -6,6 +6,7 @@ from collections import namedtuple
 
 from odoo import _, _lt, api, fields, models
 from odoo.exceptions import UserError
+from odoo.tools import format_list
 
 _logger = logging.getLogger(__name__)
 
@@ -76,6 +77,9 @@ class Warehouse(models.Model):
     out_type_id = fields.Many2one('stock.picking.type', 'Out Type', check_company=True, copy=False)
     in_type_id = fields.Many2one('stock.picking.type', 'In Type', check_company=True, copy=False)
     int_type_id = fields.Many2one('stock.picking.type', 'Internal Type', check_company=True, copy=False)
+    qc_type_id = fields.Many2one('stock.picking.type', 'Quality Control Type', check_company=True, copy=False)
+    store_type_id = fields.Many2one('stock.picking.type', 'Storage Type', check_company=True, copy=False)
+    xdock_type_id = fields.Many2one('stock.picking.type', 'Cross Dock Type', check_company=True, copy=False)
     crossdock_route_id = fields.Many2one('stock.route', 'Crossdock Route', ondelete='restrict', copy=False)
     reception_route_id = fields.Many2one('stock.route', 'Receipt Route', ondelete='restrict', copy=False)
     delivery_route_id = fields.Many2one('stock.route', 'Delivery Route', ondelete='restrict', copy=False)
@@ -179,9 +183,6 @@ class Warehouse(models.Model):
             warehouses._update_reception_delivery_resupply(vals.get('reception_steps'), vals.get('delivery_steps'))
 
         if vals.get('resupply_wh_ids') and not vals.get('resupply_route_ids'):
-            new_resupply_whs = self.new({
-                'resupply_wh_ids': vals['resupply_wh_ids']
-            }).resupply_wh_ids._origin
             old_resupply_whs = {warehouse.id: warehouse.resupply_wh_ids for warehouse in warehouses}
 
         # If another partner assigned
@@ -225,8 +226,11 @@ class Warehouse(models.Model):
                     ('state', 'not in', ('done', 'cancel')),
                 ])
                 if move_ids:
-                    raise UserError(_('You still have ongoing operations for picking types %s in warehouse %s',
-                                    ', '.join(move_ids.mapped('picking_type_id.name')), warehouse.name))
+                    raise UserError(_(
+                        'You still have ongoing operations for operation types %(operations)s in warehouse %(warehouse)s',
+                        operations=format_list(self.env, move_ids.mapped('picking_type_id.name')),
+                        warehouse=warehouse.name,
+                    ))
                 else:
                     picking_type_ids.write({'active': vals['active']})
                 location_ids = self.env['stock.location'].with_context(active_test=False).search([('location_id', 'child_of', warehouse.view_location_id.id)])
@@ -236,8 +240,11 @@ class Warehouse(models.Model):
                     ('id', 'not in', picking_type_ids.ids),
                 ])
                 if picking_type_using_locations:
-                    raise UserError(_('%s use default source or destination locations from warehouse %s that will be archived.',
-                                    ', '.join(picking_type_using_locations.mapped('name')), warehouse.name))
+                    raise UserError(_(
+                        '%(operations)s have default source or destination locations within warehouse %(warehouse)s, therefore you cannot archive it.',
+                        operations=format_list(self.env, picking_type_using_locations.mapped('name')),
+                        warehouse=warehouse.name,
+                    ))
                 warehouse.view_location_id.write({'active': vals['active']})
 
                 rule_ids = self.env['stock.rule'].with_context(active_test=False).search([('warehouse_id', '=', warehouse.id)])
@@ -264,18 +271,20 @@ class Warehouse(models.Model):
 
         if vals.get('resupply_wh_ids') and not vals.get('resupply_route_ids'):
             for warehouse in warehouses:
+                new_resupply_whs = warehouse.resupply_wh_ids
                 to_add = new_resupply_whs - old_resupply_whs[warehouse.id]
                 to_remove = old_resupply_whs[warehouse.id] - new_resupply_whs
                 if to_add:
-                    existing_route = Route.search([
+                    existing_routes = Route.search([
                         ('supplied_wh_id', '=', warehouse.id),
-                        ('supplier_wh_id', 'in', to_remove.ids),
+                        ('supplier_wh_id', 'in', to_add.ids),
                         ('active', '=', False)
                     ])
-                    if existing_route:
-                        existing_route.toggle_active()
-                    else:
-                        warehouse.create_resupply_routes(to_add)
+                    if existing_routes:
+                        existing_routes.toggle_active()
+                    remaining_to_add = to_add - existing_routes.supplier_wh_id
+                    if remaining_to_add:
+                        warehouse.create_resupply_routes(remaining_to_add)
                 if to_remove:
                     to_disable_route_ids = Route.search([
                         ('supplied_wh_id', '=', warehouse.id),
@@ -383,13 +392,19 @@ class Warehouse(models.Model):
                 self[rule_field] = self.env['stock.rule'].create(values)
         return True
 
-    def _find_global_route(self, xml_id, route_name, raise_if_not_found=True):
+    def _find_or_create_global_route(self, xml_id, route_name, create=True, raise_if_not_found=False):
         """ return a route record set from an xml_id or its name. """
-        route = self.env.ref(xml_id, raise_if_not_found=False)
+        data_route = route = self.env.ref(xml_id, raise_if_not_found=False)
+        company = self.company_id[:1] or self.env.company
+        if not route or (route.company_id and route.company_id != company):
+            route = self.env['stock.route'].with_context(active_test=False).search([
+                ('name', 'like', route_name), ('company_id', 'in', [False, company.id])
+            ], order='company_id', limit=1)
         if not route:
-            route = self.env['stock.route'].search([('name', 'like', route_name)], limit=1)
-        if not route and raise_if_not_found:
-            raise UserError(_('Can\'t find any generic route %s.', route_name))
+            if raise_if_not_found:
+                raise UserError(_('Can\'t find any generic route %s.', route_name))
+            elif data_route and create:
+                route = data_route.copy({'name': data_route.name, 'company_id': company.id, 'rule_ids': False})
         return route
 
     def _get_global_route_rules_values(self):
@@ -427,7 +442,7 @@ class Warehouse(models.Model):
                     'action': 'pull',
                     'auto': 'manual',
                     'propagate_carrier': True,
-                    'route_id': self._find_global_route('stock.route_warehouse0_mto', _('Replenish on Order (MTO)'), raise_if_not_found=False).id
+                    'route_id': self._find_or_create_global_route('stock.route_warehouse0_mto', _('Replenish on Order (MTO)')).id
                 },
                 'update_values': {
                     'name': self._format_rulename(location_id, location_dest_id, 'MTO'),
@@ -631,31 +646,31 @@ class Warehouse(models.Model):
                 'active': True,
                 'usage': 'internal',
                 'replenish_location': True,
-                'barcode': self._valid_barcode(code + '-STOCK', company_id)
+                'barcode': self._valid_barcode(code + 'STOCK', company_id)
             },
             'wh_input_stock_loc_id': {
                 'name': _('Input'),
                 'active': reception_steps != 'one_step',
                 'usage': 'internal',
-                'barcode': self._valid_barcode(code + '-INPUT', company_id)
+                'barcode': self._valid_barcode(code + 'INPUT', company_id)
             },
             'wh_qc_stock_loc_id': {
                 'name': _('Quality Control'),
                 'active': reception_steps == 'three_steps',
                 'usage': 'internal',
-                'barcode': self._valid_barcode(code + '-QUALITY', company_id)
+                'barcode': self._valid_barcode(code + 'QUALITY', company_id)
             },
             'wh_output_stock_loc_id': {
                 'name': _('Output'),
                 'active': delivery_steps != 'ship_only',
                 'usage': 'internal',
-                'barcode': self._valid_barcode(code + '-OUTPUT', company_id)
+                'barcode': self._valid_barcode(code + 'OUTPUT', company_id)
             },
             'wh_pack_stock_loc_id': {
                 'name': _('Packing Zone'),
                 'active': delivery_steps == 'pick_pack_ship',
                 'usage': 'internal',
-                'barcode': self._valid_barcode(code + '-PACKING', company_id)
+                'barcode': self._valid_barcode(code + 'PACKING', company_id)
             },
         }
         return sub_locations
@@ -711,6 +726,11 @@ class Warehouse(models.Model):
             pull_rules_list = supplier_wh._get_supply_pull_rules_values(
                 [self.Routing(output_location, transit_location, supplier_wh.out_type_id, 'pull')],
                 values={'route_id': inter_wh_route.id, 'location_dest_from_rule': True})
+            if supplier_wh.delivery_steps != 'ship_only':
+                # Replenish from Output location
+                pull_rules_list += supplier_wh._get_supply_pull_rules_values(
+                    [self.Routing(supplier_wh.lot_stock_id, output_location, supplier_wh.pick_type_id, 'pull')],
+                    values={'route_id': inter_wh_route.id})
             pull_rules_list += self._get_supply_pull_rules_values(
                 [self.Routing(transit_location, self.lot_stock_id, self.in_type_id, 'pull')],
                 values={'route_id': inter_wh_route.id, 'propagate_warehouse_id': supplier_wh.id})
@@ -754,13 +774,13 @@ class Warehouse(models.Model):
                 'one_step': [self.Routing(supplier_loc, warehouse.lot_stock_id, warehouse.in_type_id, 'pull')],
                 'two_steps': [
                     self.Routing(supplier_loc, warehouse.lot_stock_id, warehouse.in_type_id, 'pull'),
-                    self.Routing(warehouse.wh_input_stock_loc_id, warehouse.lot_stock_id, warehouse.int_type_id, 'push')],
+                    self.Routing(warehouse.wh_input_stock_loc_id, warehouse.lot_stock_id, warehouse.store_type_id, 'push')],
                 'three_steps': [
                     self.Routing(supplier_loc, warehouse.lot_stock_id, warehouse.in_type_id, 'pull'),
-                    self.Routing(warehouse.wh_input_stock_loc_id, warehouse.wh_qc_stock_loc_id, warehouse.int_type_id, 'push'),
-                    self.Routing(warehouse.wh_qc_stock_loc_id, warehouse.lot_stock_id, warehouse.int_type_id, 'push')],
+                    self.Routing(warehouse.wh_input_stock_loc_id, warehouse.wh_qc_stock_loc_id, warehouse.qc_type_id, 'push'),
+                    self.Routing(warehouse.wh_qc_stock_loc_id, warehouse.lot_stock_id, warehouse.store_type_id, 'push')],
                 'crossdock': [
-                    self.Routing(warehouse.wh_input_stock_loc_id, warehouse.wh_output_stock_loc_id, warehouse.int_type_id, 'pull'),
+                    self.Routing(warehouse.wh_input_stock_loc_id, warehouse.wh_output_stock_loc_id, warehouse.xdock_type_id, 'pull'),
                     self.Routing(warehouse.wh_output_stock_loc_id, customer_loc, warehouse.out_type_id, 'pull')],
                 'ship_only': [self.Routing(warehouse.lot_stock_id, customer_loc, warehouse.out_type_id, 'pull')],
                 'pick_ship': [
@@ -784,10 +804,10 @@ class Warehouse(models.Model):
         """
         return {
             'one_step': [],
-            'two_steps': [self.Routing(self.wh_input_stock_loc_id, self.lot_stock_id, self.int_type_id, 'push')],
+            'two_steps': [self.Routing(self.wh_input_stock_loc_id, self.lot_stock_id, self.store_type_id, 'push')],
             'three_steps': [
-                self.Routing(self.wh_input_stock_loc_id, self.wh_qc_stock_loc_id, self.int_type_id, 'push'),
-                self.Routing(self.wh_qc_stock_loc_id, self.lot_stock_id, self.int_type_id, 'push')],
+                self.Routing(self.wh_input_stock_loc_id, self.wh_qc_stock_loc_id, self.qc_type_id, 'push'),
+                self.Routing(self.wh_qc_stock_loc_id, self.lot_stock_id, self.store_type_id, 'push')],
         }
 
     def _get_inter_warehouse_route_values(self, supplier_warehouse):
@@ -862,6 +882,12 @@ class Warehouse(models.Model):
             'location_src_id': new_location.id,
             'procure_method': change_to_multiple and "make_to_order" or "make_to_stock"})
         if not change_to_multiple:
+            # Remove the extra rule to resupply Output from Stock
+            rules_to_archive = Rule.search([('route_id', 'in', routes.ids), ('action', '!=', 'push'),
+                                           ('location_dest_id', '=', self.wh_output_stock_loc_id.id),
+                                           ('picking_type_id', '=', self.pick_type_id.id)])
+            rules_to_archive.active = False
+
             # If single delivery we should create the necessary MTO rules for the resupply
             routings = [self.Routing(self.lot_stock_id, location, self.out_type_id, 'pull') for location in rules.location_dest_id]
             mto_vals = self._get_global_route_rules_values().get('mto_pull_id')
@@ -871,9 +897,24 @@ class Warehouse(models.Model):
             for mto_rule_val in mto_rule_vals:
                 Rule.create(mto_rule_val)
         else:
+            # Add the missing rules to resupply Output from Stock
+            rules_to_unarchive = Rule.with_context(active_test=False).search([
+                ('route_id', 'in', routes.ids), ('action', '!=', 'push'),
+                ('location_dest_id', '=', self.wh_output_stock_loc_id.id),
+                ('picking_type_id', '=', self.pick_type_id.id)])
+            rules_to_unarchive.active = True
+            found_routes = rules_to_unarchive.route_id
+
+            missing_rule_vals = []
+            for route in (routes - found_routes):
+                missing_rule_vals += self._get_supply_pull_rules_values(
+                    [self.Routing(self.lot_stock_id, new_location, self.pick_type_id, 'pull')],
+                    values={'route_id': route.id})
+            Rule.create(missing_rule_vals)
+
             # We need to delete all the MTO stock rules, otherwise they risk to be used in the system
             Rule.search([
-                '&', ('route_id', '=', self._find_global_route('stock.route_warehouse0_mto', _('Replenish on Order (MTO)')).id),
+                '&', ('route_id', '=', self._find_or_create_global_route('stock.route_warehouse0_mto', _('Replenish on Order (MTO)'), create=False).id),
                 ('location_dest_id.usage', '=', 'transit'),
                 ('action', '!=', 'push'),
                 ('location_src_id', '=', self.lot_stock_id.id)]).write({'active': False})
@@ -897,10 +938,13 @@ class Warehouse(models.Model):
             if self.env.user.has_group('stock.group_stock_manager'):
                 warehouse = warehouse.sudo()
             warehouse.in_type_id.sequence_id.write(sequence_data['in_type_id'])
+            warehouse.qc_type_id.sequence_id.write(sequence_data['qc_type_id'])
+            warehouse.store_type_id.sequence_id.write(sequence_data['store_type_id'])
             warehouse.out_type_id.sequence_id.write(sequence_data['out_type_id'])
             warehouse.pack_type_id.sequence_id.write(sequence_data['pack_type_id'])
             warehouse.pick_type_id.sequence_id.write(sequence_data['pick_type_id'])
             warehouse.int_type_id.sequence_id.write(sequence_data['int_type_id'])
+            warehouse.xdock_type_id.sequence_id.write(sequence_data['xdock_type_id'])
 
     def _update_location_reception(self, new_reception_step):
         self.mapped('wh_qc_stock_loc_id').write({'active': new_reception_step == 'three_steps'})
@@ -921,24 +965,37 @@ class Warehouse(models.Model):
         return {
             'in_type_id': {
                 'default_location_dest_id': input_loc.id,
-                'barcode': self.code.replace(" ", "").upper() + "-RECEIPTS",
+                'barcode': self.code.replace(" ", "").upper() + "IN",
             },
             'out_type_id': {
                 'default_location_src_id': output_loc.id,
-                'barcode': self.code.replace(" ", "").upper() + "-DELIVERY",
+                'barcode': self.code.replace(" ", "").upper() + "OUT",
             },
             'pick_type_id': {
                 'active': self.delivery_steps != 'ship_only' and self.active,
                 'default_location_dest_id': output_loc.id if self.delivery_steps == 'pick_ship' else self.wh_pack_stock_loc_id.id,
-                'barcode': self.code.replace(" ", "").upper() + "-PICK",
+                'barcode': self.code.replace(" ", "").upper() + "PICK",
             },
             'pack_type_id': {
                 'active': self.delivery_steps == 'pick_pack_ship' and self.active,
                 'default_location_dest_id': output_loc.id,
-                'barcode': self.code.replace(" ", "").upper() + "-PACK",
+                'barcode': self.code.replace(" ", "").upper() + "PACK",
+            },
+            'qc_type_id': {
+                'active': self.reception_steps == 'three_steps' and self.active,
+                'barcode': self.code.replace(" ", "").upper() + "QC",
+            },
+            'store_type_id': {
+                'active': self.reception_steps != 'one_step' and self.active,
+                'default_location_src_id': input_loc.id if self.reception_steps == 'two_steps' else self.wh_qc_stock_loc_id.id,
+                'barcode': self.code.replace(" ", "").upper() + "STOR",
             },
             'int_type_id': {
-                'barcode': self.code.replace(" ", "").upper() + "-INTERNAL",
+                'barcode': self.code.replace(" ", "").upper() + "INT",
+            },
+            'xdock_type_id': {
+                'active': self.reception_steps != 'one_step' and self.delivery_steps != 'ship_only' and self.active,
+                'barcode': self.code.replace(" ", "").upper() + "XD",
             }
         }
 
@@ -954,7 +1011,6 @@ class Warehouse(models.Model):
                 'name': _('Receipts'),
                 'code': 'incoming',
                 'use_existing_lots': False,
-                'default_location_src_id': False,
                 'sequence': max_sequence + 1,
                 'sequence_code': 'IN',
                 'company_id': self.company_id.id,
@@ -962,7 +1018,7 @@ class Warehouse(models.Model):
                 'name': _('Delivery Orders'),
                 'code': 'outgoing',
                 'use_create_lots': False,
-                'sequence': max_sequence + 5,
+                'sequence': max_sequence + 7,
                 'sequence_code': 'OUT',
                 'print_label': True,
                 'company_id': self.company_id.id,
@@ -973,7 +1029,7 @@ class Warehouse(models.Model):
                 'use_existing_lots': True,
                 'default_location_src_id': self.wh_pack_stock_loc_id.id,
                 'default_location_dest_id': output_loc.id,
-                'sequence': max_sequence + 4,
+                'sequence': max_sequence + 6,
                 'sequence_code': 'PACK',
                 'company_id': self.company_id.id,
             }, 'pick_type_id': {
@@ -982,8 +1038,27 @@ class Warehouse(models.Model):
                 'use_create_lots': False,
                 'use_existing_lots': True,
                 'default_location_src_id': self.lot_stock_id.id,
-                'sequence': max_sequence + 3,
+                'sequence': max_sequence + 5,
                 'sequence_code': 'PICK',
+                'company_id': self.company_id.id,
+            }, 'qc_type_id': {
+                'name': _('Quality Control'),
+                'code': 'internal',
+                'use_create_lots': False,
+                'use_existing_lots': True,
+                'default_location_src_id': self.wh_input_stock_loc_id.id,
+                'default_location_dest_id': self.wh_qc_stock_loc_id.id,
+                'sequence': max_sequence + 2,
+                'sequence_code': 'QC',
+                'company_id': self.company_id.id,
+            }, 'store_type_id': {
+                'name': _('Storage'),
+                'code': 'internal',
+                'use_create_lots': False,
+                'use_existing_lots': True,
+                'default_location_dest_id': self.lot_stock_id.id,
+                'sequence': max_sequence + 3,
+                'sequence_code': 'STOR',
                 'company_id': self.company_id.id,
             }, 'int_type_id': {
                 'name': _('Internal Transfers'),
@@ -992,12 +1067,22 @@ class Warehouse(models.Model):
                 'use_existing_lots': True,
                 'default_location_src_id': self.lot_stock_id.id,
                 'default_location_dest_id': self.lot_stock_id.id,
-                'active': self.reception_steps != 'one_step' or self.delivery_steps != 'ship_only' or self.env.user.has_group('stock.group_stock_multi_locations'),
-                'sequence': max_sequence + 2,
+                'active': self.env.user.has_group('stock.group_stock_multi_locations'),
+                'sequence': max_sequence + 4,
                 'sequence_code': 'INT',
                 'company_id': self.company_id.id,
-            },
-        }, max_sequence + 6
+            }, 'xdock_type_id': {
+                'name': _('Cross Dock'),
+                'code': 'internal',
+                'use_create_lots': False,
+                'use_existing_lots': True,
+                'default_location_src_id': input_loc.id,
+                'default_location_dest_id': output_loc.id,
+                'sequence': max_sequence + 8,
+                'sequence_code': 'XD',
+                'company_id': self.company_id.id,
+            }
+        }, max_sequence + 9
 
     def _get_sequence_values(self, name=False, code=False):
         """ Each picking type is created with a sequence. This method returns
@@ -1026,9 +1111,24 @@ class Warehouse(models.Model):
                 'prefix': code + '/PICK/', 'padding': 5,
                 'company_id': self.company_id.id,
             },
+            'qc_type_id': {
+                'name': name + ' ' + _('Sequence quality control'),
+                'prefix': code + '/QC/', 'padding': 5,
+                'company_id': self.company_id.id,
+            },
+            'store_type_id': {
+                'name': name + ' ' + _('Sequence storage'),
+                'prefix': code + '/STOR/', 'padding': 5,
+                'company_id': self.company_id.id,
+            },
             'int_type_id': {
                 'name': name + ' ' + _('Sequence internal'),
                 'prefix': code + '/INT/', 'padding': 5,
+                'company_id': self.company_id.id,
+            },
+            'xdock_type_id': {
+                'name': name + ' ' + _('Sequence cross dock'),
+                'prefix': code + '/XD/', 'padding': 5,
                 'company_id': self.company_id.id,
             },
         }
@@ -1049,7 +1149,7 @@ class Warehouse(models.Model):
     @api.returns('self')
     def _get_all_routes(self):
         routes = self.mapped('route_ids') | self.mapped('mto_pull_id').mapped('route_id')
-        routes |= self.env["stock.route"].search([('supplied_wh_id', 'in', self.ids)])
+        routes |= self.env["stock.route"].with_context(active_test=False).search([('supplied_wh_id', 'in', self.ids)])
         return routes
 
     def action_view_all_routes(self):
@@ -1066,4 +1166,4 @@ class Warehouse(models.Model):
         }
 
     def get_current_warehouses(self):
-        return self.env['stock.warehouse'].search_read(fields=['id', 'name', 'code'], order='name')
+        return self.env['stock.warehouse'].search_read(fields=['id', 'name', 'code'])

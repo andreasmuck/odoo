@@ -28,6 +28,7 @@ export class ActivityListPopoverItem extends Component {
     static template = "mail.ActivityListPopoverItem";
 
     setup() {
+        super.setup();
         this.state = useState({ hasMarkDoneView: false });
         if (this.props.activity.activity_category === "upload_file") {
             this.attachmentUploader = useAttachmentUploader(
@@ -59,11 +60,14 @@ export class ActivityListPopoverItem extends Component {
         }
     }
 
+    get hasCancelButton() {
+        const activity = this.props.activity;
+        return activity.state !== "done" && activity.can_write;
+    }
+
     get hasEditButton() {
         const activity = this.props.activity;
-        return (
-            activity.state !== "done" && activity.chaining_type === "suggest" && activity.can_write
-        );
+        return activity.state !== "done" && activity.can_write;
     }
 
     get hasFileUploader() {
@@ -77,9 +81,7 @@ export class ActivityListPopoverItem extends Component {
 
     onClickEditActivityButton() {
         this.props.onClickEditActivityButton();
-        this.env.services["mail.activity"]
-            .edit(this.props.activity.id)
-            .then(() => this.props.onActivityChanged?.());
+        this.props.activity.edit().then(() => this.props.onActivityChanged?.());
     }
 
     onClickMarkAsDone() {
@@ -87,9 +89,18 @@ export class ActivityListPopoverItem extends Component {
     }
 
     async onFileUploaded(data) {
-        const { id: attachmentId } = await this.attachmentUploader.uploadData(data);
-        await this.env.services["mail.activity"].markAsDone(this.props.activity, [attachmentId]);
+        const { id: attachmentId } = await this.attachmentUploader.uploadData(data, {
+            activity: this.props.activity,
+        });
+        await this.props.activity.markAsDone([attachmentId]);
         this.props.onActivityChanged?.();
+    }
+
+    unlink() {
+        this.props.activity.remove();
+        this.env.services.orm
+            .unlink("mail.activity", [this.props.activity.id])
+            .then(() => this.props.onActivityChanged?.());
     }
 
     get activityAssigneeAvatar() {

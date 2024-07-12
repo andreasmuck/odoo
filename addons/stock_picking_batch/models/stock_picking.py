@@ -37,6 +37,14 @@ class StockPickingType(models.Model):
             record.count_picking_wave = count.get((record.id, True), 0)
             record.count_picking_batch = count.get((record.id, False), 0)
 
+    def action_batch(self):
+        action = self.env['ir.actions.act_window']._for_xml_id("stock_picking_batch.stock_picking_batch_action")
+        if self.env.context.get("view_mode"):
+            del action["mobile_view_mode"]
+            del action["views"]
+            action["view_mode"] = self.env.context["view_mode"]
+        return action
+
     @api.model
     def _get_batch_group_by_keys(self):
         return ['batch_group_by_partner', 'batch_group_by_destination', 'batch_group_by_src_loc', 'batch_group_by_dest_loc']
@@ -50,12 +58,6 @@ class StockPickingType(models.Model):
             if not any(picking_type[key] for key in group_by_keys):
                 raise ValidationError(_("If the Automatic Batches feature is enabled, at least one 'Group by' option must be selected."))
 
-    def get_action_picking_tree_batch(self):
-        return self._get_action('stock_picking_batch.stock_picking_batch_action')
-
-    def get_action_picking_tree_wave(self):
-        return self._get_action('stock_picking_batch.action_picking_tree_wave')
-
 
 class StockPicking(models.Model):
     _inherit = "stock.picking"
@@ -64,6 +66,7 @@ class StockPicking(models.Model):
         'stock.picking.batch', string='Batch Transfer',
         check_company=True,
         help='Batch associated to this transfer', index=True, copy=False)
+    batch_sequence = fields.Integer(string='Sequence')
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -136,6 +139,13 @@ class StockPicking(models.Model):
             picking._find_auto_batch()
 
         return res
+
+    def _create_backorder(self, backorder_moves=None):
+        for picking in self:
+            # Avoid inconsistencies in states of the same batch when validating a single picking in a batch.
+            if picking.batch_id and picking.state != 'done' and any(p not in self for p in picking.batch_id.picking_ids):
+                picking.batch_id = None
+        return super()._create_backorder(backorder_moves)
 
     def action_cancel(self):
         res = super().action_cancel()
@@ -232,10 +242,10 @@ class StockPicking(models.Model):
 
         return domain
 
-    def _package_move_lines(self, batch_pack=False):
+    def _package_move_lines(self, batch_pack=False, move_lines_to_pack=False):
         if batch_pack:
-            return super(StockPicking, self.batch_id.picking_ids if self.batch_id else self)._package_move_lines(batch_pack)
-        return super()._package_move_lines(batch_pack)
+            return super(StockPicking, self.batch_id.picking_ids if self.batch_id else self)._package_move_lines(batch_pack, move_lines_to_pack)
+        return super()._package_move_lines(batch_pack, move_lines_to_pack)
 
     def assign_batch_user(self, user_id):
         if not user_id:

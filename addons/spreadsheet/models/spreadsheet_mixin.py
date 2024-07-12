@@ -19,7 +19,6 @@ class SpreadsheetMixin(models.AbstractModel):
     _auto = False
 
     spreadsheet_binary_data = fields.Binary(
-        required=True,
         string="Spreadsheet file",
         default=lambda self: self._empty_spreadsheet_data_base64(),
     )
@@ -47,6 +46,7 @@ class SpreadsheetMixin(models.AbstractModel):
                     for fname in field_chain.split("."):  # field chain 'product_id.channel_ids'
                         if fname not in self.env[field_model]._fields:
                             errors.append(f"- field '{fname}' used in spreadsheet '{display_name}' does not exist on model '{field_model}'")
+                            continue
                         field = self.env[field_model]._fields[fname]
                         if field.relational:
                             field_model = field.comodel_name

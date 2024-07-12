@@ -6,7 +6,9 @@ from collections import defaultdict
 
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError, RedirectWarning
+from odoo.tools import SQL
 from odoo.addons.rating.models.rating_data import OPERATOR_MAPPING
+
 
 PROJECT_TASK_READABLE_FIELDS = {
     'allow_timesheets',
@@ -29,21 +31,20 @@ class Task(models.Model):
     _inherit = "project.task"
 
     project_id = fields.Many2one(domain="['|', ('company_id', '=', False), ('company_id', '=?',  company_id), ('is_internal_project', '=', False)]")
-    analytic_account_active = fields.Boolean("Active Analytic Account", compute='_compute_analytic_account_active', compute_sudo=True, recursive=True)
+    analytic_account_active = fields.Boolean("Active Analytic Account", compute='_compute_analytic_account_active', compute_sudo=True, recursive=True, export_string_translation=False)
     allow_timesheets = fields.Boolean(
         "Allow timesheets",
         compute='_compute_allow_timesheets', search='_search_allow_timesheets',
-        compute_sudo=True, readonly=True,
-        help="Timesheets can be logged on this task.")
-    remaining_hours = fields.Float("Remaining Hours", compute='_compute_remaining_hours', store=True, readonly=True, help="Number of allocated hours minus the number of hours spent.")
-    remaining_hours_percentage = fields.Float(compute='_compute_remaining_hours_percentage', search='_search_remaining_hours_percentage')
-    effective_hours = fields.Float("Hours Spent", compute='_compute_effective_hours', compute_sudo=True, store=True)
-    total_hours_spent = fields.Float("Total Hours", compute='_compute_total_hours_spent', store=True, help="Time spent on this task and its sub-tasks (and their own sub-tasks).")
-    progress = fields.Float("Progress", compute='_compute_progress_hours', store=True, aggregator="avg")
-    overtime = fields.Float(compute='_compute_progress_hours', store=True)
-    subtask_effective_hours = fields.Float("Hours Spent on Sub-tasks", compute='_compute_subtask_effective_hours', recursive=True, store=True, help="Time spent on the sub-tasks (and their own sub-tasks) of this task.")
-    timesheet_ids = fields.One2many('account.analytic.line', 'task_id', 'Timesheets')
-    encode_uom_in_days = fields.Boolean(compute='_compute_encode_uom_in_days', default=lambda self: self._uom_in_days())
+        compute_sudo=True, readonly=True, export_string_translation=False)
+    remaining_hours = fields.Float("Time Remaining", compute='_compute_remaining_hours', store=True, readonly=True, help="Number of allocated hours minus the number of hours spent.")
+    remaining_hours_percentage = fields.Float(compute='_compute_remaining_hours_percentage', search='_search_remaining_hours_percentage', export_string_translation=False)
+    effective_hours = fields.Float("Time Spent", compute='_compute_effective_hours', compute_sudo=True, store=True)
+    total_hours_spent = fields.Float("Total Time Spent", compute='_compute_total_hours_spent', store=True, help="Time spent on this task and its sub-tasks (and their own sub-tasks).")
+    progress = fields.Float("Progress", compute='_compute_progress_hours', store=True, aggregator="avg", export_string_translation=False)
+    overtime = fields.Float(compute='_compute_progress_hours', store=True, export_string_translation=False)
+    subtask_effective_hours = fields.Float("Time Spent on Sub-tasks", compute='_compute_subtask_effective_hours', recursive=True, store=True, help="Time spent on the sub-tasks (and their own sub-tasks) of this task.")
+    timesheet_ids = fields.One2many('account.analytic.line', 'task_id', 'Timesheets', export_string_translation=False)
+    encode_uom_in_days = fields.Boolean(compute='_compute_encode_uom_in_days', default=lambda self: self._uom_in_days(), export_string_translation=False)
     display_name = fields.Char(help="""Use these keywords in the title to set new tasks:\n
         30h Allocate 30 hours to the task
         #tags Set tags on the task
@@ -117,14 +118,14 @@ class Task(models.Model):
     def _search_remaining_hours_percentage(self, operator, value):
         if operator not in OPERATOR_MAPPING:
             raise NotImplementedError(_('This operator %s is not supported in this search method.', operator))
-        query = f"""
+        sql = SQL("""(
             SELECT id
-              FROM {self._table}
+              FROM %s
              WHERE remaining_hours > 0
                AND allocated_hours > 0
-               AND remaining_hours / allocated_hours {operator} %s
-            """
-        return [('id', 'inselect', (query, (value,)))]
+               AND remaining_hours / allocated_hours %s %s
+        )""", SQL.identifier(self._table), SQL(operator), value)
+        return [('id', 'in', sql)]
 
     @api.depends('effective_hours', 'subtask_effective_hours', 'allocated_hours')
     def _compute_remaining_hours(self):
@@ -164,17 +165,35 @@ class Task(models.Model):
 
     def action_view_subtask_timesheet(self):
         self.ensure_one()
+        is_internal_user = self.env.user.has_group('base.group_user')
         task_ids = self.with_context(active_test=False)._get_subtask_ids_per_task_id().get(self.id, [])
         action = self.env["ir.actions.actions"]._for_xml_id("hr_timesheet.timesheet_action_all")
         graph_view_id = self.env.ref("hr_timesheet.view_hr_timesheet_line_graph_by_employee").id
         new_views = []
         for view in action['views']:
+            if not is_internal_user:
+                if view[1] == 'tree':
+                    tree_view_id = self.env['ir.model.data']._xmlid_to_res_id('hr_timesheet.hr_timesheet_line_portal_tree')
+                    if tree_view_id:
+                        new_views.insert(0, (tree_view_id, 'tree'))
+                        continue
+                elif view[1] == 'form':
+                    form_view_id = self.env['ir.model.data']._xmlid_to_res_id('hr_timesheet.timesheet_view_form_portal_user')
+                    if form_view_id:
+                        new_views.append((form_view_id, 'form'))
+                        continue
+                elif view[1] == 'kanban':
+                    kanban_view_id = self.env['ir.model.data']._xmlid_to_res_id('hr_timesheet.view_kanban_account_analytic_line_portal_user')
+                    if kanban_view_id:
+                        new_views.append((kanban_view_id, 'kanban'))
+                        continue
             if view[1] == 'graph':
                 view = (graph_view_id, 'graph')
             new_views.insert(0, view) if view[1] == 'tree' else new_views.append(view)
+
         action.update({
             'display_name': _('Timesheets'),
-            'context': {'default_project_id': self.project_id.id, 'grid_range': 'week'},
+            'context': {'default_project_id': self.project_id.id},
             'domain': [('project_id', '!=', False), ('task_id', 'in', task_ids)],
             'views': new_views,
         })
@@ -200,7 +219,6 @@ class Task(models.Model):
             'timesheets_per_task': timesheets_per_task,
         }
 
-    @api.depends('allow_timesheets', 'allocated_hours', 'encode_uom_in_days', 'remaining_hours')
     @api.depends_context('hr_timesheet_display_remaining_hours')
     def _compute_display_name(self):
         super()._compute_display_name()
@@ -220,22 +238,9 @@ class Task(models.Model):
                     task.display_name = task.display_name + "\u00A0" + hours_left
 
     @api.model
-    def _get_view_cache_key(self, view_id=None, view_type='form', **options):
-        """The override of _get_view changing the time field labels according to the company timesheet encoding UOM
-        makes the view cache dependent on the company timesheet encoding uom"""
-        key = super()._get_view_cache_key(view_id, view_type, **options)
-        return key + (self.env.company.timesheet_encode_uom_id,)
-
-    @api.model
     def _get_view(self, view_id=None, view_type='form', **options):
-        """ Set the correct label for `unit_amount`, depending on company UoM """
         arch, view = super()._get_view(view_id, view_type, **options)
-        # Use of sudo as the portal user doesn't have access to uom
         arch = self.env['account.analytic.line'].sudo()._apply_timesheet_label(arch)
-
-        if view_type in ['tree', 'pivot', 'graph', 'form'] and self.env.company.timesheet_encode_uom_id == self.env.ref('uom.product_uom_day'):
-            arch = self.env['account.analytic.line']._apply_time_label(arch, related_model=self._name)
-
         return arch, view
 
     @api.ondelete(at_uninstall=False)

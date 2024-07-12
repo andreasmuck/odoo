@@ -36,7 +36,7 @@ class StockMove(models.Model):
         related to this stock move.
         """
         rslt = super(StockMove, self)._get_related_invoices()
-        invoices = self.mapped('picking_id.sale_id.invoice_ids').filtered(lambda x: x.state == 'posted')
+        invoices = self.mapped('picking_id.sale_id.account_move_ids').filtered(lambda x: x.state == 'posted')
         rslt += invoices
         #rslt += invoices.mapped('reverse_entry_ids')
         return rslt
@@ -64,6 +64,14 @@ class StockMove(models.Model):
 
     def _get_all_related_sm(self, product):
         return super()._get_all_related_sm(product) | self.filtered(lambda m: m.sale_line_id.product_id == product)
+
+
+class StockMoveLine(models.Model):
+    _inherit = "stock.move.line"
+
+    def _should_show_lot_in_invoice(self):
+        return 'customer' in {self.location_id.usage, self.location_dest_id.usage}
+
 
 class ProcurementGroup(models.Model):
     _inherit = 'procurement.group'

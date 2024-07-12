@@ -115,7 +115,7 @@ class TestCreatePicking(common.TestProductCommon):
 
         product = self.env['product.product'].create({
             'name': 'product',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(4, self.ref('stock.route_warehouse0_mto')), (4, self.ref('purchase_stock.route_warehouse0_buy'))],
             'seller_ids': [(6, 0, [seller.id])],
             'categ_id': self.env.ref('product.product_category_all').id,
@@ -252,7 +252,7 @@ class TestCreatePicking(common.TestProductCommon):
 
         product = self.env['product.product'].create({
             'name': 'product',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(4, self.ref('stock.route_warehouse0_mto')), (4, self.ref('purchase_stock.route_warehouse0_buy'))],
             'seller_ids': [(6, 0, [seller.id])],
             'categ_id': self.env.ref('product.product_category_all').id,
@@ -400,7 +400,7 @@ class TestCreatePicking(common.TestProductCommon):
 
         product = self.env['product.product'].create({
             'name': 'Usb Keyboard',
-            'type': 'product',
+            'is_storable': True,
             'uom_id': unit,
             'uom_po_id': unit,
             'seller_ids': [(6, 0, [supplier_info1.id])],
@@ -510,7 +510,7 @@ class TestCreatePicking(common.TestProductCommon):
         )
         stock_return_picking = stock_return_picking_form.save()
         stock_return_picking.product_return_moves.quantity = 2.0
-        stock_return_picking_action = stock_return_picking.create_returns()
+        stock_return_picking_action = stock_return_picking.action_create_returns()
         return_pick = self.env['stock.picking'].browse(stock_return_picking_action['res_id'])
         return_pick.action_assign()
         return_pick.move_ids.quantity = 2
@@ -556,7 +556,7 @@ class TestCreatePicking(common.TestProductCommon):
         self.env['stock.route'].browse(self.ref('stock.route_warehouse0_mto')).action_unarchive()
         product = self.env['product.product'].create({
             'name': 'product',
-            'type': 'product',
+            'is_storable': True,
             'route_ids': [(4, self.ref('stock.route_warehouse0_mto')), (4, self.ref('purchase_stock.route_warehouse0_buy'))],
             'seller_ids': [(6, 0, [seller.id])],
             'categ_id': self.env.ref('product.product_category_all').id,
@@ -700,7 +700,7 @@ class TestCreatePicking(common.TestProductCommon):
         stock_return_picking_form.location_id = vendor_returns_loc
         stock_return_picking_form.product_return_moves._records[0]['quantity'] = 2
         stock_return_picking = stock_return_picking_form.save()
-        stock_return_picking_action = stock_return_picking.create_returns()
+        stock_return_picking_action = stock_return_picking.action_create_returns()
         return_pick = self.env['stock.picking'].browse(stock_return_picking_action['res_id'])
         return_pick.action_assign()
         return_pick.move_ids.quantity = 2

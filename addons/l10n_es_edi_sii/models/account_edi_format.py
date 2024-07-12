@@ -1,23 +1,22 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 from collections import defaultdict
-from urllib3.util.ssl_ import create_urllib3_context, DEFAULT_CIPHERS
+from urllib3.util.ssl_ import create_urllib3_context
 from urllib3.contrib.pyopenssl import inject_into_urllib3
 from OpenSSL.crypto import load_certificate, load_privatekey, FILETYPE_PEM
-from zeep.transports import Transport
 
 from odoo import fields, models, _
 from odoo.exceptions import UserError
-from odoo.tools import html_escape
+from odoo.tools import html_escape, zeep
 
 import math
 import json
 import requests
-import zeep
 
 
 # Custom patches to perform the WSDL requests.
-EUSKADI_CIPHERS = f"{DEFAULT_CIPHERS}:!DH"
+# Avoid failure on servers where the DH key is too small
+EUSKADI_CIPHERS = "DEFAULT:!DH"
 
 
 class PatchedHTTPAdapter(requests.adapters.HTTPAdapter):
@@ -475,8 +474,7 @@ class AccountEdiFormat(models.Model):
         session.cert = company.l10n_es_edi_certificate_id
         session.mount('https://', PatchedHTTPAdapter())
 
-        transport = Transport(operation_timeout=60, timeout=60, session=session)
-        client = zeep.Client(connection_vals['url'], transport=transport)
+        client = zeep.Client(connection_vals['url'], operation_timeout=60, timeout=60, session=session)
 
         if invoices[0].is_sale_document():
             service_name = 'SuministroFactEmitidas'
@@ -579,7 +577,7 @@ class AccountEdiFormat(models.Model):
 
             else:
                 results[inv] = {
-                    'error': _("[%s] %s", respl.CodigoErrorRegistro, respl.DescripcionErrorRegistro),
+                    'error': _("[%(error_code)s] %(error_message)s", error_code=respl.CodigoErrorRegistro, error_message=respl.DescripcionErrorRegistro),
                     'blocking_level': 'error',
                 }
 

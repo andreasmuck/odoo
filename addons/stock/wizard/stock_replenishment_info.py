@@ -8,8 +8,8 @@ from datetime import datetime, time
 
 from odoo import api, fields, models, SUPERUSER_ID, _
 from odoo.osv.expression import AND
-from odoo.tools import get_month, subtract, format_date
-from odoo.tools.misc import get_lang
+from odoo.tools.date_utils import get_month, subtract
+from odoo.tools.misc import get_lang, format_date
 
 
 class StockReplenishmentInfo(models.TransientModel):
@@ -118,8 +118,12 @@ class StockReplenishmentOption(models.TransientModel):
     @api.depends('replenishment_info_id')
     def _compute_lead_time(self):
         for record in self:
-            lead_time = record.route_id.rule_ids._get_lead_days(record.product_id)[0]['total_delay']    #TO FIX: use _get_rule to avoid singleton issue
-            record.lead_time = str(lead_time) + " days"
+            rule = self.env['procurement.group']._get_rule(record.product_id, record.location_id, {
+                'route_ids': record.route_id,
+                'warehouse_id': record.warehouse_id,
+            })
+            delay = rule._get_lead_days(record.product_id)[0]['total_delay'] if rule else 0
+            record.lead_time = _("%s days", delay)
 
     @api.depends('warehouse_id', 'free_qty', 'uom', 'qty_to_order')
     def _compute_warning_message(self):

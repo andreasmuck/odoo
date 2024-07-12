@@ -42,7 +42,6 @@ export class PageDependencies extends Component {
         );
         this.state = useState({
             dependencies: {},
-            depText: "...",
         });
     }
 
@@ -52,11 +51,6 @@ export class PageDependencies extends Component {
             'search_url_dependencies',
             [this.props.resModel, this.props.resIds],
         );
-        if (this.props.mode === 'popover') {
-            this.state.depText = Object.entries(this.state.dependencies)
-                .map(dependency => `${dependency[1].length} ${dependency[0].toLowerCase()}`)
-                .join(', ');
-        }
     }
 
     showDependencies() {
@@ -110,18 +104,7 @@ export class DeletePageDialog extends Component {
 
 export class DuplicatePageDialog extends Component {
     static components = { WebsiteDialog };
-    static template = xml`
-    <WebsiteDialog close="props.close" primaryClick="() => this.duplicate()">
-        <div class="mb-3 row">
-            <label class="col-form-label col-md-3">
-                Page Name
-            </label>
-            <div class="col-md-9">
-                <input type="text" t-model="state.name" class="form-control" required="required" t-ref="autofocus"/>
-            </div>
-        </div>
-    </WebsiteDialog>
-    `;
+    static template = "website.DuplicatePageDialog";
     static props = {
         onDuplicate: Function,
         close: Function,

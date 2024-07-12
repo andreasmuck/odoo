@@ -55,7 +55,8 @@ class ResCompany(models.Model):
 
     def _create_internal_project_task(self):
         results = []
-        type_ids = [(4, self.env.ref('hr_timesheet.internal_project_default_stage').id)]
+        type_ids_ref = self.env.ref('hr_timesheet.internal_project_default_stage', raise_if_not_found=False)
+        type_ids = [(4, type_ids_ref.id)] if type_ids_ref else []
         for company in self:
             company = company.with_company(company)
             results += [{
@@ -73,9 +74,3 @@ class ResCompany(models.Model):
         for company in self:
             company.internal_project_id = projects_by_company.get(company.id, False)
         return project_ids
-
-    def _is_timesheet_hour_uom(self):
-        return self.timesheet_encode_uom_id and self.timesheet_encode_uom_id == self.env.ref('uom.product_uom_hour')
-
-    def _timesheet_uom_text(self):
-        return self._is_timesheet_hour_uom() and _("hours") or _("days")
